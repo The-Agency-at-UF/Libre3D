@@ -9,15 +9,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1067.0",
+    "@aws-sdk/client-s3": "^3.1067.0",
+    "@aws-sdk/s3-request-presigner": "^3.1067.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "three": "^0.178.0",
     "zustand": "^5.0.6"
   },
   "devDependencies": {
+    "@types/node": "^22.18.0",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
-    "@types/node": "^22.18.0",
     "@types/three": "^0.178.0",
     "@vitejs/plugin-react": "^4.6.0",
     "typescript": "^5.8.3",
