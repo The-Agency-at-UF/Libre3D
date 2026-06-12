@@ -1,0 +1,19 @@
+{
+  "name": "Libre3D",
+  "version": "1.0.0",
+  "private": true,
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "pnpm --filter editor dev",
+    "build": "pnpm --filter editor build",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@11.6.0",
+  "devDependencies": {
+    "turbo": "^2.9.18"
+  }
+}
