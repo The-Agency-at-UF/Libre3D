@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
-
 import * as THREE from "three";
-
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { useEditorStore, type Entity } from "../store/useEditorStore";
 
 const sceneBackground = new THREE.Color("#0b1020");
@@ -48,10 +48,12 @@ const disposeMesh = (mesh: THREE.Mesh): void => {
   }
 };
 
-const syncEntityToMesh = (mesh: THREE.Mesh, entity: Entity): void => {
-  mesh.position.set(...entity.position);
-  mesh.rotation.set(...entity.rotation);
-  mesh.scale.set(...entity.scale);
+const syncEntityToMesh = (mesh: THREE.Mesh, entity: Entity, isBeingDragged: boolean): void => {
+  if (!isBeingDragged) {
+    mesh.position.set(...entity.position);
+    mesh.rotation.set(...entity.rotation);
+    mesh.scale.set(...entity.scale);
+  }
   mesh.visible = entity.visible;
   mesh.userData.locked = entity.locked;
 
@@ -60,19 +62,42 @@ const syncEntityToMesh = (mesh: THREE.Mesh, entity: Entity): void => {
   }
 };
 
-export function ViewportCanvas() {
+export interface ViewportCanvasProps {
+  activeTransformTool?: "translate" | "rotate" | "scale";
+  transformSpace?: "world" | "local";
+  projectionMode?: "perspective" | "orthographic";
+}
+
+export function ViewportCanvas({
+  activeTransformTool = "translate",
+  transformSpace = "world",
+  projectionMode = "perspective",
+}: ViewportCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
-  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const cameraRef = useRef<THREE.Camera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
 
+  const transformControlsRef = useRef<TransformControls | null>(null);
+  const orbitControlsRef = useRef<OrbitControls | null>(null);
+
+  // Sync mode and space when props change
+  useEffect(() => {
+    if (transformControlsRef.current) {
+      transformControlsRef.current.setMode(activeTransformTool);
+    }
+  }, [activeTransformTool]);
+
+  useEffect(() => {
+    if (transformControlsRef.current) {
+      transformControlsRef.current.setSpace(transformSpace);
+    }
+  }, [transformSpace]);
+
   useEffect(() => {
     const container = containerRef.current;
-
-    if (!container) {
-      return;
-    }
+    if (!container) return;
 
     const initialStoreState = useEditorStore.getState();
     const initialBgColor = new THREE.Color(initialStoreState.bgColor || "#0b1020");
@@ -83,9 +108,26 @@ export function ViewportCanvas() {
       scene.fog = new THREE.FogExp2(initialStoreState.bgColor || "#0b1020", 0.05);
     }
 
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 100);
-    camera.position.set(0, 5, 10);
-    camera.lookAt(0, 0, 0);
+    // Set up both perspective and orthographic cameras
+    const aspect = container.clientWidth / container.clientHeight || 1;
+    const perspCamera = new THREE.PerspectiveCamera(45, aspect, 0.1, 100);
+    perspCamera.position.set(0, 5, 10);
+    perspCamera.lookAt(0, 0, 0);
+
+    const orthoSize = 5;
+    const orthoCamera = new THREE.OrthographicCamera(
+      -orthoSize * aspect,
+      orthoSize * aspect,
+      orthoSize,
+      -orthoSize,
+      0.1,
+      100
+    );
+    orthoCamera.position.set(0, 5, 10);
+    orthoCamera.lookAt(0, 0, 0);
+
+    let activeCamera: THREE.Camera = projectionMode === "perspective" ? perspCamera : orthoCamera;
+    cameraRef.current = activeCamera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
@@ -116,7 +158,6 @@ export function ViewportCanvas() {
     scene.add(gridHelper);
 
     sceneRef.current = scene;
-    cameraRef.current = camera;
     rendererRef.current = renderer;
     (window as Window & { __libre3dScene?: THREE.Scene | null }).__libre3dScene = scene;
 
@@ -125,26 +166,70 @@ export function ViewportCanvas() {
     renderer.domElement.style.display = "block";
     container.appendChild(renderer.domElement);
 
+    // Controls setup
+    const orbitControls = new OrbitControls(activeCamera, renderer.domElement);
+    orbitControls.enableDamping = true;
+    orbitControls.dampingFactor = 0.05;
+    orbitControlsRef.current = orbitControls;
+
+    const transformControls = new TransformControls(activeCamera, renderer.domElement);
+    transformControls.setMode(activeTransformTool);
+    transformControls.setSpace(transformSpace);
+    scene.add(transformControls.getHelper());
+    transformControlsRef.current = transformControls;
+
+    // Temporarily disable OrbitControls while transforming
+    transformControls.addEventListener("dragging-changed", (event) => {
+      orbitControls.enabled = !event.value;
+    });
+
+    // Handle Transform Changes
+    transformControls.addEventListener("objectChange", () => {
+      const target = transformControls.object;
+      if (target && target.userData.entityId) {
+        if (target.userData.locked) return;
+        useEditorStore.getState().updateEntityTransform(target.userData.entityId, {
+          position: [target.position.x, target.position.y, target.position.z],
+          rotation: [target.rotation.x, target.rotation.y, target.rotation.z],
+          scale: [target.scale.x, target.scale.y, target.scale.z],
+        });
+      }
+    });
+
+    // Resize handler
     const resizeRenderer = (): void => {
       const nextWidth = container.clientWidth || 1;
       const nextHeight = container.clientHeight || 1;
+      const nextAspect = nextWidth / nextHeight;
 
-      camera.aspect = nextWidth / nextHeight;
-      camera.updateProjectionMatrix();
+      perspCamera.aspect = nextAspect;
+      perspCamera.updateProjectionMatrix();
+
+      orthoCamera.left = -orthoSize * nextAspect;
+      orthoCamera.right = orthoSize * nextAspect;
+      orthoCamera.top = orthoSize;
+      orthoCamera.bottom = -orthoSize;
+      orthoCamera.updateProjectionMatrix();
+
       renderer.setSize(nextWidth, nextHeight, false);
     };
 
+    // Selection application
     const applySelectionState = (selectedEntityId: string | null): void => {
+      // Clean up previous selected emissive
       if (selectedMesh?.material instanceof THREE.MeshStandardMaterial) {
         selectedMesh.material.emissive.set(0x000000);
-        selectedMesh.material.wireframe = false;
       }
 
       selectedMesh = selectedEntityId ? meshMap.get(selectedEntityId) ?? null : null;
 
-      if (selectedMesh && !selectedMesh.userData.locked && selectedMesh.material instanceof THREE.MeshStandardMaterial) {
-        selectedMesh.material.emissive.set(0x143c2d);
-        selectedMesh.material.wireframe = false;
+      if (selectedMesh && !selectedMesh.userData.locked) {
+        if (selectedMesh.material instanceof THREE.MeshStandardMaterial) {
+          selectedMesh.material.emissive.set(0x143c2d);
+        }
+        transformControls.attach(selectedMesh);
+      } else {
+        transformControls.detach();
       }
     };
 
@@ -153,6 +238,7 @@ export function ViewportCanvas() {
 
       for (const entity of entities) {
         const existingMesh = meshMap.get(entity.id);
+        const isBeingDragged = transformControls.object === existingMesh && transformControls.dragging;
 
         if (!existingMesh) {
           const mesh = createMesh(entity);
@@ -165,7 +251,7 @@ export function ViewportCanvas() {
           continue;
         }
 
-        syncEntityToMesh(existingMesh, entity);
+        syncEntityToMesh(existingMesh, entity, isBeingDragged);
 
         if (existingMesh.userData.entityType !== entity.type) {
           existingMesh.geometry.dispose();
@@ -184,6 +270,9 @@ export function ViewportCanvas() {
           continue;
         }
 
+        if (transformControls.object === mesh) {
+          transformControls.detach();
+        }
         scene.remove(mesh);
         disposeMesh(mesh);
         meshMap.delete(entityId);
@@ -195,18 +284,73 @@ export function ViewportCanvas() {
     resizeObserverRef.current = new ResizeObserver(() => {
       resizeRenderer();
     });
-
     resizeObserverRef.current.observe(container);
     resizeRenderer();
 
+    // Click raycasting to select objects
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let pointerDownTime = 0;
+    const pointerDownPos = new THREE.Vector2();
+    let clickedGizmo = false;
+
+    const onPointerDown = (event: PointerEvent) => {
+      pointerDownTime = Date.now();
+      pointerDownPos.set(event.clientX, event.clientY);
+      clickedGizmo = transformControls.axis !== null;
+    };
+
+    const onPointerUp = (event: PointerEvent) => {
+      const duration = Date.now() - pointerDownTime;
+      const dist = pointerDownPos.distanceTo(new THREE.Vector2(event.clientX, event.clientY));
+
+      // Click threshold
+      if (duration < 500 && dist < 10) {
+        if (clickedGizmo) {
+          return;
+        }
+
+        const rect = renderer.domElement.getBoundingClientRect();
+        mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+        raycaster.setFromCamera(mouse, activeCamera);
+
+        const targets: THREE.Object3D[] = [];
+        meshMap.forEach((mesh) => {
+          if (mesh.visible && !mesh.userData.locked) {
+            targets.push(mesh);
+          }
+        });
+
+        const intersects = raycaster.intersectObjects(targets, true);
+
+        if (intersects.length > 0) {
+          let hitObject: THREE.Object3D | null = intersects[0].object;
+          while (hitObject && !hitObject.userData.entityId) {
+            hitObject = hitObject.parent;
+          }
+          if (hitObject && hitObject.userData.entityId) {
+            useEditorStore.getState().selectEntity(hitObject.userData.entityId);
+            return;
+          }
+        }
+
+        // If clicked in empty space, clear selection
+        useEditorStore.getState().selectEntity(null);
+      }
+    };
+
+    renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("pointerup", onPointerUp);
+
+    // Subscriptions
     const unsubEntities = useEditorStore.subscribe(
       (state) => state.entities,
       (entities) => {
         syncMeshes(entities, useEditorStore.getState().selectedEntityId);
       },
-      {
-        fireImmediately: true,
-      },
+      { fireImmediately: true }
     );
 
     const unsubSelection = useEditorStore.subscribe(
@@ -214,9 +358,7 @@ export function ViewportCanvas() {
       (selectedEntityId) => {
         applySelectionState(selectedEntityId);
       },
-      {
-        fireImmediately: true,
-      },
+      { fireImmediately: true }
     );
 
     const unsubBgColor = useEditorStore.subscribe(
@@ -280,15 +422,18 @@ export function ViewportCanvas() {
       }
     );
 
+    // Animation Loop
     const animate = (): void => {
       animationFrameId = window.requestAnimationFrame(animate);
-      renderer.render(scene, camera);
+      orbitControls.update();
+      renderer.render(scene, activeCamera);
     };
-
     animate();
 
     return () => {
       window.cancelAnimationFrame(animationFrameId);
+      renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("pointerup", onPointerUp);
       unsubEntities();
       unsubSelection();
       unsubBgColor();
@@ -304,8 +449,11 @@ export function ViewportCanvas() {
         scene.remove(mesh);
         disposeMesh(mesh);
       }
-
       meshMap.clear();
+
+      scene.remove(transformControls.getHelper());
+      transformControls.dispose();
+
       scene.remove(gridHelper);
       scene.remove(ambientLight);
       scene.remove(directionalLight);
@@ -324,7 +472,7 @@ export function ViewportCanvas() {
       cameraRef.current = null;
       rendererRef.current = null;
     };
-  }, []);
+  }, [projectionMode]); // Recreate cameras/controls on projection mode change
 
   return (
     <div

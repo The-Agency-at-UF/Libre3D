@@ -74,17 +74,17 @@ When a formal test suite is added, this section should be updated to include the
 
 ## What The Editor Does Today
 
-- renders a simple scene with a primitive object
-- stores scene objects in Zustand
-- lets you add, reset, and re-render objects in the viewport
-- provides the base shell for future transform, material, and export controls
+- **Scene Hierarchy Panel**: Manage entities with capabilities to rename, toggle visibility (show/hide), toggle lock, and delete entities.
+- **Viewport Raycasting Selection**: Select objects directly inside the 3D canvas viewport using mouse/pointer clicks, with smart raycasting that ignores transform gizmo interactions.
+- **Interactive Transform Gizmo**: Move, rotate, and scale selected entities using an interactive Three.js transform controls gizmo.
+- **Zustand State Persistence**: Keeps editor state synced, fully persisted, and versioned in `localStorage` with state-migration support.
+- **Scene Customization**: Adjust viewport settings such as background color, grid plane orientation (Floor XZ, Wall XY, Side YZ, or None), wireframe rendering mode, light color/intensity, and fog settings.
 
 ## Next Milestones
 
-- object inspector panel for transforms, color, and scale
-- add/remove primitive controls with persistent selection
-- scene export pipeline for web embedding and later `<model-viewer>` support
-- import path for GLTF and other common assets
+- Scene export pipeline for web embedding and later `<model-viewer>` support.
+- Import pipeline for GLTF and other common assets.
+- Advanced multi-selection and layout organization tools.
 
 ## Notes
 

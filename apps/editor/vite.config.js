@@ -35,10 +35,16 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { createPublishSession, getPublishedScene } from "./src/utils/awsPublishHandler";
+var require = createRequire(import.meta.url);
+var threePackageJson = require.resolve("three/package.json");
+var threeRealDir = path.dirname(fs.realpathSync(threePackageJson));
+var threeModulePath = path.resolve(threeRealDir, "build/three.module.js");
 var editorConfigDir = fileURLToPath(new URL(".", import.meta.url));
 var repoRootDir = path.resolve(editorConfigDir, "../..");
 var awsPublishRoutePlugin = function (env) { return ({
@@ -144,6 +150,15 @@ export default defineConfig(function (_a) {
     var env = loadEnv(mode, repoRootDir, "");
     return {
         plugins: [react(), awsPublishRoutePlugin(env)],
+        resolve: {
+            alias: {
+                three: threeModulePath,
+            },
+            dedupe: ["three"],
+        },
+        optimizeDeps: {
+            exclude: ["three"],
+        },
         server: {
             port: 5173,
             strictPort: true,

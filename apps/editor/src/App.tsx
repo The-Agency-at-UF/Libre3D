@@ -142,6 +142,41 @@ function EditorApp() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTransformTool, setActiveTransformTool] = useState<"translate" | "rotate" | "scale">("translate");
   const [projectionMode, setProjectionMode] = useState<"perspective" | "orthographic">("perspective");
+  const [transformSpace, setTransformSpace] = useState<"world" | "local">("world");
+
+  // Hotkeys for transform tools
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      if (
+        activeEl &&
+        (activeEl.tagName === "INPUT" ||
+          activeEl.tagName === "TEXTAREA" ||
+          activeEl.getAttribute("contenteditable") === "true")
+      ) {
+        return;
+      }
+
+      switch (event.key.toLowerCase()) {
+        case "w":
+          setActiveTransformTool("translate");
+          break;
+        case "e":
+          setActiveTransformTool("rotate");
+          break;
+        case "r":
+          setActiveTransformTool("scale");
+          break;
+        default:
+          break;
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
   const [collapsibleStates, setCollapsibleStates] = useState<Record<string, boolean>>({
     frame: true,
     scene: true,
@@ -441,6 +476,18 @@ function EditorApp() {
               </svg>
             </button>
 
+            <div style={{ width: "1px", background: "rgba(255, 255, 255, 0.15)", margin: "4px 2px" }}></div>
+
+            <button
+              className="toolbar-btn"
+              style={{ fontSize: "10px", fontWeight: "bold", width: "auto", paddingInline: "8px", borderRadius: "999px" }}
+              type="button"
+              title="Toggle Transform Space (Local / World)"
+              onClick={() => setTransformSpace((prev) => (prev === "world" ? "local" : "world"))}
+            >
+              {transformSpace === "world" ? "Global" : "Local"}
+            </button>
+
             {/* Add Shape Dropdown */}
             <div style={{ position: "relative", display: "inline-block" }}>
               <button
@@ -555,7 +602,11 @@ function EditorApp() {
             </div>
           </div>
 
-          <ViewportCanvas />
+          <ViewportCanvas
+            activeTransformTool={activeTransformTool}
+            transformSpace={transformSpace}
+            projectionMode={projectionMode}
+          />
 
           {/* Viewport Bottom Overlays */}
           <div className="viewport-bottom-overlays">

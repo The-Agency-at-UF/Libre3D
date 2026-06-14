@@ -126,7 +126,10 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
           <button
             className="editor-tree-select"
             type="button"
-            onClick={() => selectEntity(entity.id)}
+            onClick={(e) => {
+              e.stopPropagation();
+              selectEntity(entity.id);
+            }}
             onDoubleClick={handleDoubleClick}
           >
             <span className="editor-tree-name">{entity.name}</span>
@@ -177,13 +180,17 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
 
 export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const entities = useEditorStore((state) => state.entities) ?? [];
+  const selectEntity = useEditorStore((state) => state.selectEntity);
   const filtered = entities.filter((e) =>
     e.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     e.type.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
-    <div style={{ display: "grid", gap: "0.85rem" }}>
+    <div
+      style={{ display: "grid", gap: "0.85rem", minHeight: "100%" }}
+      onClick={() => selectEntity(null)}
+    >
       <div className="editor-tree" aria-label="Scene hierarchy">
         {filtered.map((entity) => (
           <HierarchyItem key={entity.id} entityId={entity.id} />
