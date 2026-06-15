@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 
-export type EntityType = "cube" | "sphere" | "torus";
+export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "camera";
 
 export interface Entity {
   id: string;
@@ -17,11 +17,153 @@ export interface Entity {
 
 type EntityTransformUpdates = Partial<Pick<Entity, "position" | "rotation" | "scale" | "color">>;
 
+export type DeepPartial<T> = T extends object ? {
+  [P in keyof T]?: DeepPartial<T[P]>;
+} : T;
+
+export interface PostProcessingConfig {
+  enabled: boolean;
+  toneMap: string;
+  exposure: number;
+  bloom: {
+    enabled: boolean;
+    intensity: number;
+    threshold: number;
+    radius: number;
+  };
+  ssao: {
+    enabled: boolean;
+    intensity: number;
+  };
+  dof: {
+    enabled: boolean;
+    focusDistance: number;
+    bokeh: number;
+  };
+  chromaticAberration: {
+    enabled: boolean;
+    intensity: number;
+  };
+  motionBlur: {
+    enabled: boolean;
+    intensity: number;
+  };
+  filmGrain: {
+    enabled: boolean;
+    intensity: number;
+  };
+  vignette: {
+    enabled: boolean;
+    intensity: number;
+  };
+  outline: {
+    enabled: boolean;
+    color: string;
+  };
+  colorGrading: {
+    enabled: boolean;
+    brightness: number;
+    contrast: number;
+    saturation: number;
+  };
+}
+
+export interface SceneSettingsConfig {
+  bgColor: string;
+  bgAlpha: string;
+  gridPlane: string;
+  wireframe: boolean;
+  fogEnabled: boolean;
+  environment: string;
+  lights: {
+    intensity: number;
+    color: string;
+    ambientEnabled: boolean;
+    directionalEnabled: boolean;
+    shadow: string;
+  };
+  physics: {
+    enabled: boolean;
+    gravityY: number;
+    collisionType: string;
+  };
+}
+
+export const initialPostProcessingDefaults: PostProcessingConfig = {
+  enabled: true,
+  toneMap: "ACES Filmic",
+  exposure: 0.00,
+  bloom: {
+    enabled: true,
+    intensity: 40,
+    threshold: 0.85,
+    radius: 0.4,
+  },
+  ssao: {
+    enabled: false,
+    intensity: 25,
+  },
+  dof: {
+    enabled: false,
+    focusDistance: 10.0,
+    bokeh: 0.30,
+  },
+  chromaticAberration: {
+    enabled: false,
+    intensity: 0,
+  },
+  motionBlur: {
+    enabled: false,
+    intensity: 0,
+  },
+  filmGrain: {
+    enabled: false,
+    intensity: 0,
+  },
+  vignette: {
+    enabled: true,
+    intensity: 15,
+  },
+  outline: {
+    enabled: false,
+    color: "5865F2",
+  },
+  colorGrading: {
+    enabled: false,
+    brightness: 0.00,
+    contrast: 0.00,
+    saturation: 0.00,
+  },
+};
+
+export const initialSceneDefaults: SceneSettingsConfig = {
+  bgColor: "#0b1020",
+  bgAlpha: "100%",
+  gridPlane: "Floor (XZ)",
+  wireframe: false,
+  fogEnabled: false,
+  environment: "Studio",
+  lights: {
+    intensity: 0.75,
+    color: "#ffffff",
+    ambientEnabled: true,
+    directionalEnabled: true,
+    shadow: "Soft",
+  },
+  physics: {
+    enabled: false,
+    gravityY: -9.8,
+    collisionType: "Mesh",
+  },
+};
+
 export interface EditorState {
   entities: Entity[];
   selectedEntityId: string | null;
   currentPublishId: string | null;
-  addEntity: (type: EntityType) => void;
+  activeCameraId: string;
+  setActiveCameraId: (id: string) => void;
+  addEntity: (type: EntityType) => string;
   removeEntity: (id: string) => void;
   updateEntityTransform: (id: string, updates: EntityTransformUpdates) => void;
   selectEntity: (id: string | null) => void;
@@ -41,6 +183,90 @@ export interface EditorState {
   setLightIntensity: (intensity: number) => void;
   setLightColor: (color: string) => void;
   setFogEnabled: (enabled: boolean) => void;
+
+  // Viewport / Projection
+  activeTransformTool: "translate" | "rotate" | "scale";
+  projectionMode: "perspective" | "orthographic";
+  transformSpace: "world" | "local";
+
+  sceneSettings: SceneSettingsConfig;
+  postProcessing: PostProcessingConfig;
+
+  // Frame
+  viewport: string;
+  resolution: string;
+  autoZoom: boolean;
+  hudOverlay: string;
+  viewportZoom: number;
+
+  // Scene
+  bgAlpha: string;
+  environment: string;
+  lightAmbientEnabled: boolean;
+  lightDirectionalEnabled: boolean;
+  lightShadow: string;
+  physicsEnabled: boolean;
+  gravityY: number;
+  collisionType: string;
+
+  // Post Processing
+  postProcessingEnabled: boolean;
+  toneMap: string;
+  exposure: number;
+  bloomEnabled: boolean;
+  bloomIntensity: number;
+  bloomThreshold: number;
+  bloomRadius: number;
+  ssaoEnabled: boolean;
+  ssaoIntensity: number;
+  dofEnabled: boolean;
+  dofFocusDist: number;
+  dofBokeh: number;
+  chromaticAberrationEnabled: boolean;
+  chromaticAberrationIntensity: number;
+  motionBlurEnabled: boolean;
+  motionBlurIntensity: number;
+  filmGrainEnabled: boolean;
+  filmGrainIntensity: number;
+  vignetteEnabled: boolean;
+  vignetteIntensity: number;
+  outlineEnabled: boolean;
+  outlineColor: string;
+  colorGradingEnabled: boolean;
+  colorGradingBrightness: number;
+  colorGradingContrast: number;
+  colorGradingSaturation: number;
+
+  // Global Settings
+  snapping: string;
+  snapSize: number;
+  renderer: string;
+
+  // Material Builder
+  materialName: string;
+  materialType: string;
+  materialBaseColor: string;
+  materialMetalness: number;
+  materialRoughness: number;
+  materialOpacity: number;
+  materialSide: string;
+  materialEmissiveColor: string;
+  materialEmissiveIntensity: number;
+  materialClearcoat: number;
+  materialTransmission: number;
+  materialIor: number;
+  materialIridescence: number;
+  materialLibraryTab: string;
+  activeMaterialCard: string;
+
+  // Play Mode / Preview
+  isPreviewMode: boolean;
+  previewGlbUrl: string | null;
+  setPreviewMode: (active: boolean, url: string | null) => void;
+
+  updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
+  updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityId" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "selectEntity" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "setBgColor" | "setGridPlane" | "setWireframe" | "setLightIntensity" | "setLightColor" | "setFogEnabled" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveCameraId" | "setPreviewMode">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, Pick<Entity, "name" | "color">> = {
@@ -55,6 +281,14 @@ const ENTITY_DEFAULTS: Record<EntityType, Pick<Entity, "name" | "color">> = {
   torus: {
     name: "Torus",
     color: "#FF7AE0",
+  },
+  directionalLight: {
+    name: "Directional Light",
+    color: "#fde047",
+  },
+  camera: {
+    name: "Camera",
+    color: "#60a5fa",
   },
 };
 
@@ -73,7 +307,7 @@ const createEntity = (type: EntityType): Entity => ({
   id: createEntityId(),
   type,
   name: ENTITY_DEFAULTS[type].name,
-  position: [...ZERO_VECTOR] as [number, number, number],
+  position: (type === "directionalLight" ? [5, 8, 4] : (type === "camera" ? [0, 2, 5] : [...ZERO_VECTOR])) as [number, number, number],
   rotation: [...ZERO_VECTOR] as [number, number, number],
   scale: [...UNIT_VECTOR] as [number, number, number],
   color: ENTITY_DEFAULTS[type].color,
@@ -81,7 +315,20 @@ const createEntity = (type: EntityType): Entity => ({
   locked: false,
 });
 
-const initialEntities: Entity[] = [createEntity("cube")];
+const initialEntities: Entity[] = [
+  createEntity("cube"),
+  {
+    id: "directional-light-1",
+    type: "directionalLight",
+    name: "Directional Light",
+    position: [5, 8, 4],
+    rotation: [0, 0, 0],
+    scale: [1, 1, 1],
+    color: "#ffffff",
+    visible: true,
+    locked: false,
+  },
+];
 
 const cloneVector = (vector: [number, number, number]): [number, number, number] => [
   vector[0],
@@ -98,6 +345,21 @@ const cloneEntity = (entity: Entity): Entity => ({
   locked: entity.locked ?? false,
 });
 
+function deepMerge(target: any, source: any): any {
+  const result = { ...target };
+  for (const key in source) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      const sourceVal = source[key];
+      if (sourceVal !== null && typeof sourceVal === "object" && !Array.isArray(sourceVal)) {
+        result[key] = deepMerge(target[key] || {}, sourceVal);
+      } else {
+        result[key] = sourceVal;
+      }
+    }
+  }
+  return result;
+}
+
 export const useEditorStore = create<EditorState>()(
   subscribeWithSelector(
     persist(
@@ -105,15 +367,25 @@ export const useEditorStore = create<EditorState>()(
         entities: initialEntities.map(cloneEntity),
         selectedEntityId: null,
         currentPublishId: null,
-        addEntity: (type) =>
+        activeCameraId: "default",
+        setActiveCameraId: (id) => set({ activeCameraId: id }),
+        addEntity: (type) => {
+          let newId = "";
           set((state) => {
             const entity = createEntity(type);
+            if (type === "camera") {
+              const cameraCount = state.entities.filter((e) => e.type === "camera").length + 1;
+              entity.name = `Cinematic Camera ${cameraCount}`;
+            }
+            newId = entity.id;
 
             return {
               entities: [...state.entities, entity],
               selectedEntityId: entity.id,
             };
-          }),
+          });
+          return newId;
+        },
         removeEntity: (id) =>
           set((state) => ({
             entities: state.entities.filter((entity) => entity.id !== id),
@@ -180,12 +452,221 @@ export const useEditorStore = create<EditorState>()(
         setLightIntensity: (intensity) => set({ lightIntensity: intensity }),
         setLightColor: (color) => set({ lightColor: color }),
         setFogEnabled: (enabled) => set({ fogEnabled: enabled }),
+
+        // Viewport / Projection
+        activeTransformTool: "translate",
+        projectionMode: "perspective",
+        transformSpace: "world",
+
+        sceneSettings: initialSceneDefaults,
+        postProcessing: initialPostProcessingDefaults,
+
+        // Frame
+        viewport: "Personal Camera",
+        resolution: "Responsive",
+        autoZoom: false,
+        hudOverlay: "None",
+        viewportZoom: 100,
+
+        // Scene
+        bgAlpha: "100%",
+        environment: "Studio",
+        lightAmbientEnabled: true,
+        lightDirectionalEnabled: true,
+        lightShadow: "Soft",
+        physicsEnabled: false,
+        gravityY: -9.8,
+        collisionType: "Mesh",
+
+        // Post Processing
+        postProcessingEnabled: true,
+        toneMap: "ACES Filmic",
+        exposure: 0.00,
+        bloomEnabled: true,
+        bloomIntensity: 40,
+        bloomThreshold: 0.85,
+        bloomRadius: 0.4,
+        ssaoEnabled: false,
+        ssaoIntensity: 25,
+        dofEnabled: false,
+        dofFocusDist: 10.0,
+        dofBokeh: 0.30,
+        chromaticAberrationEnabled: false,
+        chromaticAberrationIntensity: 0,
+        motionBlurEnabled: false,
+        motionBlurIntensity: 0,
+        filmGrainEnabled: false,
+        filmGrainIntensity: 0,
+        vignetteEnabled: true,
+        vignetteIntensity: 15,
+        outlineEnabled: false,
+        outlineColor: "5865F2",
+        colorGradingEnabled: false,
+        colorGradingBrightness: 0.00,
+        colorGradingContrast: 0.00,
+        colorGradingSaturation: 0.00,
+
+        // Global Settings
+        snapping: "Object",
+        snapSize: 1.0,
+        renderer: "WebGL 2",
+
+        // Material Builder
+        materialName: "New Material",
+        materialType: "Standard (PBR)",
+        materialBaseColor: "888888",
+        materialMetalness: 0.00,
+        materialRoughness: 0.50,
+        materialOpacity: 1.00,
+        materialSide: "Front",
+        materialEmissiveColor: "000000",
+        materialEmissiveIntensity: 0.0,
+        materialClearcoat: 0.00,
+        materialTransmission: 0.00,
+        materialIor: 1.50,
+        materialIridescence: 0.00,
+        materialLibraryTab: "materials",
+        activeMaterialCard: "rough",
+
+        // Play Mode / Preview
+        isPreviewMode: false,
+        previewGlbUrl: null,
+        setPreviewMode: (active, url) => set({ isPreviewMode: active, previewGlbUrl: url }),
+
+        updatePostProcessing: (updates) =>
+          set((state) => ({
+            postProcessing: deepMerge(state.postProcessing, updates),
+          })),
+        updateSceneSettings: (updates) =>
+          set((state) => ({
+            sceneSettings: deepMerge(state.sceneSettings, updates),
+          })),
+        setEditorState: (updates) => set((state) => ({ ...state, ...updates })),
       }),
       {
         name: "libre3d-scene-state",
-        version: 2,
+        version: 6,
         storage: createJSONStorage(() => localStorage),
+        migrate: (persistedState: any, version: number) => {
+          if (version < 4) {
+            // Safely initialize postProcessing with defaults
+            const postProcessing = {
+              enabled: persistedState.postProcessingEnabled !== undefined ? persistedState.postProcessingEnabled : true,
+              toneMap: persistedState.toneMap !== undefined ? persistedState.toneMap : "ACES Filmic",
+              exposure: persistedState.exposure !== undefined ? persistedState.exposure : 0.00,
+              bloom: {
+                enabled: persistedState.bloomEnabled !== undefined ? persistedState.bloomEnabled : true,
+                intensity: persistedState.bloomIntensity !== undefined ? persistedState.bloomIntensity : 40,
+                threshold: persistedState.bloomThreshold !== undefined ? persistedState.bloomThreshold : 0.85,
+                radius: persistedState.bloomRadius !== undefined ? persistedState.bloomRadius : 0.4,
+              },
+              ssao: {
+                enabled: persistedState.ssaoEnabled !== undefined ? persistedState.ssaoEnabled : false,
+                intensity: persistedState.ssaoIntensity !== undefined ? persistedState.ssaoIntensity : 25,
+              },
+              dof: {
+                enabled: persistedState.dofEnabled !== undefined ? persistedState.dofEnabled : false,
+                focusDistance: persistedState.dofFocusDist !== undefined ? persistedState.dofFocusDist : 10.0,
+                bokeh: persistedState.dofBokeh !== undefined ? persistedState.dofBokeh : 0.30,
+              },
+              chromaticAberration: {
+                enabled: persistedState.chromaticAberrationEnabled !== undefined ? persistedState.chromaticAberrationEnabled : false,
+                intensity: persistedState.chromaticAberrationIntensity !== undefined ? persistedState.chromaticAberrationIntensity : 0,
+              },
+              motionBlur: {
+                enabled: persistedState.motionBlurEnabled !== undefined ? persistedState.motionBlurEnabled : false,
+                intensity: persistedState.motionBlurIntensity !== undefined ? persistedState.motionBlurIntensity : 0,
+              },
+              filmGrain: {
+                enabled: persistedState.filmGrainEnabled !== undefined ? persistedState.filmGrainEnabled : false,
+                intensity: persistedState.filmGrainIntensity !== undefined ? persistedState.filmGrainIntensity : 0,
+              },
+              vignette: {
+                enabled: persistedState.vignetteEnabled !== undefined ? persistedState.vignetteEnabled : true,
+                intensity: persistedState.vignetteIntensity !== undefined ? persistedState.vignetteIntensity : 15,
+              },
+              outline: {
+                enabled: persistedState.outlineEnabled !== undefined ? persistedState.outlineEnabled : false,
+                color: persistedState.outlineColor !== undefined ? persistedState.outlineColor : "5865F2",
+              },
+              colorGrading: {
+                enabled: persistedState.colorGradingEnabled !== undefined ? persistedState.colorGradingEnabled : false,
+                brightness: persistedState.colorGradingBrightness !== undefined ? persistedState.colorGradingBrightness : 0.00,
+                contrast: persistedState.colorGradingContrast !== undefined ? persistedState.colorGradingContrast : 0.00,
+                saturation: persistedState.colorGradingSaturation !== undefined ? persistedState.colorGradingSaturation : 0.00,
+              },
+            };
+
+            // Safely initialize sceneSettings with defaults
+            const sceneSettings = {
+              bgColor: persistedState.bgColor !== undefined ? persistedState.bgColor : "#0b1020",
+              bgAlpha: persistedState.bgAlpha !== undefined ? persistedState.bgAlpha : "100%",
+              gridPlane: persistedState.gridPlane !== undefined ? persistedState.gridPlane : "Floor (XZ)",
+              wireframe: persistedState.wireframe !== undefined ? persistedState.wireframe : false,
+              fogEnabled: persistedState.fogEnabled !== undefined ? persistedState.fogEnabled : false,
+              environment: persistedState.environment !== undefined ? persistedState.environment : "Studio",
+              lights: {
+                intensity: persistedState.lightIntensity !== undefined ? persistedState.lightIntensity : 0.75,
+                color: persistedState.lightColor !== undefined ? persistedState.lightColor : "#ffffff",
+                ambientEnabled: persistedState.lightAmbientEnabled !== undefined ? persistedState.lightAmbientEnabled : true,
+                directionalEnabled: persistedState.lightDirectionalEnabled !== undefined ? persistedState.lightDirectionalEnabled : true,
+                shadow: persistedState.lightShadow !== undefined ? persistedState.lightShadow : "Soft",
+              },
+              physics: {
+                enabled: persistedState.physicsEnabled !== undefined ? persistedState.physicsEnabled : false,
+                gravityY: persistedState.gravityY !== undefined ? persistedState.gravityY : -9.8,
+                collisionType: persistedState.collisionType !== undefined ? persistedState.collisionType : "Mesh",
+              },
+            };
+
+            persistedState.postProcessing = postProcessing;
+            persistedState.sceneSettings = sceneSettings;
+
+            // Delete deprecated keys
+            const keysToDelete = [
+              "postProcessingEnabled", "toneMap", "exposure", "bloomEnabled", "bloomIntensity", "bloomThreshold", "bloomRadius",
+              "ssaoEnabled", "ssaoIntensity", "dofEnabled", "dofFocusDist", "dofBokeh", "chromaticAberrationEnabled",
+              "chromaticAberrationIntensity", "motionBlurEnabled", "motionBlurIntensity", "filmGrainEnabled", "filmGrainIntensity",
+              "vignetteEnabled", "vignetteIntensity", "outlineEnabled", "outlineColor", "colorGradingEnabled", "colorGradingBrightness",
+              "colorGradingContrast", "colorGradingSaturation", "bgColor", "bgAlpha", "gridPlane", "wireframe", "fogEnabled",
+              "environment", "lightIntensity", "lightColor", "lightAmbientEnabled", "lightDirectionalEnabled", "lightShadow",
+              "physicsEnabled", "gravityY", "collisionType"
+            ];
+            keysToDelete.forEach((key) => {
+              delete persistedState[key];
+            });
+          }
+
+          if (version < 5) {
+            if (persistedState && persistedState.entities) {
+              const hasLight = persistedState.entities.some((e: any) => e.type === "directionalLight");
+              if (!hasLight) {
+                persistedState.entities.push({
+                  id: "directional-light-1",
+                  type: "directionalLight",
+                  name: "Directional Light",
+                  position: [5, 8, 4],
+                  rotation: [0, 0, 0],
+                  scale: [1, 1, 1],
+                  color: "#ffffff",
+                  visible: true,
+                  locked: false,
+                });
+              }
+            }
+          }
+
+          if (version < 6) {
+            if (persistedState) {
+              if (persistedState.activeCameraId === undefined) {
+                persistedState.activeCameraId = "default";
+              }
+            }
+          }
+          return persistedState;
+        },
         partialize: (state) => ({
+          activeCameraId: state.activeCameraId,
           entities: state.entities,
           selectedEntityId: state.selectedEntityId,
           currentPublishId: state.currentPublishId,
@@ -195,57 +676,76 @@ export const useEditorStore = create<EditorState>()(
           lightIntensity: state.lightIntensity,
           lightColor: state.lightColor,
           fogEnabled: state.fogEnabled,
+
+          activeTransformTool: state.activeTransformTool,
+          projectionMode: state.projectionMode,
+          transformSpace: state.transformSpace,
+
+          sceneSettings: state.sceneSettings,
+          postProcessing: state.postProcessing,
+
+          viewport: state.viewport,
+          resolution: state.resolution,
+          autoZoom: state.autoZoom,
+          hudOverlay: state.hudOverlay,
+          viewportZoom: state.viewportZoom,
+
+          bgAlpha: state.bgAlpha,
+          environment: state.environment,
+          lightAmbientEnabled: state.lightAmbientEnabled,
+          lightDirectionalEnabled: state.lightDirectionalEnabled,
+          lightShadow: state.lightShadow,
+          physicsEnabled: state.physicsEnabled,
+          gravityY: state.gravityY,
+          collisionType: state.collisionType,
+
+          postProcessingEnabled: state.postProcessingEnabled,
+          toneMap: state.toneMap,
+          exposure: state.exposure,
+          bloomEnabled: state.bloomEnabled,
+          bloomIntensity: state.bloomIntensity,
+          bloomThreshold: state.bloomThreshold,
+          bloomRadius: state.bloomRadius,
+          ssaoEnabled: state.ssaoEnabled,
+          ssaoIntensity: state.ssaoIntensity,
+          dofEnabled: state.dofEnabled,
+          dofFocusDist: state.dofFocusDist,
+          dofBokeh: state.dofBokeh,
+          chromaticAberrationEnabled: state.chromaticAberrationEnabled,
+          chromaticAberrationIntensity: state.chromaticAberrationIntensity,
+          motionBlurEnabled: state.motionBlurEnabled,
+          motionBlurIntensity: state.motionBlurIntensity,
+          filmGrainEnabled: state.filmGrainEnabled,
+          filmGrainIntensity: state.filmGrainIntensity,
+          vignetteEnabled: state.vignetteEnabled,
+          vignetteIntensity: state.vignetteIntensity,
+          outlineEnabled: state.outlineEnabled,
+          outlineColor: state.outlineColor,
+          colorGradingEnabled: state.colorGradingEnabled,
+          colorGradingBrightness: state.colorGradingBrightness,
+          colorGradingContrast: state.colorGradingContrast,
+          colorGradingSaturation: state.colorGradingSaturation,
+
+          snapping: state.snapping,
+          snapSize: state.snapSize,
+          renderer: state.renderer,
+
+          materialName: state.materialName,
+          materialType: state.materialType,
+          materialBaseColor: state.materialBaseColor,
+          materialMetalness: state.materialMetalness,
+          materialRoughness: state.materialRoughness,
+          materialOpacity: state.materialOpacity,
+          materialSide: state.materialSide,
+          materialEmissiveColor: state.materialEmissiveColor,
+          materialEmissiveIntensity: state.materialEmissiveIntensity,
+          materialClearcoat: state.materialClearcoat,
+          materialTransmission: state.materialTransmission,
+          materialIor: state.materialIor,
+          materialIridescence: state.materialIridescence,
+          materialLibraryTab: state.materialLibraryTab,
+          activeMaterialCard: state.activeMaterialCard,
         }),
-        migrate: (persistedState) => {
-          const legacyState = persistedState as any;
-          const legacyObjects = legacyState && "objects" in legacyState ? legacyState.objects : undefined;
-          const legacyEntities = Array.isArray(legacyObjects) ? (legacyObjects as Entity[]) : [];
-
-          const nextEntities =
-            legacyState && "entities" in legacyState && Array.isArray(legacyState.entities)
-              ? (legacyState.entities as Entity[])
-              : legacyEntities;
-
-          return {
-            entities:
-              nextEntities.length > 0
-                ? nextEntities.map(cloneEntity)
-                : initialEntities.map(cloneEntity),
-            selectedEntityId: legacyState?.selectedEntityId ?? null,
-            currentPublishId: legacyState?.currentPublishId ?? null,
-            bgColor: legacyState?.bgColor ?? "#0b1020",
-            gridPlane: legacyState?.gridPlane ?? "Floor (XZ)",
-            wireframe: legacyState?.wireframe ?? false,
-            lightIntensity: legacyState?.lightIntensity ?? 0.75,
-            lightColor: legacyState?.lightColor ?? "#ffffff",
-            fogEnabled: legacyState?.fogEnabled ?? false,
-          };
-        },
-        merge: (persistedState, currentState) => {
-          const nextState = persistedState as Partial<EditorState> | undefined;
-          const entities = Array.isArray(nextState?.entities)
-            ? (nextState.entities as Entity[])
-            : currentState.entities;
-
-          return {
-            ...currentState,
-            ...nextState,
-            entities:
-              entities.length > 0
-                ? entities.map(cloneEntity)
-                : initialEntities.map(cloneEntity),
-            selectedEntityId:
-              nextState?.selectedEntityId ?? currentState.selectedEntityId ?? null,
-            currentPublishId:
-              nextState?.currentPublishId ?? currentState.currentPublishId ?? null,
-            bgColor: nextState?.bgColor ?? currentState.bgColor,
-            gridPlane: nextState?.gridPlane ?? currentState.gridPlane,
-            wireframe: nextState?.wireframe ?? currentState.wireframe,
-            lightIntensity: nextState?.lightIntensity ?? currentState.lightIntensity,
-            lightColor: nextState?.lightColor ?? currentState.lightColor,
-            fogEnabled: nextState?.fogEnabled ?? currentState.fogEnabled,
-          };
-        },
       },
     ),
   ),

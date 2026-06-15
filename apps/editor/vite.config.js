@@ -35,18 +35,13 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
     }
 };
 import path from "node:path";
-import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { createPublishSession, getPublishedScene } from "./src/utils/awsPublishHandler";
-var require = createRequire(import.meta.url);
-var threePackageJson = require.resolve("three/package.json");
-var threeRealDir = path.dirname(fs.realpathSync(threePackageJson));
-var threeModulePath = path.resolve(threeRealDir, "build/three.module.js");
 var editorConfigDir = fileURLToPath(new URL(".", import.meta.url));
 var repoRootDir = path.resolve(editorConfigDir, "../..");
+var threeModulePath = path.resolve(editorConfigDir, "node_modules/three");
 var awsPublishRoutePlugin = function (env) { return ({
     name: "libre3d-aws-publish-route",
     configureServer: function (server) {

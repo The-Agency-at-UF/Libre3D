@@ -77,12 +77,12 @@ When a formal test suite is added, this section should be updated to include the
 - **Scene Hierarchy Panel**: Manage entities with capabilities to rename, toggle visibility (show/hide), toggle lock, and delete entities.
 - **Viewport Raycasting Selection**: Select objects directly inside the 3D canvas viewport using mouse/pointer clicks, with smart raycasting that ignores transform gizmo interactions.
 - **Interactive Transform Gizmo**: Move, rotate, and scale selected entities using an interactive Three.js transform controls gizmo.
+- **Local Play Mode / Scene Preview**: Preview scenes locally using an integrated `<model-viewer>` component and the local GLB exporter. The WebGL context is preserved during toggling, and editor panels are locked/dimmed to indicate active preview state.
 - **Zustand State Persistence**: Keeps editor state synced, fully persisted, and versioned in `localStorage` with state-migration support.
 - **Scene Customization**: Adjust viewport settings such as background color, grid plane orientation (Floor XZ, Wall XY, Side YZ, or None), wireframe rendering mode, light color/intensity, and fog settings.
 
 ## Next Milestones
 
-- Scene export pipeline for web embedding and later `<model-viewer>` support.
 - Import pipeline for GLTF and other common assets.
 - Advanced multi-selection and layout organization tools.
 

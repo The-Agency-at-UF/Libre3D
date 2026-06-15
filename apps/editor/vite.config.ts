@@ -9,13 +9,9 @@ import react from "@vitejs/plugin-react";
 
 import { createPublishSession, getPublishedScene } from "./src/utils/awsPublishHandler";
 
-const require = createRequire(import.meta.url);
-const threePackageJson = require.resolve("three/package.json");
-const threeRealDir = path.dirname(fs.realpathSync(threePackageJson));
-const threeModulePath = path.resolve(threeRealDir, "build/three.module.js");
-
 const editorConfigDir = fileURLToPath(new URL(".", import.meta.url));
 const repoRootDir = path.resolve(editorConfigDir, "../..");
+const threeModulePath = path.resolve(editorConfigDir, "node_modules/three");
 
 const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
   name: "libre3d-aws-publish-route",

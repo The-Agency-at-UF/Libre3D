@@ -1,4 +1,9 @@
 import type { ReactNode } from "react";
+import { useEditorStore } from "../store/useEditorStore";
+import { PanelSection } from "./ui/PanelSection";
+import { Slider } from "./ui/Slider";
+import { Switch } from "./ui/Switch";
+import { Select } from "./ui/Select";
 
 interface EditorSidebarSectionProps {
   title: string;
@@ -53,6 +58,37 @@ export function EditorSidebar({
   subtitle = "Add primitives, edit transforms, and pick materials.",
   children,
 }: EditorSidebarProps) {
+  const sceneSettings = useEditorStore((state) => state.sceneSettings);
+  const updateSceneSettings = useEditorStore((state) => state.updateSceneSettings);
+
+  const handleGridPlaneChange = (val: string) => {
+    updateSceneSettings({ gridPlane: val });
+  };
+
+  const handleWireframeChange = (val: boolean) => {
+    updateSceneSettings({ wireframe: val });
+  };
+
+  const handleFogChange = (val: boolean) => {
+    updateSceneSettings({ fogEnabled: val });
+  };
+
+  const handleEnvironmentChange = (val: string) => {
+    updateSceneSettings({ environment: val });
+  };
+
+  const handleLightIntensityChange = (val: number) => {
+    updateSceneSettings({ lights: { intensity: val } });
+  };
+
+  const handlePhysicsChange = (val: boolean) => {
+    updateSceneSettings({ physics: { enabled: val } });
+  };
+
+  const handleGravityChange = (val: number) => {
+    updateSceneSettings({ physics: { gravityY: val } });
+  };
+
   return (
     <aside
       style={{
@@ -97,7 +133,7 @@ export function EditorSidebar({
         </p>
       </header>
 
-      <div style={{ display: "grid", alignContent: "start", gap: "0.85rem" }}>
+      <div style={{ display: "grid", alignContent: "start", gap: "0.85rem", overflowY: "auto" }}>
         <EditorSidebarSection
           title="Objects"
           description="Start with primitive shapes and keep the list easy to scan."
@@ -105,10 +141,67 @@ export function EditorSidebar({
           {children}
         </EditorSidebarSection>
 
-        <EditorSidebarSection
-          title="Appearance"
-          description="Reserve this area for color, material, and light controls."
-        />
+        <PanelSection title="Environment & Grid" defaultOpen={true}>
+          <Select
+            label="Grid Plane"
+            value={sceneSettings.gridPlane}
+            options={[
+              { label: "None", value: "None" },
+              { label: "Floor (XZ)", value: "Floor (XZ)" },
+              { label: "Wall (XY)", value: "Wall (XY)" },
+              { label: "Side (YZ)", value: "Side (YZ)" },
+            ]}
+            onChange={handleGridPlaneChange}
+          />
+          <Select
+            label="Environment"
+            value={sceneSettings.environment}
+            options={[
+              { label: "Studio", value: "Studio" },
+              { label: "Sunset", value: "Sunset" },
+              { label: "Outdoors", value: "Outdoors" },
+              { label: "Abstract", value: "Abstract" },
+            ]}
+            onChange={handleEnvironmentChange}
+          />
+          <Switch
+            label="Wireframe Mode"
+            checked={sceneSettings.wireframe}
+            onChange={handleWireframeChange}
+          />
+          <Switch
+            label="Fog Effect"
+            checked={sceneSettings.fogEnabled}
+            onChange={handleFogChange}
+          />
+        </PanelSection>
+
+        <PanelSection title="Lights Settings" defaultOpen={false}>
+          <Slider
+            label="Light Intensity"
+            min={0}
+            max={3}
+            step={0.1}
+            value={sceneSettings.lights.intensity}
+            onChange={handleLightIntensityChange}
+          />
+        </PanelSection>
+
+        <PanelSection title="Physics Settings" defaultOpen={false}>
+          <Switch
+            label="Enable Physics"
+            checked={sceneSettings.physics.enabled}
+            onChange={handlePhysicsChange}
+          />
+          <Slider
+            label="Gravity Y"
+            min={-20}
+            max={20}
+            step={0.5}
+            value={sceneSettings.physics.gravityY}
+            onChange={handleGravityChange}
+          />
+        </PanelSection>
       </div>
     </aside>
   );

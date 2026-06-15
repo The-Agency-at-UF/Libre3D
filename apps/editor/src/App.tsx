@@ -1,34 +1,18 @@
 import { useEffect, useState } from "react";
 
-import { EditorSidebar } from "./components/EditorSidebar";
 import { HierarchyPanel } from "./components/HierarchyPanel";
 import { ViewportCanvas } from "./components/ViewportCanvas";
 import { useEditorStore } from "./store/useEditorStore";
 import { exportLiveScene, getLiveScene } from "./utils/exportScene";
 import { publishLiveScene } from "./utils/publishScene";
 
-type TransformAxis = 0 | 1 | 2;
+// Subcomponents
+import { ViewportOverlays } from "./components/ViewportOverlays";
+import { RightSidebar } from "./components/RightSidebar";
+import { ExportModal } from "./components/ExportModal";
 
-const VECTOR_LABELS = ["X", "Y", "Z"] as const;
-const PROPERTY_KEYS = ["position", "rotation", "scale"] as const;
-
-const updateVectorAxis = (
-  vector: [number, number, number],
-  axis: TransformAxis,
-  rawValue: string,
-): [number, number, number] => {
-  const nextValue = Number.parseFloat(rawValue);
-
-  if (Number.isNaN(nextValue)) {
-    return vector;
-  }
-
-  return vector.map((value, index) => (index === axis ? nextValue : value)) as [
-    number,
-    number,
-    number,
-  ];
-};
+// Custom state hook
+import { useRightSidebarState } from "./hooks/useRightSidebarState";
 
 declare module "react" {
   namespace JSX {
@@ -123,26 +107,130 @@ export function App() {
 
 function EditorApp() {
   const entities = useEditorStore((state) => state.entities) ?? [];
-  const selectedEntityId = useEditorStore((state) => state.selectedEntityId);
   const currentPublishId = useEditorStore((state) => state.currentPublishId);
   const setCurrentPublishId = useEditorStore((state) => state.setCurrentPublishId);
   const addEntity = useEditorStore((state) => state.addEntity);
-  const removeEntity = useEditorStore((state) => state.removeEntity);
-  const selectEntity = useEditorStore((state) => state.selectEntity);
-  const updateEntityTransform = useEditorStore((state) => state.updateEntityTransform);
-  const [isExporting, setIsExporting] = useState(false);
-  const [isPublishing, setIsPublishing] = useState(false);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"export" | "share">("export");
-  const [isCopied, setIsCopied] = useState(false);
-  const [shareUrl, setShareUrl] = useState<string | null>(
-    currentPublishId ? `http://${window.location.host}/v/${currentPublishId}` : null,
-  );
-  const [activeSidebarTab, setActiveSidebarTab] = useState<"objects" | "assets">("objects");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [activeTransformTool, setActiveTransformTool] = useState<"translate" | "rotate" | "scale">("translate");
-  const [projectionMode, setProjectionMode] = useState<"perspective" | "orthographic">("perspective");
-  const [transformSpace, setTransformSpace] = useState<"world" | "local">("world");
+  const setEditorState = useEditorStore((state) => state.setEditorState);
+
+  const activeTransformTool = useEditorStore((state) => state.activeTransformTool);
+  const transformSpace = useEditorStore((state) => state.transformSpace);
+  const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
+  const previewGlbUrl = useEditorStore((state) => state.previewGlbUrl);
+
+  // Hook for right sidebar local UI state
+  const sidebarUI = useRightSidebarState(currentPublishId);
+
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+
+  const [theme, setTheme] = useState<"dark" | "light">(() => {
+    const saved = localStorage.getItem("libre3d-theme");
+    if (saved === "dark" || saved === "light") {
+      return saved;
+    }
+    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    return prefersDark ? "dark" : "light";
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "light") {
+      root.classList.add("light-theme");
+    } else {
+      root.classList.remove("light-theme");
+    }
+    // Only save to localStorage if user explicitly interacts,
+    // or keep the check clean:
+    if (localStorage.getItem("libre3d-theme") !== null) {
+      localStorage.setItem("libre3d-theme", theme);
+    }
+  }, [theme]);
+
+  // Listen to system theme preference changes if no manual override exists
+  useEffect(() => {
+    const saved = localStorage.getItem("libre3d-theme");
+    if (saved) return;
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleChange = (e: MediaQueryListEvent) => {
+      setTheme(e.matches ? "dark" : "light");
+    };
+
+    mediaQuery.addEventListener("change", handleChange);
+    return () => {
+      mediaQuery.removeEventListener("change", handleChange);
+    };
+  }, []);
+
+  const handleToggleTheme = () => {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    setTheme(nextTheme);
+    localStorage.setItem("libre3d-theme", nextTheme); // Explicit manual override
+    setIsMenuOpen(false);
+  };
+
+  const handleNewFile = () => {
+    if (window.confirm("Are you sure you want to clear the scene?")) {
+      useEditorStore.setState({
+        entities: [
+          {
+            id: "directional-light-1",
+            type: "directionalLight",
+            name: "Directional Light",
+            position: [5, 8, 4],
+            rotation: [0, 0, 0],
+            scale: [1, 1, 1],
+            color: "#ffffff",
+            visible: true,
+            locked: false,
+          }
+        ],
+        selectedEntityId: null,
+        activeCameraId: "default"
+      });
+      setIsMenuOpen(false);
+    }
+  };
+
+  const handleDuplicate = () => {
+    const selectedId = useEditorStore.getState().selectedEntityId;
+    if (selectedId) {
+      const entityToDuplicate = entities.find(e => e.id === selectedId);
+      if (entityToDuplicate) {
+        const newId = `entity-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const duplicatedEntity = {
+          ...entityToDuplicate,
+          id: newId,
+          name: `${entityToDuplicate.name} (Copy)`,
+          position: [
+            entityToDuplicate.position[0] + 0.5,
+            entityToDuplicate.position[1],
+            entityToDuplicate.position[2] + 0.5
+          ] as [number, number, number]
+        };
+        useEditorStore.setState({
+          entities: [...entities, duplicatedEntity],
+          selectedEntityId: newId
+        });
+      }
+    } else {
+      window.alert("Please select an object first to duplicate.");
+    }
+    setIsMenuOpen(false);
+  };
+
+  const handleResetCamera = () => {
+    setEditorState({
+      viewportZoom: 100,
+      activeCameraId: "default",
+      projectionMode: "perspective"
+    });
+    setIsMenuOpen(false);
+  };
+
+  const triggerPlaceholder = (action: string) => {
+    window.alert(`${action} action triggered.`);
+    setIsMenuOpen(false);
+  };
 
   // Hotkeys for transform tools
   useEffect(() => {
@@ -157,15 +245,29 @@ function EditorApp() {
         return;
       }
 
+      // Ctrl + Key or Cmd + Key shortcuts
+      if (event.ctrlKey || event.metaKey) {
+        if (event.key.toLowerCase() === "d") {
+          event.preventDefault();
+          handleDuplicate();
+          return;
+        }
+        if (event.key.toLowerCase() === "n") {
+          event.preventDefault();
+          handleNewFile();
+          return;
+        }
+      }
+
       switch (event.key.toLowerCase()) {
         case "w":
-          setActiveTransformTool("translate");
+          setEditorState({ activeTransformTool: "translate" });
           break;
         case "e":
-          setActiveTransformTool("rotate");
+          setEditorState({ activeTransformTool: "rotate" });
           break;
         case "r":
-          setActiveTransformTool("scale");
+          setEditorState({ activeTransformTool: "scale" });
           break;
         default:
           break;
@@ -176,112 +278,10 @@ function EditorApp() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, []);
-  const [collapsibleStates, setCollapsibleStates] = useState<Record<string, boolean>>({
-    frame: true,
-    scene: true,
-    globalSettings: true,
-    materialAssets: true,
-  });
-
-  // Redesigned Sidebar States - Bound to useEditorStore
-  const storeBgColor = useEditorStore((state) => state.bgColor);
-  const setStoreBgColor = useEditorStore((state) => state.setBgColor);
-  const bgColor = storeBgColor.replace("#", "");
-  const setBgColor = (cleanColor: string) => setStoreBgColor("#" + cleanColor.replace("#", ""));
-
-  const gridPlane = useEditorStore((state) => state.gridPlane);
-  const setGridPlane = useEditorStore((state) => state.setGridPlane);
-
-  const wireframeEnabled = useEditorStore((state) => state.wireframe);
-  const setWireframeEnabled = useEditorStore((state) => state.setWireframe);
-
-  const lightIntensity = useEditorStore((state) => state.lightIntensity);
-  const setLightIntensity = useEditorStore((state) => state.setLightIntensity);
-
-  const storeLightColor = useEditorStore((state) => state.lightColor);
-  const setStoreLightColor = useEditorStore((state) => state.setLightColor);
-  const lightColor = storeLightColor.replace("#", "");
-  const setLightColor = (cleanColor: string) => setStoreLightColor("#" + cleanColor.replace("#", ""));
-
-  const fogEnabled = useEditorStore((state) => state.fogEnabled);
-  const setFogEnabled = useEditorStore((state) => state.setFogEnabled);
-
-  // Frame
-  const [viewport, setViewport] = useState("Personal Camera");
-  const [resolution, setResolution] = useState("Responsive");
-  const [autoZoom, setAutoZoom] = useState(false);
-  const [hudOverlay, setHudOverlay] = useState("None");
-
-  // Scene (Local states for layout visuals)
-  const [bgAlpha, setBgAlpha] = useState("100%");
-  const [environment, setEnvironment] = useState("Studio");
-  const [lightAmbientEnabled, setLightAmbientEnabled] = useState(true);
-  const [lightDirectionalEnabled, setLightDirectionalEnabled] = useState(true);
-  const [lightShadow, setLightShadow] = useState("Soft");
-  const [physicsEnabled, setPhysicsEnabled] = useState(false);
-  const [gravityY, setGravityY] = useState(-9.8);
-  const [collisionType, setCollisionType] = useState("Mesh");
-
-  // Post Processing
-  const [postProcessingEnabled, setPostProcessingEnabled] = useState(true);
-  const [toneMap, setToneMap] = useState("ACES Filmic");
-  const [exposure, setExposure] = useState(0.00);
-  const [bloomEnabled, setBloomEnabled] = useState(true);
-  const [bloomIntensity, setBloomIntensity] = useState(40);
-  const [bloomThreshold, setBloomThreshold] = useState(0.85);
-  const [bloomRadius, setBloomRadius] = useState(0.4);
-  const [ssaoEnabled, setSsaoEnabled] = useState(false);
-  const [ssaoIntensity, setSsaoIntensity] = useState(25);
-  const [dofEnabled, setDofEnabled] = useState(false);
-  const [dofFocusDist, setDofFocusDist] = useState(10.0);
-  const [dofBokeh, setDofBokeh] = useState(0.30);
-  const [chromaticAberrationEnabled, setChromaticAberrationEnabled] = useState(false);
-  const [chromaticAberrationIntensity, setChromaticAberrationIntensity] = useState(0);
-  const [motionBlurEnabled, setMotionBlurEnabled] = useState(false);
-  const [motionBlurIntensity, setMotionBlurIntensity] = useState(0);
-  const [filmGrainEnabled, setFilmGrainEnabled] = useState(false);
-  const [filmGrainIntensity, setFilmGrainIntensity] = useState(0);
-  const [vignetteEnabled, setVignetteEnabled] = useState(true);
-  const [vignetteIntensity, setVignetteIntensity] = useState(15);
-  const [outlineEnabled, setOutlineEnabled] = useState(false);
-  const [outlineColor, setOutlineColor] = useState("5865F2");
-  const [colorGradingEnabled, setColorGradingEnabled] = useState(false);
-  const [colorGradingBrightness, setColorGradingBrightness] = useState(0.00);
-  const [colorGradingContrast, setColorGradingContrast] = useState(0.00);
-  const [colorGradingSaturation, setColorGradingSaturation] = useState(0.00);
-
-  // Global Settings
-  const [snapping, setSnapping] = useState("Object");
-  const [snapSize, setSnapSize] = useState(1.0);
-  const [renderer, setRenderer] = useState("WebGL 2");
-
-  // Material Builder
-  const [materialName, setMaterialName] = useState("New Material");
-  const [materialType, setMaterialType] = useState("Standard (PBR)");
-  const [materialBaseColor, setMaterialBaseColor] = useState("888888");
-  const [materialMetalness, setMaterialMetalness] = useState(0.00);
-  const [materialRoughness, setMaterialRoughness] = useState(0.50);
-  const [materialOpacity, setMaterialOpacity] = useState(1.00);
-  const [materialSide, setMaterialSide] = useState("Front");
-  const [materialEmissiveColor, setMaterialEmissiveColor] = useState("000000");
-  const [materialEmissiveIntensity, setMaterialEmissiveIntensity] = useState(0.0);
-  const [materialClearcoat, setMaterialClearcoat] = useState(0.00);
-  const [materialTransmission, setMaterialTransmission] = useState(0.00);
-  const [materialIor, setMaterialIor] = useState(1.50);
-  const [materialIridescence, setMaterialIridescence] = useState(0.00);
-  const [materialLibraryTab, setMaterialLibraryTab] = useState("materials");
-  const [activeMaterialCard, setActiveMaterialCard] = useState("rough");
-  const [isShapeDropdownOpen, setIsShapeDropdownOpen] = useState(false);
-
-  const renameEntity = useEditorStore((state) => state.renameEntity);
-
-  const toggleCollapsible = (section: string) => {
-    setCollapsibleStates((prev) => ({ ...prev, [section]: !prev[section] }));
-  };
+  }, [setEditorState, entities]);
 
   const handleExportAsset = async (): Promise<void> => {
-    if (isExporting) {
+    if (sidebarUI.isExporting) {
       return;
     }
 
@@ -292,7 +292,7 @@ function EditorApp() {
       return;
     }
 
-    setIsExporting(true);
+    sidebarUI.setIsExporting(true);
 
     try {
       const exported = await exportLiveScene(liveScene);
@@ -304,7 +304,7 @@ function EditorApp() {
       console.error("Failed to export the current scene.", error);
       window.alert("The scene could not be exported. Check the console for details.");
     } finally {
-      setIsExporting(false);
+      sidebarUI.setIsExporting(false);
     }
   };
 
@@ -327,7 +327,7 @@ function EditorApp() {
   };
 
   const handlePublishLink = async (): Promise<void> => {
-    if (isPublishing) {
+    if (sidebarUI.isPublishing) {
       return;
     }
 
@@ -338,7 +338,7 @@ function EditorApp() {
       return;
     }
 
-    setIsPublishing(true);
+    sidebarUI.setIsPublishing(true);
 
     try {
       const publishResult = await publishLiveScene(liveScene, currentPublishId);
@@ -349,53 +349,147 @@ function EditorApp() {
       }
 
       setCurrentPublishId(publishResult.sceneId);
-      setShareUrl(`http://${window.location.host}/v/${publishResult.sceneId}`);
+      sidebarUI.setShareUrl(`http://${window.location.host}/v/${publishResult.sceneId}`);
     } catch (error) {
       console.error("Failed to publish the current scene.", error);
       window.alert("The scene could not be published. Check the console for details.");
     } finally {
-      setIsPublishing(false);
+      sidebarUI.setIsPublishing(false);
     }
   };
-
-  const selectedEntity =
-    entities.find((entity) => entity.id === selectedEntityId) ?? null;
 
   return (
     <>
       <div className="editor-shell">
         {/* Left Sidebar */}
-        <aside className="left-sidebar">
+        <aside className="left-sidebar" style={isPreviewMode ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
+          {/* Top Header Row Container */}
+          <div className="left-sidebar-header">
+            <button
+              className="left-sidebar-header-btn"
+              type="button"
+              title="Back to Projects"
+              onClick={() => {
+                window.location.href = "/scenes";
+              }}
+            >
+              <i className="ti ti-arrow-left" style={{ fontSize: "16px" }}></i>
+            </button>
+            
+            <span className="left-sidebar-header-title" title="Untitled Scene">
+              Untitled Scene
+            </span>
+
+            <div className="hamburger-menu-wrap">
+              <button
+                className="left-sidebar-header-btn"
+                type="button"
+                title="Menu"
+                onClick={() => setIsMenuOpen(!isMenuOpen)}
+              >
+                <i className="ti ti-menu-2" style={{ fontSize: "16px" }}></i>
+              </button>
+
+              {isMenuOpen && (
+                <>
+                  <div
+                    style={{
+                      position: "fixed",
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      zIndex: 999,
+                    }}
+                    onClick={() => setIsMenuOpen(false)}
+                  />
+                  <div className="hamburger-dropdown">
+                    <button
+                      className="hamburger-dropdown-btn"
+                      type="button"
+                      onClick={handleNewFile}
+                    >
+                      <span><i className="ti ti-file" style={{ marginRight: "6px" }}></i>New File</span>
+                      <span className="hamburger-dropdown-shortcut">Ctrl+N</span>
+                    </button>
+                    <button
+                      className="hamburger-dropdown-btn"
+                      type="button"
+                      onClick={handleDuplicate}
+                    >
+                      <span><i className="ti ti-copy" style={{ marginRight: "6px" }}></i>Duplicate</span>
+                      <span className="hamburger-dropdown-shortcut">Ctrl+D</span>
+                    </button>
+                    <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+                    <button
+                      className="hamburger-dropdown-btn"
+                      type="button"
+                      onClick={() => triggerPlaceholder("Undo")}
+                    >
+                      <span><i className="ti ti-arrow-back-up" style={{ marginRight: "6px" }}></i>Undo</span>
+                      <span className="hamburger-dropdown-shortcut">Ctrl+Z</span>
+                    </button>
+                    <button
+                      className="hamburger-dropdown-btn"
+                      type="button"
+                      onClick={() => triggerPlaceholder("Redo")}
+                    >
+                      <span><i className="ti ti-arrow-forward-up" style={{ marginRight: "6px" }}></i>Redo</span>
+                      <span className="hamburger-dropdown-shortcut">Ctrl+Y</span>
+                    </button>
+                    <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+                    <button
+                      className="hamburger-dropdown-btn"
+                      type="button"
+                      onClick={handleResetCamera}
+                    >
+                      <span><i className="ti ti-camera" style={{ marginRight: "6px" }}></i>Reset Camera</span>
+                    </button>
+                    <button
+                      className="hamburger-dropdown-btn"
+                      type="button"
+                      onClick={handleToggleTheme}
+                    >
+                      <span><i className="ti ti-palette" style={{ marginRight: "6px" }}></i>Toggle Theme</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
           <div className="left-sidebar-tabs">
             <button
-              className={`left-sidebar-tab-btn ${activeSidebarTab === "objects" ? "active" : ""}`}
+              className={`left-sidebar-tab-btn ${sidebarUI.activeSidebarTab === "objects" ? "active" : ""}`}
               type="button"
-              onClick={() => setActiveSidebarTab("objects")}
+              onClick={() => sidebarUI.setActiveSidebarTab("objects")}
             >
               Objects
             </button>
             <button
-              className={`left-sidebar-tab-btn ${activeSidebarTab === "assets" ? "active" : ""}`}
+              className={`left-sidebar-tab-btn ${sidebarUI.activeSidebarTab === "assets" ? "active" : ""}`}
               type="button"
-              onClick={() => setActiveSidebarTab("assets")}
+              onClick={() => sidebarUI.setActiveSidebarTab("assets")}
             >
               Assets
             </button>
           </div>
 
-          <div className="left-sidebar-search-box">
-            <input
-              className="sidebar-search-input"
-              type="text"
-              placeholder="Search directory..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
+          {sidebarUI.activeSidebarTab === "assets" && (
+            <div className="left-sidebar-search-box">
+              <input
+                className="sidebar-search-input"
+                type="text"
+                placeholder="Search directory..."
+                value={sidebarUI.searchQuery}
+                onChange={(e) => sidebarUI.setSearchQuery(e.target.value)}
+              />
+            </div>
+          )}
 
           <div className="outliner-container">
-            {activeSidebarTab === "objects" ? (
-              <HierarchyPanel searchQuery={searchQuery} />
+            {sidebarUI.activeSidebarTab === "objects" ? (
+              <HierarchyPanel searchQuery={sidebarUI.searchQuery} />
             ) : (
               <div className="editor-meta" style={{ padding: "0.5rem" }}>
                 Asset browser is empty.
@@ -407,12 +501,13 @@ function EditorApp() {
         {/* Center Viewport */}
         <div className="viewport-container">
           {/* Floating Layout Toolbar */}
-          <div className="floating-toolbar">
+          {!isPreviewMode && (
+            <div className="floating-toolbar">
             <button
               className={`toolbar-btn ${activeTransformTool === "translate" ? "active-translate" : ""}`}
               type="button"
               title="Translate Tool"
-              onClick={() => setActiveTransformTool("translate")}
+              onClick={() => setEditorState({ activeTransformTool: "translate" })}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -437,7 +532,7 @@ function EditorApp() {
               className={`toolbar-btn ${activeTransformTool === "rotate" ? "active-translate" : ""}`}
               type="button"
               title="Rotate Tool"
-              onClick={() => setActiveTransformTool("rotate")}
+              onClick={() => setEditorState({ activeTransformTool: "rotate" })}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -457,7 +552,7 @@ function EditorApp() {
               className={`toolbar-btn ${activeTransformTool === "scale" ? "active-translate" : ""}`}
               type="button"
               title="Scale Tool"
-              onClick={() => setActiveTransformTool("scale")}
+              onClick={() => setEditorState({ activeTransformTool: "scale" })}
             >
               <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -483,7 +578,7 @@ function EditorApp() {
               style={{ fontSize: "10px", fontWeight: "bold", width: "auto", paddingInline: "8px", borderRadius: "999px" }}
               type="button"
               title="Toggle Transform Space (Local / World)"
-              onClick={() => setTransformSpace((prev) => (prev === "world" ? "local" : "world"))}
+              onClick={() => setEditorState({ transformSpace: transformSpace === "world" ? "local" : "world" })}
             >
               {transformSpace === "world" ? "Global" : "Local"}
             </button>
@@ -494,7 +589,7 @@ function EditorApp() {
                 className="toolbar-btn"
                 type="button"
                 title="Add Shape"
-                onClick={() => setIsShapeDropdownOpen(!isShapeDropdownOpen)}
+                onClick={() => sidebarUI.setIsShapeDropdownOpen(!sidebarUI.isShapeDropdownOpen)}
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -511,7 +606,7 @@ function EditorApp() {
                   <line x1="5" y1="12" x2="19" y2="12" />
                 </svg>
               </button>
-              {isShapeDropdownOpen && (
+              {sidebarUI.isShapeDropdownOpen && (
                 <div
                   style={{
                     position: "absolute",
@@ -548,7 +643,7 @@ function EditorApp() {
                     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                     onClick={() => {
                       addEntity("cube");
-                      setIsShapeDropdownOpen(false);
+                      sidebarUI.setIsShapeDropdownOpen(false);
                     }}
                   >
                     + Cube
@@ -570,7 +665,7 @@ function EditorApp() {
                     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                     onClick={() => {
                       addEntity("sphere");
-                      setIsShapeDropdownOpen(false);
+                      sidebarUI.setIsShapeDropdownOpen(false);
                     }}
                   >
                     + Sphere
@@ -592,1081 +687,76 @@ function EditorApp() {
                     onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                     onClick={() => {
                       addEntity("torus");
-                      setIsShapeDropdownOpen(false);
+                      sidebarUI.setIsShapeDropdownOpen(false);
                     }}
                   >
                     + Torus
                   </button>
+                  <button
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "var(--text-primary)",
+                      padding: "6px 10px",
+                      borderRadius: "3px",
+                      textAlign: "left",
+                      fontSize: "11px",
+                      cursor: "pointer",
+                      fontFamily: "var(--font)",
+                    }}
+                    type="button"
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                    onClick={() => {
+                      addEntity("directionalLight");
+                      sidebarUI.setIsShapeDropdownOpen(false);
+                    }}
+                  >
+                    + Directional Light
+                  </button>
                 </div>
               )}
             </div>
           </div>
-
-          <ViewportCanvas
-            activeTransformTool={activeTransformTool}
-            transformSpace={transformSpace}
-            projectionMode={projectionMode}
-          />
-
-          {/* Viewport Bottom Overlays */}
-          <div className="viewport-bottom-overlays">
-            <div className="axis-orb-gizmo" title="3D Axis Gizmo">
-              <svg width="32" height="32" viewBox="0 0 32 32">
-                <circle cx="16" cy="16" r="12" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="1.5" />
-                <line x1="16" y1="16" x2="24" y2="16" stroke="#ef4444" strokeWidth="2.2" strokeLinecap="round" />
-                <line x1="16" y1="16" x2="16" y2="8" stroke="#22c55e" strokeWidth="2.2" strokeLinecap="round" />
-                <line x1="16" y1="16" x2="11" y2="21" stroke="#3b82f6" strokeWidth="2.2" strokeLinecap="round" />
-                <circle cx="24" cy="16" r="2" fill="#ef4444" />
-                <circle cx="16" cy="8" r="2" fill="#22c55e" />
-                <circle cx="11" cy="21" r="2" fill="#3b82f6" />
-              </svg>
+        )}
+          
+          {isPreviewMode && previewGlbUrl && (
+            <div style={{ width: "100%", height: "100%", position: "absolute", inset: 0, zIndex: 10, background: "#020617" }}>
+              <model-viewer
+                src={previewGlbUrl}
+                camera-controls
+                auto-rotate
+                style={{ width: "100%", height: "100%" }}
+              />
             </div>
-            <div className="projection-toggle-capsule">
-              <button
-                className={`projection-btn ${projectionMode === "perspective" ? "active" : ""}`}
-                type="button"
-                onClick={() => setProjectionMode("perspective")}
-              >
-                Persp
-              </button>
-              <button
-                className={`projection-btn ${projectionMode === "orthographic" ? "active" : ""}`}
-                type="button"
-                onClick={() => setProjectionMode("orthographic")}
-              >
-                Ortho
-              </button>
-            </div>
-          </div>
+          )}
+
+          <ViewportCanvas />
+
+          {!isPreviewMode && <ViewportOverlays />}
         </div>
 
         {/* Right Inspector Sidebar */}
-        <aside className="right-sidebar panel" aria-label="Properties inspector">
-          {/* TOPBAR */}
-          <div className="topbar">
-              <div className="topbar-left">
-                  <div className="avatar">E</div>
-                  <div className="viewport-pill">
-                      <span>86%</span>
-                      <i className="ti ti-chevron-down"></i>
-                  </div>
-              </div>
-              <div className="topbar-right">
-                  <button className="btn-chip" onClick={() => { setActiveTab("share"); setIsModalOpen(true); }}>Share</button>
-                  <button className="btn-chip primary" onClick={() => { setActiveTab("export"); setIsModalOpen(true); }}>Export</button>
-              </div>
-          </div>
-
-          {/* SCROLLABLE BODY */}
-          <div className="panel-body">
-              
-              {/* ── TRANSFORM (Selected Entity Properties) ── */}
-              {selectedEntity && (
-                <>
-                  <details open className="section">
-                      <summary className="section-header">
-                          <div className="section-title-row">
-                              <i className="ti ti-arrows-maximize" style={{ fontSize: "12px", color: "var(--text-tertiary)" }}></i>
-                              <span className="section-label">Transform</span>
-                          </div>
-                          <div className="section-actions">
-                              <i className="chevron ti ti-chevron-right"></i>
-                          </div>
-                      </summary>
-                      <div className="section-body">
-                          <div className="prop">
-                              <span className="prop-label">Name</span>
-                              <input
-                                  type="text"
-                                  style={{ width: "60%" }}
-                                  value={selectedEntity.name}
-                                  disabled={selectedEntity.locked}
-                                  onChange={(e) => renameEntity(selectedEntity.id, e.target.value)}
-                              />
-                          </div>
-                          {PROPERTY_KEYS.map((property) => (
-                              <div key={property} style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                                  <div className="prop-group-label" style={{ padding: "4px 0 2px" }}>{property}</div>
-                                  <div className="two-col" style={{ display: "flex", gap: "4px" }}>
-                                      {selectedEntity[property].map((value, index) => (
-                                          <div key={index} style={{ display: "flex", alignItems: "center", gap: "3px", background: "var(--bg-input)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: "2px 4px" }}>
-                                              <span style={{ color: "var(--text-tertiary)", fontWeight: "bold", fontSize: "9px" }}>{VECTOR_LABELS[index]}</span>
-                                              <input
-                                                  type="number"
-                                                  step="0.1"
-                                                  disabled={selectedEntity.locked}
-                                                  style={{ background: "transparent", border: "none", color: "var(--text-primary)", width: "100%", padding: 0, fontSize: "10px", textAlign: "right" }}
-                                                  value={value}
-                                                  onChange={(event) =>
-                                                      updateEntityTransform(selectedEntity.id, {
-                                                          [property]: updateVectorAxis(
-                                                              selectedEntity[property],
-                                                              index as TransformAxis,
-                                                              event.target.value,
-                                                          ),
-                                                      })
-                                                  }
-                                              />
-                                          </div>
-                                      ))}
-                                  </div>
-                              </div>
-                          ))}
-                      </div>
-                  </details>
-                  <div className="section-divider"></div>
-                </>
-              )}
-
-              {/* ── FRAME ── */}
-              <details open className="section">
-                  <summary className="section-header">
-                      <div className="section-title-row">
-                          <i className="ti ti-layout" style={{ fontSize: "12px", color: "var(--text-tertiary)" }}></i>
-                          <span className="section-label">Frame</span>
-                      </div>
-                      <div className="section-actions">
-                          <i className="ti ti-maximize" aria-label="Fullscreen"></i>
-                          <i className="chevron ti ti-chevron-right"></i>
-                      </div>
-                  </summary>
-                  <div className="section-body">
-                      <div className="prop">
-                          <span className="prop-label">Viewport</span>
-                          <div className="select-wrap w-60">
-                              <select value={viewport} onChange={(e) => setViewport(e.target.value)}>
-                                  <option>Personal Camera</option>
-                                  <option>Top</option>
-                                  <option>Front</option>
-                                  <option>Right</option>
-                              </select>
-                          </div>
-                      </div>
-                      <div className="prop">
-                          <span className="prop-label">Resolution</span>
-                          <div className="select-wrap w-60">
-                              <select value={resolution} onChange={(e) => setResolution(e.target.value)}>
-                                  <option>Responsive</option>
-                                  <option>1920 × 1080</option>
-                                  <option>1280 × 720</option>
-                                  <option>Square 1:1</option>
-                              </select>
-                          </div>
-                      </div>
-                      <div className="prop">
-                          <span className="prop-label">Auto Zoom</span>
-                          <div className="seg w-40">
-                              <button className={`seg-btn ${autoZoom ? "on" : ""}`} onClick={() => setAutoZoom(true)}>On</button>
-                              <button className={`seg-btn ${!autoZoom ? "on" : ""}`} onClick={() => setAutoZoom(false)}>Off</button>
-                          </div>
-                      </div>
-                      <div className="prop">
-                          <span className="prop-label">HUD Overlay</span>
-                          <div className="select-wrap w-60">
-                              <select value={hudOverlay} onChange={(e) => setHudOverlay(e.target.value)}>
-                                  <option>None</option>
-                                  <option>Stats</option>
-                                  <option>Axes</option>
-                                  <option>Grid</option>
-                              </select>
-                          </div>
-                      </div>
-                  </div>
-              </details>
-
-              <div className="section-divider"></div>
-
-              {/* ── SCENE ── */}
-              <details open className="section">
-                  <summary className="section-header">
-                      <div className="section-title-row">
-                          <i className="ti ti-cube" style={{ fontSize: "12px", color: "var(--text-tertiary)" }}></i>
-                          <span className="section-label">Scene</span>
-                      </div>
-                      <div className="section-actions">
-                          <i className="chevron ti ti-chevron-right"></i>
-                      </div>
-                  </summary>
-                  <div className="section-body">
-                      <div className="prop">
-                          <span className="prop-label">Background</span>
-                          <div className="color-row w-60">
-                              <div className="swatch" style={{ background: "#" + bgColor }} onClick={() => {
-                                  const c = prompt("Enter Hex Color (e.g. 000000):", bgColor);
-                                  if (c !== null) setBgColor(c.replace("#", ""));
-                              }}></div>
-                              <input type="text" className="hex-input" value={bgColor} onChange={(e) => setBgColor(e.target.value)} />
-                              <input type="text" className="hex-input alpha-input" value={bgAlpha} onChange={(e) => setBgAlpha(e.target.value)} />
-                          </div>
-                      </div>
-
-                      <div className="prop">
-                          <span className="prop-label">Environment</span>
-                          <div className="select-wrap w-60">
-                              <select value={environment} onChange={(e) => setEnvironment(e.target.value)}>
-                                  <option>Studio</option>
-                                  <option>Outdoor</option>
-                                  <option>Night</option>
-                                  <option>Custom HDRI</option>
-                              </select>
-                          </div>
-                      </div>
-
-                      <div className="prop">
-                          <span className="prop-label">Fog</span>
-                          <label className="toggle">
-                              <input type="checkbox" checked={fogEnabled} onChange={(e) => setFogEnabled(e.target.checked)} />
-                              <span className="toggle-track"></span>
-                          </label>
-                      </div>
-
-                      {/* LIGHTS nested */}
-                      <details className="nested">
-                          <summary className="nested-header">
-                              <div className="nested-label">
-                                  <i className="ti ti-sun"></i>
-                                  <span>Lights</span>
-                              </div>
-                              <i className="chevron ti ti-chevron-right"></i>
-                          </summary>
-                          <div className="nested-body">
-                              <div className="prop">
-                                  <span className="prop-label">Ambient</span>
-                                  <label className="toggle">
-                                      <input type="checkbox" checked={lightAmbientEnabled} onChange={(e) => setLightAmbientEnabled(e.target.checked)} />
-                                      <span className="toggle-track"></span>
-                                  </label>
-                              </div>
-                              <div className="prop">
-                                  <span className="prop-label">Intensity</span>
-                                  <div className="slider-row w-60">
-                                      <input type="range" min="0" max="2" step="0.05" value={lightIntensity} onChange={(e) => setLightIntensity(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{lightIntensity.toFixed(2)}</span>
-                                  </div>
-                              </div>
-                              <div className="prop">
-                                  <span className="prop-label">Directional</span>
-                                  <label className="toggle">
-                                      <input type="checkbox" checked={lightDirectionalEnabled} onChange={(e) => setLightDirectionalEnabled(e.target.checked)} />
-                                      <span className="toggle-track"></span>
-                                  </label>
-                              </div>
-                              <div className="prop">
-                                  <span className="prop-label">Color</span>
-                                  <div className="color-row">
-                                      <div className="swatch" style={{ background: "#" + lightColor }} onClick={() => {
-                                          const c = prompt("Enter Hex Color:", lightColor);
-                                          if (c !== null) setLightColor(c.replace("#", ""));
-                                      }}></div>
-                                      <input type="text" className="hex-input" value={lightColor} onChange={(e) => setLightColor(e.target.value)} />
-                                  </div>
-                              </div>
-                              <div className="prop">
-                                  <span className="prop-label">Shadow</span>
-                                  <div className="seg w-60">
-                                      <button className={`seg-btn ${lightShadow === "Soft" ? "on" : ""}`} onClick={() => setLightShadow("Soft")}>Soft</button>
-                                      <button className={`seg-btn ${lightShadow === "Hard" ? "on" : ""}`} onClick={() => setLightShadow("Hard")}>Hard</button>
-                                      <button className={`seg-btn ${lightShadow === "Off" ? "on" : ""}`} onClick={() => setLightShadow("Off")}>Off</button>
-                                  </div>
-                              </div>
-                          </div>
-                      </details>
-
-                      {/* SIMULATION nested */}
-                      <details className="nested">
-                          <summary className="nested-header">
-                              <div className="nested-label">
-                                  <i className="ti ti-atom-2"></i>
-                                  <span>Simulation</span>
-                              </div>
-                              <i className="chevron ti ti-chevron-right"></i>
-                          </summary>
-                          <div className="nested-body">
-                              <div className="prop">
-                                  <span className="prop-label">Physics</span>
-                                  <label className="toggle">
-                                      <input type="checkbox" checked={physicsEnabled} onChange={(e) => setPhysicsEnabled(e.target.checked)} />
-                                      <span className="toggle-track"></span>
-                                  </label>
-                              </div>
-                              <div className="prop">
-                                  <span className="prop-label">Gravity Y</span>
-                                  <div className="slider-row w-60">
-                                      <input type="range" min="-20" max="0" step="0.1" value={gravityY} onChange={(e) => setGravityY(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{gravityY.toFixed(1)}</span>
-                                  </div>
-                              </div>
-                              <div className="prop">
-                                  <span className="prop-label">Collision</span>
-                                  <div className="select-wrap w-60">
-                                      <select value={collisionType} onChange={(e) => setCollisionType(e.target.value)}>
-                                          <option>Mesh</option>
-                                          <option>Box</option>
-                                          <option>Sphere</option>
-                                          <option>Capsule</option>
-                                      </select>
-                                  </div>
-                              </div>
-                          </div>
-                      </details>
-
-                  </div>
-              </details>
-
-              <div className="section-divider"></div>
-
-              {/* ── POST PROCESSING ── */}
-              <details open className="section">
-                  <summary className="section-header">
-                      <div className="section-title-row">
-                          <i className="ti ti-sparkles" style={{ fontSize: "12px", color: "var(--text-tertiary)" }}></i>
-                          <span className="section-label">Post Processing</span>
-                      </div>
-                      <div className="section-actions" onClick={(e) => e.stopPropagation()}>
-                          <label className="toggle">
-                              <input type="checkbox" checked={postProcessingEnabled} onChange={(e) => setPostProcessingEnabled(e.target.checked)} />
-                              <span className="toggle-track"></span>
-                          </label>
-                          <i className="chevron ti ti-chevron-right" onClick={(e) => { e.stopPropagation(); const d = e.currentTarget.closest("details"); if (d) d.open = !d.open; }}></i>
-                      </div>
-                  </summary>
-                  <div className="section-body">
-
-                      {/* Tone Mapping */}
-                      <div className="prop">
-                          <span className="prop-label">Tone Map</span>
-                          <div className="select-wrap w-60">
-                              <select value={toneMap} onChange={(e) => setToneMap(e.target.value)}>
-                                  <option>ACES Filmic</option>
-                                  <option>Reinhard</option>
-                                  <option>Cineon</option>
-                                  <option>AgX</option>
-                                  <option>Linear</option>
-                                  <option>None</option>
-                              </select>
-                          </div>
-                      </div>
-                      <div className="prop">
-                          <span className="prop-label">Exposure</span>
-                          <div className="slider-row w-60">
-                              <input type="range" min="-2" max="2" step="0.05" value={exposure} onChange={(e) => setExposure(parseFloat(e.target.value))} />
-                              <span className="slider-val">{exposure.toFixed(2)}</span>
-                          </div>
-                      </div>
-
-                      <div className="section-divider" style={{ margin: "4px 0" }}></div>
-
-                      {/* Effect rows grouped */}
-                      <div className="effect-group">
-
-                          {/* BLOOM */}
-                          <details className="nested" style={{ all: "unset", display: "block" }}>
-                              <summary style={{ all: "unset", display: "block" }}>
-                                  <div className="effect-row" style={{ cursor: "pointer" }}>
-                                      <i className="ti ti-stars effect-icon"></i>
-                                      <span className="effect-name">Bloom</span>
-                                      <div className="effect-controls" onClick={(e) => e.stopPropagation()}>
-                                          <span className="effect-val">{bloomIntensity}%</span>
-                                          <input type="range" style={{ width: "60px" }} min="0" max="100" value={bloomIntensity} onChange={(e) => setBloomIntensity(parseInt(e.target.value))} />
-                                          <label className="toggle">
-                                              <input type="checkbox" checked={bloomEnabled} onChange={(e) => setBloomEnabled(e.target.checked)} />
-                                              <span className="toggle-track"></span>
-                                          </label>
-                                      </div>
-                                  </div>
-                              </summary>
-                              <div className="effect-row sub">
-                                  <span className="prop-label">Threshold</span>
-                                  <div className="slider-row" style={{ flex: 1, marginLeft: "8px" }}>
-                                      <input type="range" min="0" max="1" step="0.05" value={bloomThreshold} onChange={(e) => setBloomThreshold(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{bloomThreshold.toFixed(2)}</span>
-                                  </div>
-                              </div>
-                              <div className="effect-row sub">
-                                  <span className="prop-label">Radius</span>
-                                  <div className="slider-row" style={{ flex: 1, marginLeft: "8px" }}>
-                                      <input type="range" min="0" max="2" step="0.1" value={bloomRadius} onChange={(e) => setBloomRadius(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{bloomRadius.toFixed(1)}</span>
-                                  </div>
-                              </div>
-                          </details>
-
-                          {/* SSAO */}
-                          <div className="effect-row">
-                              <i className="ti ti-shadow effect-icon"></i>
-                              <span className="effect-name">SSAO</span>
-                              <div className="effect-controls">
-                                  <span className="effect-val">{ssaoIntensity}%</span>
-                                  <input type="range" style={{ width: "60px" }} min="0" max="100" value={ssaoIntensity} onChange={(e) => setSsaoIntensity(parseInt(e.target.value))} />
-                                  <label className="toggle">
-                                      <input type="checkbox" checked={ssaoEnabled} onChange={(e) => setSsaoEnabled(e.target.checked)} />
-                                      <span className="toggle-track"></span>
-                                  </label>
-                              </div>
-                          </div>
-
-                          {/* DEPTH OF FIELD */}
-                          <details className="nested" style={{ all: "unset", display: "block" }}>
-                              <summary style={{ all: "unset", display: "block" }}>
-                                  <div className="effect-row" style={{ cursor: "pointer" }}>
-                                      <i className="ti ti-camera effect-icon"></i>
-                                      <span className="effect-name">Depth of Field</span>
-                                      <div className="effect-controls" onClick={(e) => e.stopPropagation()}>
-                                          <label className="toggle">
-                                              <input type="checkbox" checked={dofEnabled} onChange={(e) => setDofEnabled(e.target.checked)} />
-                                              <span className="toggle-track"></span>
-                                          </label>
-                                      </div>
-                                  </div>
-                              </summary>
-                              <div className="effect-row sub">
-                                  <span className="prop-label">Focus dist.</span>
-                                  <div className="slider-row" style={{ flex: 1, marginLeft: "8px" }}>
-                                      <input type="range" min="0.1" max="50" step="0.1" value={dofFocusDist} onChange={(e) => setDofFocusDist(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{dofFocusDist.toFixed(1)}</span>
-                                  </div>
-                              </div>
-                              <div className="effect-row sub">
-                                  <span className="prop-label">Bokeh</span>
-                                  <div className="slider-row" style={{ flex: 1, marginLeft: "8px" }}>
-                                      <input type="range" min="0" max="1" step="0.05" value={dofBokeh} onChange={(e) => setDofBokeh(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{dofBokeh.toFixed(2)}</span>
-                                  </div>
-                              </div>
-                          </details>
-
-                          {/* CHROMATIC ABR */}
-                          <div className="effect-row">
-                              <i className="ti ti-color-filter effect-icon"></i>
-                              <span className="effect-name">Chromatic Aberration</span>
-                              <div className="effect-controls">
-                                  <span className="effect-val">{chromaticAberrationIntensity}%</span>
-                                  <input type="range" style={{ width: "60px" }} min="0" max="100" value={chromaticAberrationIntensity} onChange={(e) => setChromaticAberrationIntensity(parseInt(e.target.value))} />
-                                  <label className="toggle">
-                                      <input type="checkbox" checked={chromaticAberrationEnabled} onChange={(e) => setChromaticAberrationEnabled(e.target.checked)} />
-                                      <span className="toggle-track"></span>
-                                  </label>
-                              </div>
-                          </div>
-
-                          {/* MOTION BLUR */}
-                          <div className="effect-row">
-                              <i className="ti ti-wind effect-icon"></i>
-                              <span className="effect-name">Motion Blur</span>
-                              <div className="effect-controls">
-                                  <span className="effect-val">{motionBlurIntensity}%</span>
-                                  <input type="range" style={{ width: "60px" }} min="0" max="100" value={motionBlurIntensity} onChange={(e) => setMotionBlurIntensity(parseInt(e.target.value))} />
-                                  <label className="toggle">
-                                      <input type="checkbox" checked={motionBlurEnabled} onChange={(e) => setMotionBlurEnabled(e.target.checked)} />
-                                      <span className="toggle-track"></span>
-                                  </label>
-                              </div>
-                          </div>
-
-                          {/* FILM GRAIN */}
-                          <div className="effect-row">
-                              <i className="ti ti-grain effect-icon"></i>
-                              <span className="effect-name">Film Grain</span>
-                              <div className="effect-controls">
-                                  <span className="effect-val">{filmGrainIntensity}%</span>
-                                  <input type="range" style={{ width: "60px" }} min="0" max="100" value={filmGrainIntensity} onChange={(e) => setFilmGrainIntensity(parseInt(e.target.value))} />
-                                  <label className="toggle">
-                                      <input type="checkbox" checked={filmGrainEnabled} onChange={(e) => setFilmGrainEnabled(e.target.checked)} />
-                                      <span className="toggle-track"></span>
-                                  </label>
-                              </div>
-                          </div>
-
-                          {/* VIGNETTE */}
-                          <div className="effect-row">
-                              <i className="ti ti-circle-half-vertical effect-icon"></i>
-                              <span className="effect-name">Vignette</span>
-                              <div className="effect-controls">
-                                  <span className="effect-val">{vignetteIntensity}%</span>
-                                  <input type="range" style={{ width: "60px" }} min="0" max="100" value={vignetteIntensity} onChange={(e) => setVignetteIntensity(parseInt(e.target.value))} />
-                                  <label className="toggle">
-                                      <input type="checkbox" checked={vignetteEnabled} onChange={(e) => setVignetteEnabled(e.target.checked)} />
-                                      <span className="toggle-track"></span>
-                                  </label>
-                              </div>
-                          </div>
-
-                          {/* OUTLINE */}
-                          <div className="effect-row">
-                              <i className="ti ti-vector-triangle effect-icon"></i>
-                              <span className="effect-name">Outline</span>
-                              <div className="effect-controls">
-                                  <div className="swatch" style={{ background: "#" + outlineColor, width: "14px", height: "14px", borderRadius: "3px" }} onClick={() => {
-                                      const c = prompt("Enter Outline Hex Color:", outlineColor);
-                                      if (c !== null) setOutlineColor(c.replace("#", ""));
-                                  }}></div>
-                                  <label className="toggle">
-                                      <input type="checkbox" checked={outlineEnabled} onChange={(e) => setOutlineEnabled(e.target.checked)} />
-                                      <span className="toggle-track"></span>
-                                  </label>
-                              </div>
-                          </div>
-
-                          {/* COLOR GRADING */}
-                          <details className="nested" style={{ all: "unset", display: "block" }}>
-                              <summary style={{ all: "unset", display: "block" }}>
-                                  <div className="effect-row" style={{ cursor: "pointer", borderBottom: "none" }}>
-                                      <i className="ti ti-adjustments-horizontal effect-icon"></i>
-                                      <span className="effect-name">Color Grading</span>
-                                      <div className="effect-controls" onClick={(e) => e.stopPropagation()}>
-                                          <label className="toggle">
-                                              <input type="checkbox" checked={colorGradingEnabled} onChange={(e) => setColorGradingEnabled(e.target.checked)} />
-                                              <span className="toggle-track"></span>
-                                          </label>
-                                      </div>
-                                  </div>
-                              </summary>
-                              <div className="effect-row sub">
-                                  <span className="prop-label">Brightness</span>
-                                  <div className="slider-row" style={{ flex: 1, marginLeft: "8px" }}>
-                                      <input type="range" min="-1" max="1" step="0.05" value={colorGradingBrightness} onChange={(e) => setColorGradingBrightness(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{colorGradingBrightness.toFixed(2)}</span>
-                                  </div>
-                              </div>
-                              <div className="effect-row sub">
-                                  <span className="prop-label">Contrast</span>
-                                  <div className="slider-row" style={{ flex: 1, marginLeft: "8px" }}>
-                                      <input type="range" min="-1" max="1" step="0.05" value={colorGradingContrast} onChange={(e) => setColorGradingContrast(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{colorGradingContrast.toFixed(2)}</span>
-                                  </div>
-                              </div>
-                              <div className="effect-row sub" style={{ borderBottom: "none" }}>
-                                  <span className="prop-label">Saturation</span>
-                                  <div className="slider-row" style={{ flex: 1, marginLeft: "8px" }}>
-                                      <input type="range" min="-1" max="1" step="0.05" value={colorGradingSaturation} onChange={(e) => setColorGradingSaturation(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{colorGradingSaturation.toFixed(2)}</span>
-                                  </div>
-                              </div>
-                          </details>
-
-                      </div>{/* /effect-group */}
-                  </div>
-              </details>
-
-              <div className="section-divider"></div>
-
-              {/* ── GLOBAL SETTINGS ── */}
-              <details className="section">
-                  <summary className="section-header">
-                      <div className="section-title-row">
-                          <i className="ti ti-settings" style={{ fontSize: "12px", color: "var(--text-tertiary)" }}></i>
-                          <span className="section-label">Global Settings</span>
-                      </div>
-                      <div className="section-actions">
-                          <i className="chevron ti ti-chevron-right"></i>
-                      </div>
-                  </summary>
-                  <div className="section-body">
-                      <div className="prop">
-                          <span className="prop-label">Grid Plane</span>
-                          <div className="select-wrap w-60 font-inherit">
-                              <select value={gridPlane} onChange={(e) => setGridPlane(e.target.value)}>
-                                  <option>Floor (XZ)</option>
-                                  <option>Wall (XY)</option>
-                                  <option>Side (YZ)</option>
-                                  <option>None</option>
-                              </select>
-                          </div>
-                      </div>
-                      <div className="prop">
-                          <span className="prop-label">Snapping</span>
-                          <div className="seg" style={{ width: "60%" }}>
-                              <button className={`seg-btn ${snapping === "Object" ? "on" : ""}`} onClick={() => setSnapping("Object")}>Object</button>
-                              <button className={`seg-btn ${snapping === "Grid" ? "on" : ""}`} onClick={() => setSnapping("Grid")}>Grid</button>
-                              <button className={`seg-btn ${snapping === "Off" ? "on" : ""}`} onClick={() => setSnapping("Off")}>Off</button>
-                          </div>
-                      </div>
-                      <div className="prop">
-                          <span className="prop-label">Snap Size</span>
-                          <div className="slider-row w-60">
-                              <input type="range" min="0.1" max="5" step="0.1" value={snapSize} onChange={(e) => setSnapSize(parseFloat(e.target.value))} />
-                              <span className="slider-val">{snapSize.toFixed(1)}</span>
-                          </div>
-                      </div>
-                      <div className="prop">
-                          <span className="prop-label">Wireframe</span>
-                          <label className="toggle">
-                              <input type="checkbox" checked={wireframeEnabled} onChange={(e) => setWireframeEnabled(e.target.checked)} />
-                              <span className="toggle-track"></span>
-                          </label>
-                      </div>
-                      <div className="prop">
-                          <span className="prop-label">Renderer</span>
-                          <div className="select-wrap w-60">
-                              <select value={renderer} onChange={(e) => setRenderer(e.target.value)}>
-                                  <option>WebGL 2</option>
-                                  <option>WebGPU</option>
-                              </select>
-                          </div>
-                      </div>
-                  </div>
-              </details>
-
-              <div className="section-divider"></div>
-
-              {/* ── MATERIAL BUILDER ── */}
-              <details open className="section">
-                  <summary className="section-header">
-                      <div className="section-title-row">
-                          <i className="ti ti-sphere" style={{ fontSize: "12px", color: "var(--text-tertiary)" }}></i>
-                          <span className="section-label">Material</span>
-                      </div>
-                      <div className="section-actions">
-                          <i className="ti ti-plus" aria-label="New material" onClick={() => { setMaterialName("New Material"); setMaterialBaseColor("888888"); }}></i>
-                          <i className="chevron ti ti-chevron-right"></i>
-                      </div>
-                  </summary>
-                  <div className="section-body">
-
-                      {/* Preview + Name */}
-                      <div className="mat-preview-row">
-                          <div className="mat-sphere" id="mat-sphere" style={{
-                              background: `radial-gradient(circle at 38% 35%, #${selectedEntity ? selectedEntity.color.replace("#", "") : materialBaseColor}, #111)`
-                          }}></div>
-                          <div className="mat-name-col">
-                              <input
-                                  type="text"
-                                  className="mat-name-input"
-                                  value={selectedEntity ? selectedEntity.name : materialName}
-                                  onChange={(e) => {
-                                      if (selectedEntity) {
-                                          renameEntity(selectedEntity.id, e.target.value);
-                                      } else {
-                                          setMaterialName(e.target.value);
-                                      }
-                                  }}
-                              />
-                              <div className="mat-type-tag">MeshStandardMaterial</div>
-                          </div>
-                      </div>
-
-                      {/* Material Type */}
-                      <div className="prop">
-                          <span className="prop-label">Type</span>
-                          <div className="select-wrap w-60">
-                              <select value={materialType} onChange={(e) => setMaterialType(e.target.value)}>
-                                  <option>Standard (PBR)</option>
-                                  <option>Physical</option>
-                                  <option>Toon</option>
-                                  <option>Lambert</option>
-                                  <option>Phong</option>
-                                  <option>Normal</option>
-                                  <option>Depth</option>
-                                  <option>Custom Shader</option>
-                              </select>
-                          </div>
-                      </div>
-
-                      {/* ── PBR SURFACE ── */}
-                      <div className="prop-group-label">Surface</div>
-
-                      <div className="prop">
-                          <span className="prop-label">Base Color</span>
-                          <div className="color-row">
-                              <div className="swatch" id="base-swatch" style={{
-                                  background: selectedEntity ? selectedEntity.color : "#" + materialBaseColor
-                              }} onClick={() => {
-                                  const defaultC = selectedEntity ? selectedEntity.color : "#" + materialBaseColor;
-                                  const c = prompt("Enter Base Color Hex:", defaultC);
-                                  if (c !== null) {
-                                      const cleanHex = c.startsWith("#") ? c : "#" + c;
-                                      if (selectedEntity) {
-                                          updateEntityTransform(selectedEntity.id, { color: cleanHex });
-                                      } else {
-                                          setMaterialBaseColor(cleanHex.replace("#", ""));
-                                      }
-                                  }
-                              }}></div>
-                              <input
-                                  type="text"
-                                  className="hex-input"
-                                  value={selectedEntity ? selectedEntity.color.replace("#", "") : materialBaseColor}
-                                  onChange={(e) => {
-                                      const nextColor = e.target.value;
-                                      if (selectedEntity) {
-                                          updateEntityTransform(selectedEntity.id, { color: "#" + nextColor });
-                                      } else {
-                                          setMaterialBaseColor(nextColor);
-                                      }
-                                  }}
-                              />
-                          </div>
-                      </div>
-
-                      <div className="prop">
-                          <span className="prop-label">Metalness</span>
-                          <div className="slider-row w-60">
-                              <input type="range" min="0" max="1" step="0.01" value={materialMetalness} onChange={(e) => setMaterialMetalness(parseFloat(e.target.value))} />
-                              <span className="slider-val">{materialMetalness.toFixed(2)}</span>
-                          </div>
-                      </div>
-
-                      <div className="prop">
-                          <span className="prop-label">Roughness</span>
-                          <div className="slider-row w-60">
-                              <input type="range" min="0" max="1" step="0.01" value={materialRoughness} onChange={(e) => setMaterialRoughness(parseFloat(e.target.value))} />
-                              <span className="slider-val">{materialRoughness.toFixed(2)}</span>
-                          </div>
-                      </div>
-
-                      <div className="prop">
-                          <span className="prop-label">Opacity</span>
-                          <div className="slider-row w-60">
-                              <input type="range" min="0" max="1" step="0.01" value={materialOpacity} onChange={(e) => setMaterialOpacity(parseFloat(e.target.value))} />
-                              <span className="slider-val">{materialOpacity.toFixed(2)}</span>
-                          </div>
-                      </div>
-
-                      <div className="prop">
-                          <span className="prop-label">Side</span>
-                          <div className="seg" style={{ width: "60%" }}>
-                              <button className={`seg-btn ${materialSide === "Front" ? "on" : ""}`} onClick={() => setMaterialSide("Front")}>Front</button>
-                              <button className={`seg-btn ${materialSide === "Back" ? "on" : ""}`} onClick={() => setMaterialSide("Back")}>Back</button>
-                              <button className={`seg-btn ${materialSide === "Both" ? "on" : ""}`} onClick={() => setMaterialSide("Both")}>Both</button>
-                          </div>
-                      </div>
-
-                      {/* ── EMISSION ── */}
-                      <div className="prop-group-label">Emission</div>
-                      <div className="prop">
-                          <span className="prop-label">Emissive</span>
-                          <div className="color-row">
-                              <div className="swatch" style={{ background: "#" + materialEmissiveColor }} onClick={() => {
-                                  const c = prompt("Enter Emissive Hex Color:", materialEmissiveColor);
-                                  if (c !== null) setMaterialEmissiveColor(c.replace("#", ""));
-                              }}></div>
-                              <input type="text" className="hex-input" value={materialEmissiveColor} onChange={(e) => setMaterialEmissiveColor(e.target.value)} />
-                          </div>
-                      </div>
-                      <div className="prop">
-                          <span className="prop-label">Intensity</span>
-                          <div className="slider-row w-60">
-                              <input type="range" min="0" max="10" step="0.1" value={materialEmissiveIntensity} onChange={(e) => setMaterialEmissiveIntensity(parseFloat(e.target.value))} />
-                              <span className="slider-val">{materialEmissiveIntensity.toFixed(1)}</span>
-                          </div>
-                      </div>
-
-                      {/* ── ADVANCED (Physical only) ── */}
-                      {materialType === "Physical" && (
-                          <>
-                              <div className="prop-group-label">Advanced</div>
-                              <div className="prop">
-                                  <span className="prop-label">Clearcoat</span>
-                                  <div className="slider-row w-60">
-                                      <input type="range" min="0" max="1" step="0.01" value={materialClearcoat} onChange={(e) => setMaterialClearcoat(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{materialClearcoat.toFixed(2)}</span>
-                                  </div>
-                              </div>
-                              <div className="prop">
-                                  <span className="prop-label">Transmission</span>
-                                  <div className="slider-row w-60">
-                                      <input type="range" min="0" max="1" step="0.01" value={materialTransmission} onChange={(e) => setMaterialTransmission(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{materialTransmission.toFixed(2)}</span>
-                                  </div>
-                              </div>
-                              <div className="prop">
-                                  <span className="prop-label">IOR</span>
-                                  <div className="slider-row w-60">
-                                      <input type="range" min="1" max="2.5" step="0.01" value={materialIor} onChange={(e) => setMaterialIor(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{materialIor.toFixed(2)}</span>
-                                  </div>
-                              </div>
-                              <div className="prop">
-                                  <span className="prop-label">Iridescence</span>
-                                  <div className="slider-row w-60">
-                                      <input type="range" min="0" max="1" step="0.01" value={materialIridescence} onChange={(e) => setMaterialIridescence(parseFloat(e.target.value))} />
-                                      <span className="slider-val">{materialIridescence.toFixed(2)}</span>
-                                  </div>
-                              </div>
-                          </>
-                      )}
-
-                      {/* ── MAPS slots ── */}
-                      <div className="prop-group-label">Maps</div>
-
-                      <div className="map-row">
-                          <div className="map-thumb"><i className="ti ti-photo"></i></div>
-                          <span className="map-name">Map</span>
-                          <i className="map-action ti ti-arrow-bar-to-down"></i>
-                      </div>
-
-                      <div className="map-row">
-                          <div className="map-thumb"><i className="ti ti-photo"></i></div>
-                          <span className="map-name">Normal Map</span>
-                          <i className="map-action ti ti-arrow-bar-to-down"></i>
-                      </div>
-
-                      <div className="map-row">
-                          <div className="map-thumb"><i className="ti ti-photo"></i></div>
-                          <span className="map-name">Roughness Map</span>
-                          <i className="map-action ti ti-arrow-bar-to-down"></i>
-                      </div>
-
-                      <div className="map-row">
-                          <div className="map-thumb"><i className="ti ti-photo"></i></div>
-                          <span className="map-name">Metalness Map</span>
-                          <i className="map-action ti ti-arrow-bar-to-down"></i>
-                      </div>
-
-                      {/* ── ASSET LIBRARY ── */}
-                      <div className="prop-group-label" style={{ padding: "12px 0 6px" }}>Asset Library</div>
-
-                      <div className="lib-tabs">
-                          <button className={`lib-tab ${materialLibraryTab === "materials" ? "on" : ""}`} onClick={() => setMaterialLibraryTab("materials")}>
-                              <i className="ti ti-sphere"></i>
-                              <span>Mats</span>
-                          </button>
-                          <button className={`lib-tab ${materialLibraryTab === "textures" ? "on" : ""}`} onClick={() => setMaterialLibraryTab("textures")}>
-                              <i className="ti ti-photo"></i>
-                              <span>Texs</span>
-                          </button>
-                          <button className={`lib-tab ${materialLibraryTab === "shaders" ? "on" : ""}`} onClick={() => setMaterialLibraryTab("shaders")}>
-                              <i className="ti ti-terminal-2"></i>
-                              <span>Shad</span>
-                          </button>
-                      </div>
-
-                      {materialLibraryTab === "materials" && (
-                          <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "6px" }}>
-                              <div className={`asset-card ${activeMaterialCard === "metal" ? "active" : ""}`} onClick={() => {
-                                  setActiveMaterialCard("metal");
-                                  setMaterialName("Chrome Steel");
-                                  setMaterialType("Physical");
-                                  setMaterialBaseColor("D0D0D0");
-                                  setMaterialMetalness(1.0);
-                                  setMaterialRoughness(0.05);
-                                  setMaterialClearcoat(0.8);
-                              }}>
-                                  <div className="mat-ball metal"></div>
-                                  <div className="card-info">
-                                      <div className="card-name">Chrome Steel</div>
-                                      <div className="card-meta">Physical PBR • 1.2 MB</div>
-                                  </div>
-                                  <div className="card-actions">
-                                      <i className="ti ti-heart"></i>
-                                      <i className="ti ti-dots-vertical"></i>
-                                  </div>
-                              </div>
-
-                              <div className={`asset-card ${activeMaterialCard === "glass" ? "active" : ""}`} onClick={() => {
-                                  setActiveMaterialCard("glass");
-                                  setMaterialName("Frosted Glass");
-                                  setMaterialType("Physical");
-                                  setMaterialBaseColor("B4DCFF");
-                                  setMaterialMetalness(0.0);
-                                  setMaterialRoughness(0.15);
-                                  setMaterialTransmission(0.9);
-                                  setMaterialIor(1.52);
-                              }}>
-                                  <div className="mat-ball glass"></div>
-                                  <div className="card-info">
-                                      <div className="card-name">Frosted Glass</div>
-                                      <div className="card-meta">Physical PBR • 400 KB</div>
-                                  </div>
-                                  <div className="card-actions">
-                                      <i className="ti ti-heart"></i>
-                                      <i className="ti ti-dots-vertical"></i>
-                                  </div>
-                              </div>
-
-                              <div className={`asset-card ${activeMaterialCard === "emissive" ? "active" : ""}`} onClick={() => {
-                                  setActiveMaterialCard("emissive");
-                                  setMaterialName("Neon Glow");
-                                  setMaterialType("Standard (PBR)");
-                                  setMaterialBaseColor("4C1D95");
-                                  setMaterialEmissiveColor("A78BFA");
-                                  setMaterialEmissiveIntensity(5.0);
-                              }}>
-                                  <div className="mat-ball emissive"></div>
-                                  <div className="card-info">
-                                      <div className="card-name">Neon Glow</div>
-                                      <div className="card-meta">Standard PBR • 120 KB</div>
-                                  </div>
-                                  <div className="card-actions">
-                                      <i className="ti ti-heart"></i>
-                                      <i className="ti ti-dots-vertical"></i>
-                                  </div>
-                              </div>
-
-                              <div className={`asset-card ${activeMaterialCard === "rough" ? "active" : ""}`} onClick={() => {
-                                  setActiveMaterialCard("rough");
-                                  setMaterialName("Terracotta Clay");
-                                  setMaterialType("Standard (PBR)");
-                                  setMaterialBaseColor("C2956A");
-                                  setMaterialMetalness(0.0);
-                                  setMaterialRoughness(0.9);
-                              }}>
-                                  <div className="mat-ball rough"></div>
-                                  <div className="card-info">
-                                      <div className="card-name">Terracotta Clay</div>
-                                      <div className="card-meta">Standard PBR • 3.4 MB</div>
-                                  </div>
-                                  <div className="card-actions">
-                                      <i className="ti ti-heart"></i>
-                                      <i className="ti ti-dots-vertical"></i>
-                                  </div>
-                              </div>
-                          </div>
-                      )}
-
-                      {materialLibraryTab === "textures" && (
-                          <div className="editor-meta" style={{ padding: "0.5rem", fontSize: "10.5px" }}>
-                              Texture assets list is empty.
-                          </div>
-                      )}
-
-                      {materialLibraryTab === "shaders" && (
-                          <div className="editor-meta" style={{ padding: "0.5rem", fontSize: "10.5px" }}>
-                              Custom shader templates list is empty.
-                          </div>
-                      )}
-
-                      <div className="section-footer">
-                          <button className="footer-btn" onClick={() => alert("Material configuration saved locally!")}>
-                              <i className="ti ti-device-floppy"></i>
-                              <span>Save Mat</span>
-                          </button>
-                          <button className="footer-btn" onClick={() => {
-                              setMaterialName("New Material");
-                              setMaterialType("Standard (PBR)");
-                              setMaterialBaseColor("888888");
-                              setMaterialMetalness(0.00);
-                              setMaterialRoughness(0.50);
-                              setMaterialOpacity(1.00);
-                              setMaterialSide("Front");
-                              setMaterialEmissiveColor("000000");
-                              setMaterialEmissiveIntensity(0.0);
-                              setActiveMaterialCard("");
-                          }}>
-                              <i className="ti ti-rotate"></i>
-                              <span>Reset</span>
-                          </button>
-                      </div>
-
-                  </div>
-              </details>
-
-          </div>
-        </aside>
+        <RightSidebar
+          setIsModalOpen={sidebarUI.setIsModalOpen}
+          setActiveTab={sidebarUI.setActiveTab}
+        />
       </div>
 
-      {isModalOpen ? (
-        <div className="editor-modal-backdrop" role="presentation" onClick={() => setIsModalOpen(false)}>
-          <section
-            className="editor-modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="modal-dialog-title"
-            onClick={(event) => event.stopPropagation()}
-          >
-            <div className="modal-tabs">
-              <button
-                className={`modal-tab-btn ${activeTab === "export" ? "active" : ""}`}
-                type="button"
-                onClick={() => setActiveTab("export")}
-              >
-                Export Asset
-              </button>
-              <button
-                className={`modal-tab-btn ${activeTab === "share" ? "active" : ""}`}
-                type="button"
-                onClick={() => setActiveTab("share")}
-              >
-                Share Scene
-              </button>
-            </div>
-
-            {activeTab === "export" ? (
-              <div className="modal-tab-content">
-                <h2 className="editor-modal-title" id="modal-dialog-title">
-                  Export Scene Options
-                </h2>
-                <p className="editor-modal-copy">
-                  Download the current scene locally as a standard 3D asset or save its configuration data.
-                </p>
-                <div className="modal-export-actions">
-                  <button
-                    className="editor-action editor-action--primary"
-                    type="button"
-                    onClick={handleExportAsset}
-                    disabled={isExporting}
-                  >
-                    {isExporting ? "Exporting GLB..." : "Download 3D Asset (.glb)"}
-                  </button>
-                  <button
-                    className="editor-action"
-                    type="button"
-                    onClick={handleExportJson}
-                  >
-                    Download Scene Config (.json)
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="modal-tab-content">
-                <h2 className="editor-modal-title" id="modal-dialog-title">
-                  Publish to the Cloud
-                </h2>
-                <p className="editor-modal-copy">
-                  Upload your scene to generate a shareable, interactive public view page.
-                </p>
-                <div className="modal-share-actions">
-                  <button
-                    className="editor-action editor-action--publish"
-                    type="button"
-                    onClick={handlePublishLink}
-                    disabled={isPublishing}
-                  >
-                    {isPublishing ? "Publishing..." : currentPublishId ? "Update Published Scene" : "Publish Scene to Cloud"}
-                  </button>
-
-                  {shareUrl ? (
-                    <div className="share-url-container">
-                      <input
-                        className="share-url-input"
-                        type="text"
-                        readOnly
-                        value={shareUrl}
-                      />
-                      <button
-                        className="editor-action copy-btn"
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(shareUrl)
-                            .then(() => {
-                              setIsCopied(true);
-                              setTimeout(() => setIsCopied(false), 2000);
-                            })
-                            .catch((err) => {
-                              console.error("Failed to copy", err);
-                            });
-                        }}
-                      >
-                        {isCopied ? "Copied!" : "Copy Link"}
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            )}
-
-            <div className="editor-modal-actions">
-              <button
-                className="editor-action"
-                type="button"
-                onClick={() => setIsModalOpen(false)}
-              >
-                Close
-              </button>
-            </div>
-          </section>
-        </div>
-      ) : null}
+      <ExportModal
+        isModalOpen={sidebarUI.isModalOpen}
+        setIsModalOpen={sidebarUI.setIsModalOpen}
+        activeTab={sidebarUI.activeTab}
+        setActiveTab={sidebarUI.setActiveTab}
+        isExporting={sidebarUI.isExporting}
+        isPublishing={sidebarUI.isPublishing}
+        shareUrl={sidebarUI.shareUrl}
+        isCopied={sidebarUI.isCopied}
+        setIsCopied={sidebarUI.setIsCopied}
+        handleExportAsset={handleExportAsset}
+        handleExportJson={handleExportJson}
+        handlePublishLink={handlePublishLink}
+      />
     </>
   );
 }
