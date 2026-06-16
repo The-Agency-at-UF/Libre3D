@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { useEditorStore } from "../../store/useEditorStore";
 import { PanelSection } from "../ui/PanelSection";
 
@@ -5,8 +6,38 @@ export function ScenePanel() {
   const sceneSettings = useEditorStore((state) => state.sceneSettings);
   const updateSceneSettings = useEditorStore((state) => state.updateSceneSettings);
 
+  const [localColor, setLocalColor] = useState(sceneSettings.bgColor);
+
+  useEffect(() => {
+    setLocalColor(sceneSettings.bgColor);
+  }, [sceneSettings.bgColor]);
+
   const handleColorChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     updateSceneSettings({ bgColor: e.target.value });
+  };
+
+  const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let val = e.target.value;
+    val = val.replace(/^#+/, "");
+    if (val.length > 0) {
+      val = "#" + val;
+    } else {
+      val = "#";
+    }
+
+    setLocalColor(val);
+
+    const hexRegex = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+    if (hexRegex.test(val)) {
+      updateSceneSettings({ bgColor: val });
+    }
+  };
+
+  const handleBlur = () => {
+    const hexRegex = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+    if (!hexRegex.test(localColor)) {
+      setLocalColor(sceneSettings.bgColor);
+    }
   };
 
   return (
@@ -47,8 +78,10 @@ export function ScenePanel() {
             <input
               type="text"
               className="hex-input"
-              value={sceneSettings.bgColor}
-              onChange={(e) => updateSceneSettings({ bgColor: e.target.value })}
+              value={localColor}
+              onChange={handleTextChange}
+              onBlur={handleBlur}
+              onClick={(e) => e.currentTarget.select()}
               style={{ width: "70px", flex: "none" }}
             />
           </div>
@@ -57,4 +90,5 @@ export function ScenePanel() {
     </PanelSection>
   );
 }
+
 

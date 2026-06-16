@@ -723,6 +723,14 @@ export function ViewportCanvas() {
       stats.update();
 
       const currentActiveCameraId = useEditorStore.getState().activeCameraId;
+      const selectedEntityId = useEditorStore.getState().selectedEntityId;
+      if (selectedEntityId === currentActiveCameraId && currentActiveCameraId !== "default") {
+        if (transformControls.object) {
+          transformControls.detach();
+        }
+      } else if (selectedEntityId && transformControls.object === null) {
+        applySelectionState(selectedEntityId);
+      }
       const currentProjectionMode = useEditorStore.getState().projectionMode;
       let renderCamera: THREE.Camera = activeCamera;
 
@@ -747,8 +755,11 @@ export function ViewportCanvas() {
         }
       }
 
-      meshMap.forEach((obj) => {
+      meshMap.forEach((obj, id) => {
         if (obj.userData.helper) {
+          const entity = useEditorStore.getState().entities.find((e) => e.id === id);
+          const isCurrentCamera = (id === currentActiveCameraId);
+          obj.userData.helper.visible = entity ? (entity.visible && !isCurrentCamera) : !isCurrentCamera;
           obj.userData.helper.update();
         }
       });
