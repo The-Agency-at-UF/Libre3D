@@ -1,0 +1,28 @@
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top left, rgba(79, 140, 255, 0.14), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(61, 255, 160, 0.08), transparent 24%),
+    #020617;
+}
+
+button {
+  font: inherit;
+}
+
+
+
+:root.light-theme body {
+  background:
+    radial-gradient(circle at top left, rgba(0, 122, 255, 0.06), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(52, 199, 89, 0.03), transparent 24%),
+    #f5f5f7;
+}

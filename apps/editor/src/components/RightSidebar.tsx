@@ -4,6 +4,7 @@ import { PanelSection } from "./ui/PanelSection";
 import { InspectorTopbar } from "./inspector/InspectorTopbar";
 import { TransformPanel } from "./inspector/TransformPanel";
 import { ScenePanel } from "./inspector/ScenePanel";
+import { CameraPanel } from "./inspector/CameraPanel";
 
 export interface RightSidebarProps {
   setIsModalOpen: (open: boolean) => void;
@@ -18,6 +19,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
   const entities = useEditorStore((state) => state.entities) ?? [];
   const addEntity = useEditorStore((state) => state.addEntity);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
+  const personalCameraProperties = useEditorStore((state) => state.personalCameraProperties);
 
   const cameraEntities = entities.filter((e) => e.type === "camera");
   const selectedEntity = entities.find((e) => e.id === selectedEntityId);
@@ -55,8 +57,28 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
 
         <ScenePanel />
 
-        {selectedEntity && (
-          <TransformPanel selectedEntity={selectedEntity} />
+        {selectedEntity ? (
+          <>
+            <TransformPanel selectedEntity={selectedEntity} />
+            {selectedEntity.type === "camera" && (
+              <CameraPanel selectedEntity={selectedEntity} />
+            )}
+          </>
+        ) : (
+          <CameraPanel
+            selectedEntity={{
+              id: "default",
+              type: "camera",
+              name: "Personal Camera",
+              position: [0, 0, 0],
+              rotation: [0, 0, 0],
+              scale: [1, 1, 1],
+              color: "#ffffff",
+              visible: true,
+              locked: false,
+              cameraProperties: personalCameraProperties,
+            }}
+          />
         )}
       </div>
     </aside>

@@ -13,9 +13,17 @@ export interface Entity {
   color: string;
   visible: boolean;
   locked: boolean;
+  cameraProperties?: {
+    fov: number;
+    near: number;
+    far: number;
+    zoom: number;
+  };
 }
 
-type EntityTransformUpdates = Partial<Pick<Entity, "position" | "rotation" | "scale" | "color">>;
+type EntityTransformUpdates = Partial<Pick<Entity, "position" | "rotation" | "scale" | "color">> & {
+  cameraProperties?: Partial<Required<Entity>["cameraProperties"]>;
+};
 
 export type DeepPartial<T> = T extends object ? {
   [P in keyof T]?: DeepPartial<T[P]>;
@@ -188,6 +196,12 @@ export interface EditorState {
   activeTransformTool: "translate" | "rotate" | "scale";
   projectionMode: "perspective" | "orthographic";
   transformSpace: "world" | "local";
+  personalCameraProperties: {
+    fov: number;
+    near: number;
+    far: number;
+    zoom: number;
+  };
 
   sceneSettings: SceneSettingsConfig;
   postProcessing: PostProcessingConfig;
@@ -266,7 +280,8 @@ export interface EditorState {
 
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityId" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "selectEntity" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "setBgColor" | "setGridPlane" | "setWireframe" | "setLightIntensity" | "setLightColor" | "setFogEnabled" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveCameraId" | "setPreviewMode">>) => void;
+  updatePersonalCameraProperties: (updates: Partial<{ fov: number; near: number; far: number; zoom: number }>) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityId" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "selectEntity" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "setBgColor" | "setGridPlane" | "setWireframe" | "setLightIntensity" | "setLightColor" | "setFogEnabled" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveCameraId" | "setPreviewMode" | "updatePersonalCameraProperties">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, Pick<Entity, "name" | "color">> = {
@@ -307,12 +322,20 @@ const createEntity = (type: EntityType): Entity => ({
   id: createEntityId(),
   type,
   name: ENTITY_DEFAULTS[type].name,
-  position: (type === "directionalLight" ? [5, 8, 4] : (type === "camera" ? [0, 2, 5] : [...ZERO_VECTOR])) as [number, number, number],
-  rotation: [...ZERO_VECTOR] as [number, number, number],
+  position: (type === "directionalLight" ? [5, 8, 4] : (type === "camera" ? [5, 5, 5] : [...ZERO_VECTOR])) as [number, number, number],
+  rotation: (type === "camera" ? [-Math.PI / 6, Math.PI / 4, 0] : [...ZERO_VECTOR]) as [number, number, number],
   scale: [...UNIT_VECTOR] as [number, number, number],
   color: ENTITY_DEFAULTS[type].color,
   visible: true,
   locked: false,
+  ...(type === "camera" ? {
+    cameraProperties: {
+      fov: 45,
+      near: 0.5,
+      far: 1000,
+      zoom: 1,
+    }
+  } : {}),
 });
 
 const initialEntities: Entity[] = [
@@ -397,18 +420,24 @@ export const useEditorStore = create<EditorState>()(
             entities: state.entities.map((entity) =>
               entity.id === id
                 ? {
-                    ...entity,
-                    ...(updates.position
-                      ? { position: cloneVector(updates.position) }
-                      : null),
-                    ...(updates.rotation
-                      ? { rotation: cloneVector(updates.rotation) }
-                      : null),
-                    ...(updates.scale
-                      ? { scale: cloneVector(updates.scale) }
-                      : null),
-                    ...(updates.color ? { color: updates.color } : null),
-                  }
+                  ...entity,
+                  ...(updates.position
+                    ? { position: cloneVector(updates.position) }
+                    : null),
+                  ...(updates.rotation
+                    ? { rotation: cloneVector(updates.rotation) }
+                    : null),
+                  ...(updates.scale
+                    ? { scale: cloneVector(updates.scale) }
+                    : null),
+                  ...(updates.color ? { color: updates.color } : null),
+                  cameraProperties: updates.cameraProperties
+                    ? {
+                      ...entity.cameraProperties,
+                      ...updates.cameraProperties,
+                    } as any
+                    : entity.cameraProperties,
+                }
                 : entity,
             ),
           })),
@@ -457,6 +486,12 @@ export const useEditorStore = create<EditorState>()(
         activeTransformTool: "translate",
         projectionMode: "perspective",
         transformSpace: "world",
+        personalCameraProperties: {
+          fov: 45,
+          near: 0.1,
+          far: 100,
+          zoom: 1,
+        },
 
         sceneSettings: initialSceneDefaults,
         postProcessing: initialPostProcessingDefaults,
@@ -540,6 +575,13 @@ export const useEditorStore = create<EditorState>()(
         updateSceneSettings: (updates) =>
           set((state) => ({
             sceneSettings: deepMerge(state.sceneSettings, updates),
+          })),
+        updatePersonalCameraProperties: (updates) =>
+          set((state) => ({
+            personalCameraProperties: {
+              ...state.personalCameraProperties,
+              ...updates,
+            },
           })),
         setEditorState: (updates) => set((state) => ({ ...state, ...updates })),
       }),
@@ -680,6 +722,7 @@ export const useEditorStore = create<EditorState>()(
           activeTransformTool: state.activeTransformTool,
           projectionMode: state.projectionMode,
           transformSpace: state.transformSpace,
+          personalCameraProperties: state.personalCameraProperties,
 
           sceneSettings: state.sceneSettings,
           postProcessing: state.postProcessing,

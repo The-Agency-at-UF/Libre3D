@@ -1,0 +1,82 @@
+:root {
+  color-scheme: dark;
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
+  background: #020617;
+}
+
+
+:root {
+  --bg-main: #1e1e24;
+  --bg-panel: rgba(30, 30, 35, 0.72);
+  --bg-surface: rgba(45, 45, 50, 0.6);
+  --bg-input: rgba(120, 120, 128, 0.22);
+  --bg-hover: rgba(255, 255, 255, 0.08);
+  --accent: #0A84FF;
+  /* Apple Blue */
+  --accent-dim: rgba(10, 132, 255, 0.16);
+  --accent-glow: rgba(10, 132, 255, 0.08);
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.65);
+  --text-tertiary: rgba(255, 255, 255, 0.35);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --green: #30D158;
+  /* Apple Green */
+  --green-dim: rgba(48, 209, 88, 0.15);
+  --amber: #FF9F0A;
+  /* Apple Orange */
+  --red: #FF453A;
+  /* Apple Red */
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Icons", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --radius: 12px;
+  --radius-sm: 6px;
+
+  /* Semantic inputs & UI tokens */
+  --input-bg: rgba(2, 6, 23, 0.62);
+  --input-border: rgba(148, 163, 184, 0.22);
+  --input-border-focus: rgba(61, 255, 160, 0.55);
+  --input-focus-shadow: rgba(61, 255, 160, 0.12);
+  --backdrop-bg: rgba(2, 6, 23, 0.72);
+  --rename-bg: rgba(2, 6, 23, 0.75);
+  --font-size-xs: 10.5px;
+  --radius-md: 8px;
+  --radius-base: 10px;
+  --text-on-accent: #ffffff;
+  --bg-surface-sunken: #181820;
+}
+
+:root.light-theme {
+  color-scheme: light;
+  background: #f5f5f7;
+
+  --bg-main: #f5f5f7;
+  --bg-panel: rgba(255, 255, 255, 0.72);
+  --bg-surface: rgba(240, 240, 245, 0.6);
+  --bg-input: rgba(0, 0, 0, 0.06);
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --accent: #007AFF; /* Apple Blue Light */
+  --accent-dim: rgba(0, 122, 255, 0.1);
+  --accent-glow: rgba(0, 122, 255, 0.05);
+  --text-primary: #1d1d1f;
+  --text-secondary: rgba(0, 0, 0, 0.65);
+  --text-tertiary: rgba(0, 0, 0, 0.35);
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.12);
+  --green: #34C759; /* Apple Green Light */
+  --green-dim: rgba(52, 199, 89, 0.1);
+  --amber: #FF9500; /* Apple Orange Light */
+  --red: #FF3B30; /* Apple Red Light */
+
+  /* Semantic inputs & UI tokens */
+  --input-bg: rgba(0, 0, 0, 0.04);
+  --input-border: rgba(0, 0, 0, 0.12);
+  --input-border-focus: #007AFF;
+  --input-focus-shadow: rgba(0, 122, 255, 0.15);
+  --backdrop-bg: rgba(0, 0, 0, 0.45);
+  --rename-bg: rgba(255, 255, 255, 0.9);
+  --font-size-xs: 10.5px;
+  --radius-md: 8px;
+  --radius-base: 10px;
+  --text-on-accent: #ffffff;
+  --bg-surface-sunken: #e0e0e8;
+}

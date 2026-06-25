@@ -104,7 +104,7 @@ const createSceneObject = (entity: Entity, scene: THREE.Scene): THREE.Object3D =
     // Helper setup
     const helper = new THREE.CameraHelper(rig.perspCamera);
     helper.userData.entityId = entity.id;
-    scene.add(helper);
+    // Helper is not added to scene initially; syncEntityToSceneObject/animate will mount it if selected.
     rig.userData.helper = helper;
 
     return rig;
@@ -170,9 +170,51 @@ const syncEntityToSceneObject = (obj: THREE.Object3D, entity: Entity, isBeingDra
       obj.orthoCamera.position.copy(obj.position);
       obj.orthoCamera.rotation.copy(obj.rotation);
     }
-    if (obj.userData.helper) {
-      obj.userData.helper.visible = entity.visible;
-      obj.userData.helper.update();
+
+    // Sync camera lens fields if present
+    if (entity.cameraProperties) {
+      const { fov, near, far, zoom } = entity.cameraProperties;
+      if (obj.perspCamera.fov !== fov || obj.perspCamera.near !== near || obj.perspCamera.far !== far) {
+        obj.perspCamera.fov = fov;
+        obj.perspCamera.near = near;
+        obj.perspCamera.far = far;
+        obj.perspCamera.updateProjectionMatrix();
+      }
+      if (obj.orthoCamera.zoom !== zoom || obj.orthoCamera.near !== near || obj.orthoCamera.far !== far) {
+        obj.orthoCamera.zoom = zoom;
+        obj.orthoCamera.near = near;
+        obj.orthoCamera.far = far;
+        obj.orthoCamera.updateProjectionMatrix();
+      }
+    }
+
+    const selectedEntityId = useEditorStore.getState().selectedEntityId;
+    const isSelected = entity.id === selectedEntityId;
+    const isCurrentCamera = entity.id === useEditorStore.getState().activeCameraId;
+    const isVisible = entity.visible && isSelected && !isCurrentCamera;
+
+    if (isVisible) {
+      if (!obj.userData.helper) {
+        const helper = new THREE.CameraHelper(obj.perspCamera);
+        helper.userData.entityId = entity.id;
+        obj.userData.helper = helper;
+      }
+      if (obj.userData.helper && !obj.userData.helper.parent && obj.parent) {
+        obj.parent.add(obj.userData.helper);
+      }
+      if (obj.userData.helper) {
+        obj.userData.helper.visible = true;
+        obj.userData.helper.update();
+      }
+    } else {
+      if (obj.userData.helper) {
+        const helperInstance = obj.userData.helper;
+        if (helperInstance.parent) {
+          helperInstance.parent.remove(helperInstance);
+        }
+        helperInstance.dispose();
+        obj.userData.helper = null;
+      }
     }
   }
 };
@@ -186,6 +228,8 @@ export function ViewportCanvas() {
 
   const transformControlsRef = useRef<TransformControls | null>(null);
   const orbitControlsRef = useRef<OrbitControls | null>(null);
+  const perspCameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const orthoCameraRef = useRef<THREE.OrthographicCamera | null>(null);
 
   const projectionMode = useEditorStore((state) => state.projectionMode);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
@@ -213,9 +257,16 @@ export function ViewportCanvas() {
 
     // Set up both perspective and orthographic cameras
     const aspect = container.clientWidth / container.clientHeight || 1;
-    const perspCamera = new THREE.PerspectiveCamera(45, aspect, 0.1, 100);
+    const initialProps = initialStoreState.personalCameraProperties || {
+      fov: 45,
+      near: 0.1,
+      far: 100,
+      zoom: 1,
+    };
+    const perspCamera = new THREE.PerspectiveCamera(initialProps.fov, aspect, initialProps.near, initialProps.far);
     perspCamera.position.set(0, 5, 10);
     perspCamera.lookAt(0, 0, 0);
+    perspCameraRef.current = perspCamera;
 
     const orthoSize = 5;
     const orthoCamera = new THREE.OrthographicCamera(
@@ -223,14 +274,17 @@ export function ViewportCanvas() {
       orthoSize * aspect,
       orthoSize,
       -orthoSize,
-      0.1,
-      100
+      initialProps.near,
+      initialProps.far
     );
+    orthoCamera.zoom = initialProps.zoom;
     orthoCamera.position.set(0, 5, 10);
     orthoCamera.lookAt(0, 0, 0);
+    orthoCameraRef.current = orthoCamera;
 
-    let activeCamera: THREE.Camera = projectionMode === "perspective" ? perspCamera : orthoCamera;
+    let activeCamera: THREE.Camera = useEditorStore.getState().projectionMode === "perspective" ? perspCamera : orthoCamera;
     cameraRef.current = activeCamera;
+    (window as any).__libre3dActiveCamera = activeCamera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
@@ -496,7 +550,9 @@ export function ViewportCanvas() {
         mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
         mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-        raycaster.setFromCamera(mouse, activeCamera);
+        if (cameraRef.current) {
+          raycaster.setFromCamera(mouse, cameraRef.current);
+        }
 
         const targets: THREE.Object3D[] = [];
         meshMap.forEach((obj) => {
@@ -639,26 +695,51 @@ export function ViewportCanvas() {
     const unsubViewportZoom = useEditorStore.subscribe(
       (state) => state.viewportZoom,
       (zoom) => {
+        const currentCam = cameraRef.current;
+        if (!currentCam) return;
         let currentZoom = 100;
-        if (activeCamera instanceof THREE.PerspectiveCamera) {
-          const dist = activeCamera.position.distanceTo(orbitControls.target);
+        if (currentCam instanceof THREE.PerspectiveCamera) {
+          const dist = currentCam.position.distanceTo(orbitControls.target);
           currentZoom = Math.round((defaultDistance / dist) * 100);
-        } else if (activeCamera instanceof THREE.OrthographicCamera) {
-          currentZoom = Math.round(activeCamera.zoom * 100);
+        } else if (currentCam instanceof THREE.OrthographicCamera) {
+          currentZoom = Math.round(currentCam.zoom * 100);
         }
 
         if (Math.abs(currentZoom - zoom) > 1) {
-          if (activeCamera instanceof THREE.PerspectiveCamera) {
-            const direction = new THREE.Vector3().subVectors(activeCamera.position, orbitControls.target).normalize();
+          if (currentCam instanceof THREE.PerspectiveCamera) {
+            const direction = new THREE.Vector3().subVectors(currentCam.position, orbitControls.target).normalize();
             if (direction.lengthSq() === 0) direction.set(0, 0, 1);
-            activeCamera.position.copy(orbitControls.target).addScaledVector(direction, defaultDistance * (100 / zoom));
+            currentCam.position.copy(orbitControls.target).addScaledVector(direction, defaultDistance * (100 / zoom));
             orbitControls.update();
-          } else if (activeCamera instanceof THREE.OrthographicCamera) {
-            activeCamera.zoom = zoom / 100;
-            activeCamera.updateProjectionMatrix();
+          } else if (currentCam instanceof THREE.OrthographicCamera) {
+            currentCam.zoom = zoom / 100;
+            currentCam.updateProjectionMatrix();
           }
         }
       }
+    );
+
+    const unsubPersonalCameraProperties = useEditorStore.subscribe(
+      (state) => state.personalCameraProperties,
+      (props) => {
+        if (!props) return;
+        const { fov, near, far, zoom } = props;
+        
+        if (perspCamera.fov !== fov || perspCamera.near !== near || perspCamera.far !== far) {
+          perspCamera.fov = fov;
+          perspCamera.near = near;
+          perspCamera.far = far;
+          perspCamera.updateProjectionMatrix();
+        }
+        
+        if (orthoCamera.zoom !== zoom || orthoCamera.near !== near || orthoCamera.far !== far) {
+          orthoCamera.zoom = zoom;
+          orthoCamera.near = near;
+          orthoCamera.far = far;
+          orthoCamera.updateProjectionMatrix();
+        }
+      },
+      { fireImmediately: true }
     );
 
     // Center on selected object handler
@@ -666,13 +747,14 @@ export function ViewportCanvas() {
       const selectedId = useEditorStore.getState().selectedEntityId;
       if (!selectedId) return;
       const mesh = meshMap.get(selectedId);
-      if (mesh) {
+      const currentCam = cameraRef.current;
+      if (mesh && currentCam) {
         const targetPos = new THREE.Vector3();
         mesh.getWorldPosition(targetPos);
 
-        const offset = new THREE.Vector3().subVectors(activeCamera.position, orbitControls.target);
+        const offset = new THREE.Vector3().subVectors(currentCam.position, orbitControls.target);
         orbitControls.target.copy(targetPos);
-        activeCamera.position.copy(targetPos).add(offset);
+        currentCam.position.copy(targetPos).add(offset);
         orbitControls.update();
       }
     };
@@ -682,13 +764,14 @@ export function ViewportCanvas() {
       const selectedId = useEditorStore.getState().selectedEntityId;
       if (!selectedId) return;
       const mesh = meshMap.get(selectedId);
-      if (mesh) {
+      const currentCam = cameraRef.current;
+      if (mesh && currentCam) {
         const targetPos = new THREE.Vector3();
         mesh.getWorldPosition(targetPos);
 
         orbitControls.target.copy(targetPos);
         const currentZoom = useEditorStore.getState().viewportZoom || 100;
-        activeCamera.position.set(
+        currentCam.position.set(
           targetPos.x,
           targetPos.y,
           targetPos.z + defaultDistance * (100 / currentZoom)
@@ -732,12 +815,14 @@ export function ViewportCanvas() {
         applySelectionState(selectedEntityId);
       }
       const currentProjectionMode = useEditorStore.getState().projectionMode;
-      let renderCamera: THREE.Camera = activeCamera;
+      let renderCamera: THREE.Camera = cameraRef.current || activeCamera;
 
       if (currentActiveCameraId === "default") {
-        orbitControls.object = activeCamera;
+        if (cameraRef.current) {
+          orbitControls.object = cameraRef.current;
+        }
         orbitControls.enabled = !transformControls.dragging;
-        renderCamera = activeCamera;
+        renderCamera = cameraRef.current || activeCamera;
         orbitControls.update();
       } else {
         const rig = meshMap.get(currentActiveCameraId);
@@ -748,23 +833,66 @@ export function ViewportCanvas() {
           renderCamera = selectedCam;
           orbitControls.update();
         } else {
-          orbitControls.object = activeCamera;
+          if (cameraRef.current) {
+            orbitControls.object = cameraRef.current;
+          }
           orbitControls.enabled = !transformControls.dragging;
-          renderCamera = activeCamera;
+          renderCamera = cameraRef.current || activeCamera;
           orbitControls.update();
         }
       }
 
       meshMap.forEach((obj, id) => {
-        if (obj.userData.helper) {
-          const entity = useEditorStore.getState().entities.find((e) => e.id === id);
-          const isCurrentCamera = (id === currentActiveCameraId);
-          obj.userData.helper.visible = entity ? (entity.visible && !isCurrentCamera) : !isCurrentCamera;
-          obj.userData.helper.update();
+        const entity = useEditorStore.getState().entities.find((e) => e.id === id);
+        const isCurrentCamera = (id === currentActiveCameraId);
+        const isSelected = (id === selectedEntityId);
+        const isVisible = entity ? (entity.visible && isSelected && !isCurrentCamera) : false;
+
+        if (obj instanceof CustomCameraRig) {
+          if (isVisible) {
+            if (!obj.userData.helper) {
+              const helper = new THREE.CameraHelper(obj.perspCamera);
+              helper.userData.entityId = id;
+              obj.userData.helper = helper;
+            }
+            if (obj.userData.helper && !obj.userData.helper.parent && sceneRef.current) {
+              sceneRef.current.add(obj.userData.helper);
+            }
+            if (obj.userData.helper) {
+              obj.userData.helper.visible = true;
+              obj.userData.helper.update();
+            }
+          } else {
+            if (obj.userData.helper) {
+              const helperInstance = obj.userData.helper;
+              if (helperInstance.parent) {
+                helperInstance.parent.remove(helperInstance);
+              }
+              if (sceneRef.current) {
+                sceneRef.current.remove(helperInstance);
+              }
+              helperInstance.dispose();
+              obj.userData.helper = null;
+            }
+          }
+        } else if (obj.userData.helper) {
+          if (isVisible) {
+            if (!obj.userData.helper.parent && sceneRef.current) {
+              sceneRef.current.add(obj.userData.helper);
+            }
+            obj.userData.helper.visible = true;
+            obj.userData.helper.update();
+          } else {
+            if (obj.userData.helper.parent) {
+              obj.userData.helper.parent.remove(obj.userData.helper);
+            }
+            obj.userData.helper.visible = false;
+          }
         }
       });
 
       renderPass.camera = renderCamera;
+      (window as any).__libre3dActiveCamera = renderCamera;
 
       if (useComposer) {
         composer.render();
@@ -789,6 +917,7 @@ export function ViewportCanvas() {
       unsubFogEnabled();
       unsubPostProcessing();
       unsubViewportZoom();
+      unsubPersonalCameraProperties();
       unsubHudOverlay();
       window.removeEventListener("libre3d-center-on-selected", handleCenterOnSelected);
       window.removeEventListener("libre3d-orientate-to-selected", handleOrientateToSelected);
@@ -823,7 +952,24 @@ export function ViewportCanvas() {
       cameraRef.current = null;
       rendererRef.current = null;
     };
-  }, [projectionMode]); // Recreate cameras/controls on projection mode change
+  }, []); // Only run setup on mount
+
+  useEffect(() => {
+    if (!rendererRef.current || !sceneRef.current) return;
+    const isPersp = projectionMode === "perspective";
+    const nextCamera = isPersp ? perspCameraRef.current : orthoCameraRef.current;
+    if (nextCamera) {
+      cameraRef.current = nextCamera;
+      if (orbitControlsRef.current) {
+        orbitControlsRef.current.object = nextCamera;
+        orbitControlsRef.current.update();
+      }
+      if (transformControlsRef.current) {
+        transformControlsRef.current.camera = nextCamera;
+      }
+      nextCamera.updateProjectionMatrix();
+    }
+  }, [projectionMode]);
 
   return (
     <div
