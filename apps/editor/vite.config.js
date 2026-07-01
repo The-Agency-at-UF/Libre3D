@@ -156,7 +156,6 @@ export default defineConfig(function (_a) {
         },
         server: {
             port: 5173,
-            strictPort: true,
         },
     };
 });

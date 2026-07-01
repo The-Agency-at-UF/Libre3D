@@ -2,10 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import Stats from "three/examples/jsm/libs/stats.module.js";
 import { useEditorStore, type Entity } from "../store/useEditorStore";
 
@@ -290,22 +287,7 @@ export function ViewportCanvas() {
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-    const composer = new EffectComposer(renderer);
-    composer.setPixelRatio(window.devicePixelRatio || 1);
     const renderPass = new RenderPass(scene, activeCamera);
-    composer.addPass(renderPass);
-
-    const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(container.clientWidth, container.clientHeight),
-      (initialStoreState.postProcessing.bloom.intensity / 100) * 3.0,
-      initialStoreState.postProcessing.bloom.radius,
-      initialStoreState.postProcessing.bloom.threshold
-    );
-    bloomPass.enabled = initialStoreState.postProcessing.bloom.enabled;
-    composer.addPass(bloomPass);
-
-    const outputPass = new OutputPass();
-    composer.addPass(outputPass);
 
     const ambientLight = new THREE.AmbientLight(0xffffff, initialStoreState.sceneSettings.lights.intensity * 1.5);
 
@@ -427,8 +409,6 @@ export function ViewportCanvas() {
       orthoCamera.updateProjectionMatrix();
 
       renderer.setSize(nextWidth, nextHeight, false);
-      composer.setSize(nextWidth, nextHeight);
-      bloomPass.setSize(nextWidth, nextHeight);
 
       meshMap.forEach((obj) => {
         if (obj instanceof THREE.PerspectiveCamera) {
@@ -451,9 +431,6 @@ export function ViewportCanvas() {
       selectedObj = selectedEntityId ? meshMap.get(selectedEntityId) ?? null : null;
 
       if (selectedObj && !selectedObj.userData.locked) {
-        if (selectedObj instanceof THREE.Mesh && selectedObj.material instanceof THREE.MeshStandardMaterial) {
-          selectedObj.material.emissive.set(0x143c2d);
-        }
         transformControls.attach(selectedObj);
       } else {
         transformControls.detach();
@@ -677,21 +654,6 @@ export function ViewportCanvas() {
       { fireImmediately: true }
     );
 
-    let useComposer = initialStoreState.postProcessing.enabled;
-
-    const unsubPostProcessing = useEditorStore.subscribe(
-      (state) => state.postProcessing,
-      (postProcessing) => {
-        console.log("Canvas received bloom updates:", postProcessing.bloom.intensity);
-        useComposer = postProcessing.enabled;
-        bloomPass.enabled = postProcessing.bloom.enabled;
-        bloomPass.strength = (postProcessing.bloom.intensity / 100) * 3.0;
-        bloomPass.threshold = postProcessing.bloom.threshold;
-        bloomPass.radius = postProcessing.bloom.radius;
-      },
-      { fireImmediately: true }
-    );
-
     const unsubViewportZoom = useEditorStore.subscribe(
       (state) => state.viewportZoom,
       (zoom) => {
@@ -894,11 +856,7 @@ export function ViewportCanvas() {
       renderPass.camera = renderCamera;
       (window as any).__libre3dActiveCamera = renderCamera;
 
-      if (useComposer) {
-        composer.render();
-      } else {
-        renderer.render(scene, renderCamera);
-      }
+      renderer.render(scene, renderCamera);
     };
     animate();
 
@@ -915,7 +873,6 @@ export function ViewportCanvas() {
       unsubWireframe();
       unsubLightIntensity();
       unsubFogEnabled();
-      unsubPostProcessing();
       unsubViewportZoom();
       unsubPersonalCameraProperties();
       unsubHudOverlay();
@@ -938,7 +895,6 @@ export function ViewportCanvas() {
       scene.remove(gridHelper);
       scene.remove(ambientLight);
 
-      composer.dispose();
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();

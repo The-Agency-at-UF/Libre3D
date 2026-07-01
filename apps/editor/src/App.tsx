@@ -109,7 +109,8 @@ function EditorApp() {
           }
         ],
         selectedEntityId: null,
-        activeCameraId: "default"
+        activeCameraId: "default",
+        activeTransformTool: "translate"
       });
     }
   };
