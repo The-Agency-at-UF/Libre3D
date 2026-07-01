@@ -838,17 +838,21 @@ export function ViewportCanvas() {
             }
           }
         } else if (obj.userData.helper) {
-          if (isVisible) {
-            if (!obj.userData.helper.parent && sceneRef.current) {
-              sceneRef.current.add(obj.userData.helper);
+          const helper = obj.userData.helper as THREE.DirectionalLightHelper;
+          const shouldShowHelper = entity ? entity.visible : false;
+
+          if (shouldShowHelper) {
+            if (!helper.parent && sceneRef.current) {
+              sceneRef.current.add(helper);
             }
-            obj.userData.helper.visible = true;
-            obj.userData.helper.update();
+            helper.visible = true;
+            helper.color = isSelected ? 0xfde047 : 0xffffff;
+            helper.update();
           } else {
-            if (obj.userData.helper.parent) {
-              obj.userData.helper.parent.remove(obj.userData.helper);
+            if (helper.parent) {
+              helper.parent.remove(helper);
             }
-            obj.userData.helper.visible = false;
+            helper.visible = false;
           }
         }
       });
