@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 import { Select } from "./ui/Select";
 import { PanelSection } from "./ui/PanelSection";
@@ -5,6 +6,91 @@ import { InspectorTopbar } from "./inspector/InspectorTopbar";
 import { TransformPanel } from "./inspector/TransformPanel";
 import { ScenePanel } from "./inspector/ScenePanel";
 import { CameraPanel } from "./inspector/CameraPanel";
+
+interface CameraDropdownProps {
+  value: string;
+  options: Array<{ id: string; name: string }>;
+  onSelect: (id: string) => void;
+  onAddNew: () => void;
+  onDelete: (id: string) => void;
+}
+
+function CameraDropdown({ value, options, onSelect, onAddNew, onDelete }: CameraDropdownProps) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      const rootNode = rootRef.current;
+      if (rootNode && !rootNode.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  const currentLabel = options.find((option) => option.id === value)?.name ?? "Camera";
+
+  const handleSelect = (id: string) => {
+    onSelect(id);
+    setOpen(false);
+  };
+
+  const handleDelete = (id: string) => {
+    onDelete(id);
+    setOpen(false);
+  };
+
+  return (
+    <div className="camera-dropdown" ref={rootRef}>
+      <button
+        type="button"
+        className="camera-dropdown-trigger"
+        onClick={() => setOpen((nextOpen) => !nextOpen)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      >
+        <span className="camera-dropdown-trigger-label">{currentLabel}</span>
+        <span className="camera-dropdown-trigger-caret" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+
+      {open ? (
+        <div className="camera-dropdown-menu" role="listbox" aria-label="Camera presets">
+          {options.map((option) => (
+            <div className="camera-dropdown-row" key={option.id}>
+              <button
+                type="button"
+                className="camera-dropdown-option"
+                onClick={() => handleSelect(option.id)}
+              >
+                {option.name}
+              </button>
+              {option.id !== "personal" ? (
+                <button
+                  type="button"
+                  className="camera-dropdown-delete"
+                  onClick={() => handleDelete(option.id)}
+                  aria-label={`Delete ${option.name}`}
+                  title={`Delete ${option.name}`}
+                >
+                  x
+                </button>
+              ) : null}
+            </div>
+          ))}
+
+          <button type="button" className="camera-dropdown-add" onClick={onAddNew}>
+            + Add New Camera...
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export interface RightSidebarProps {
   setIsModalOpen: (open: boolean) => void;
@@ -19,13 +105,41 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
   const activeProfileId = useEditorStore((state) => state.activeProfileId);
   const setActiveProfile = useEditorStore((state) => state.setActiveProfile);
   const addCameraProfile = useEditorStore((state) => state.addCameraProfile);
+  const deleteCameraProfile = useEditorStore((state) => state.deleteCameraProfile);
   const updateFrameSettings = useEditorStore((state) => state.updateFrameSettings);
   const cameraProfiles = useEditorStore((state) => state.cameraProfiles);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
 
-  const cameraProfileEntries = Object.values(cameraProfiles);
+  const cameraProfileEntries = [
+    cameraProfiles.personal,
+    ...Object.values(cameraProfiles).filter((profile) => profile.id !== "personal"),
+  ].filter(Boolean);
   const selectedEntity = entities.find((e) => e.id === selectedEntityId);
   const isResponsiveFrame = frame.mode === "responsive";
+
+  const handleAddCamera = () => {
+    const nextIndex =
+      cameraProfileEntries.reduce((highest, profile) => {
+        const match = profile.id.match(/^camera_(\d+)$/);
+        if (!match) {
+          return highest;
+        }
+
+        return Math.max(highest, Number(match[1]));
+      }, 0) + 1;
+
+    const nextId = `camera_${nextIndex}`;
+    addCameraProfile(nextId, {
+      id: nextId,
+      name: `Camera ${nextIndex}`,
+      position: [5, 5, 5],
+      target: [0, 0, 0],
+      fov: 45,
+      near: 0.5,
+      far: 1000,
+      zoom: 1,
+    });
+  };
 
   const setFramePreset = (preset: string) => {
     switch (preset) {
@@ -118,32 +232,16 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
         </PanelSection>
 
         <PanelSection title="Viewport Settings" defaultOpen={true}>
-          <Select
-            label="Camera"
-            options={[
-              ...cameraProfileEntries.map((profile) => ({ label: profile.name, value: profile.id })),
-              { label: "➕ Add New Camera...", value: "__ADD_NEW__" },
-            ]}
-            value={activeProfileId}
-            onChange={(val) => {
-              if (val === "__ADD_NEW__") {
-                const nextIndex = cameraProfileEntries.filter((profile) => profile.id !== "personal").length + 1;
-                const nextId = `camera_${nextIndex}`;
-                addCameraProfile(nextId, {
-                  id: nextId,
-                  name: `Camera ${nextIndex}`,
-                  position: [5, 5, 5],
-                  target: [0, 0, 0],
-                  fov: 45,
-                  near: 0.5,
-                  far: 1000,
-                  zoom: 1,
-                });
-              } else {
-                setActiveProfile(val);
-              }
-            }}
-          />
+          <div className="prop" style={{ width: "100%" }}>
+            <span className="prop-label">Camera</span>
+            <CameraDropdown
+              value={activeProfileId}
+              options={cameraProfileEntries.map((profile) => ({ id: profile.id, name: profile.name }))}
+              onSelect={setActiveProfile}
+              onAddNew={handleAddCamera}
+              onDelete={deleteCameraProfile}
+            />
+          </div>
         </PanelSection>
 
         <ScenePanel />

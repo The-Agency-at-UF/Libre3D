@@ -194,6 +194,7 @@ export interface EditorState {
   cameraProfiles: Record<string, CameraProfile>;
   setActiveProfile: (id: string) => void;
   addCameraProfile: (id: string, data?: Partial<CameraProfile>) => string;
+  deleteCameraProfile: (id: string) => void;
   updateProfileData: (id: string, updates: Partial<CameraProfile>) => void;
   addEntity: (type: EntityType) => string;
   removeEntity: (id: string) => void;
@@ -372,6 +373,20 @@ export const useEditorStore = create<EditorState>()(
 
           return id;
         },
+        deleteCameraProfile: (id) =>
+          set((state) => {
+            if (id === DEFAULT_CAMERA_PROFILE_ID || !state.cameraProfiles[id]) {
+              return state;
+            }
+
+            const nextCameraProfiles = { ...state.cameraProfiles };
+            delete nextCameraProfiles[id];
+
+            return {
+              cameraProfiles: nextCameraProfiles,
+              activeProfileId: state.activeProfileId === id ? DEFAULT_CAMERA_PROFILE_ID : state.activeProfileId,
+            };
+          }),
         updateProfileData: (id, updates) =>
           set((state) => {
             const existingProfile = state.cameraProfiles[id] ?? createCameraProfile(id);
