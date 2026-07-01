@@ -21,6 +21,17 @@ export interface Entity {
   };
 }
 
+export interface CameraProfile {
+  id: string;
+  name: string;
+  position: [number, number, number];
+  target: [number, number, number];
+  fov: number;
+  near: number;
+  far: number;
+  zoom: number;
+}
+
 type EntityTransformUpdates = Partial<Pick<Entity, "position" | "rotation" | "scale" | "color">> & {
   cameraProperties?: Partial<Required<Entity>["cameraProperties"]>;
 };
@@ -171,6 +182,11 @@ export interface EditorState {
   currentPublishId: string | null;
   activeCameraId: string;
   setActiveCameraId: (id: string) => void;
+  activeProfileId: string;
+  cameraProfiles: Record<string, CameraProfile>;
+  setActiveProfile: (id: string) => void;
+  addCameraProfile: (id: string, data?: Partial<CameraProfile>) => string;
+  updateProfileData: (id: string, updates: Partial<CameraProfile>) => void;
   addEntity: (type: EntityType) => string;
   removeEntity: (id: string) => void;
   updateEntityTransform: (id: string, updates: EntityTransformUpdates) => void;
@@ -196,15 +212,15 @@ export interface EditorState {
   activeTransformTool: "translate" | "rotate" | "scale";
   projectionMode: "perspective" | "orthographic";
   transformSpace: "world" | "local";
+
+  sceneSettings: SceneSettingsConfig;
+  postProcessing: PostProcessingConfig;
   personalCameraProperties: {
     fov: number;
     near: number;
     far: number;
     zoom: number;
   };
-
-  sceneSettings: SceneSettingsConfig;
-  postProcessing: PostProcessingConfig;
 
   // Frame
   viewport: string;
@@ -281,7 +297,7 @@ export interface EditorState {
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updatePersonalCameraProperties: (updates: Partial<{ fov: number; near: number; far: number; zoom: number }>) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityId" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "selectEntity" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "setBgColor" | "setGridPlane" | "setWireframe" | "setLightIntensity" | "setLightColor" | "setFogEnabled" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveCameraId" | "setPreviewMode" | "updatePersonalCameraProperties">>) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityId" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "selectEntity" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "setBgColor" | "setGridPlane" | "setWireframe" | "setLightIntensity" | "setLightColor" | "setFogEnabled" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveCameraId" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "updatePersonalCameraProperties">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, Pick<Entity, "name" | "color">> = {
@@ -309,6 +325,18 @@ const ENTITY_DEFAULTS: Record<EntityType, Pick<Entity, "name" | "color">> = {
 
 const ZERO_VECTOR: [number, number, number] = [0, 0, 0];
 const UNIT_VECTOR: [number, number, number] = [1, 1, 1];
+const DEFAULT_CAMERA_PROFILE_ID = "personal";
+
+const DEFAULT_CAMERA_PROFILE: CameraProfile = {
+  id: DEFAULT_CAMERA_PROFILE_ID,
+  name: "Personal Camera",
+  position: [0, 5, 10],
+  target: [0, 0, 0],
+  fov: 45,
+  near: 0.1,
+  far: 100,
+  zoom: 1,
+};
 
 const createEntityId = (): string => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -359,6 +387,25 @@ const cloneVector = (vector: [number, number, number]): [number, number, number]
   vector[2],
 ];
 
+const cloneCameraProfile = (profile: CameraProfile): CameraProfile => ({
+  ...profile,
+  position: cloneVector(profile.position),
+  target: cloneVector(profile.target),
+});
+
+const createCameraProfile = (id: string, data: Partial<CameraProfile> = {}): CameraProfile => ({
+  ...cloneCameraProfile(DEFAULT_CAMERA_PROFILE),
+  ...data,
+  id,
+  name: data.name ?? DEFAULT_CAMERA_PROFILE.name,
+  position: cloneVector(data.position ?? DEFAULT_CAMERA_PROFILE.position),
+  target: cloneVector(data.target ?? DEFAULT_CAMERA_PROFILE.target),
+  fov: data.fov ?? DEFAULT_CAMERA_PROFILE.fov,
+  near: data.near ?? DEFAULT_CAMERA_PROFILE.near,
+  far: data.far ?? DEFAULT_CAMERA_PROFILE.far,
+  zoom: data.zoom ?? DEFAULT_CAMERA_PROFILE.zoom,
+});
+
 const cloneEntity = (entity: Entity): Entity => ({
   ...entity,
   position: cloneVector(entity.position),
@@ -390,16 +437,83 @@ export const useEditorStore = create<EditorState>()(
         entities: initialEntities.map(cloneEntity),
         selectedEntityId: null,
         currentPublishId: null,
-        activeCameraId: "default",
-        setActiveCameraId: (id) => set({ activeCameraId: id }),
+        activeCameraId: DEFAULT_CAMERA_PROFILE_ID,
+        setActiveCameraId: (id) => set({ activeCameraId: id, activeProfileId: id }),
+        activeProfileId: DEFAULT_CAMERA_PROFILE_ID,
+        cameraProfiles: {
+          [DEFAULT_CAMERA_PROFILE_ID]: cloneCameraProfile(DEFAULT_CAMERA_PROFILE),
+        },
+        setActiveProfile: (id) => set({ activeProfileId: id, activeCameraId: id }),
+        addCameraProfile: (id, data = {}) => {
+          set((state) => {
+            const nextProfile = createCameraProfile(id, data);
+            return {
+              cameraProfiles: {
+                ...state.cameraProfiles,
+                [id]: nextProfile,
+              },
+              activeProfileId: id,
+              activeCameraId: id,
+            };
+          });
+
+          return id;
+        },
+        updateProfileData: (id, updates) =>
+          set((state) => {
+            const existingProfile = state.cameraProfiles[id] ?? createCameraProfile(id);
+            const nextProfile: CameraProfile = {
+              ...existingProfile,
+              ...updates,
+              position: updates.position ? cloneVector(updates.position) : cloneVector(existingProfile.position),
+              target: updates.target ? cloneVector(updates.target) : cloneVector(existingProfile.target),
+            };
+
+            return {
+              cameraProfiles: {
+                ...state.cameraProfiles,
+                [id]: nextProfile,
+              },
+              personalCameraProperties:
+                id === DEFAULT_CAMERA_PROFILE_ID
+                  ? {
+                      fov: nextProfile.fov,
+                      near: nextProfile.near,
+                      far: nextProfile.far,
+                      zoom: nextProfile.zoom,
+                    }
+                  : state.personalCameraProperties,
+            };
+          }),
         addEntity: (type) => {
           let newId = "";
           set((state) => {
-            const entity = createEntity(type);
             if (type === "camera") {
-              const cameraCount = state.entities.filter((e) => e.type === "camera").length + 1;
-              entity.name = `Cinematic Camera ${cameraCount}`;
+              const cameraCount = Object.keys(state.cameraProfiles).filter((profileId) => profileId !== DEFAULT_CAMERA_PROFILE_ID).length + 1;
+              const profileId = `camera_${cameraCount}`;
+              const nextProfile = createCameraProfile(profileId, {
+                name: `Camera ${cameraCount}`,
+                position: [5, 5, 5],
+                target: [0, 0, 0],
+                fov: 45,
+                near: 0.5,
+                far: 1000,
+                zoom: 1,
+              });
+
+              newId = profileId;
+
+              return {
+                cameraProfiles: {
+                  ...state.cameraProfiles,
+                  [profileId]: nextProfile,
+                },
+                activeProfileId: profileId,
+                activeCameraId: profileId,
+              };
             }
+
+            const entity = createEntity(type);
             newId = entity.id;
 
             return {
@@ -487,10 +601,10 @@ export const useEditorStore = create<EditorState>()(
         projectionMode: "perspective",
         transformSpace: "world",
         personalCameraProperties: {
-          fov: 45,
-          near: 0.1,
-          far: 100,
-          zoom: 1,
+          fov: DEFAULT_CAMERA_PROFILE.fov,
+          near: DEFAULT_CAMERA_PROFILE.near,
+          far: DEFAULT_CAMERA_PROFILE.far,
+          zoom: DEFAULT_CAMERA_PROFILE.zoom,
         },
 
         sceneSettings: initialSceneDefaults,
@@ -582,12 +696,21 @@ export const useEditorStore = create<EditorState>()(
               ...state.personalCameraProperties,
               ...updates,
             },
+            cameraProfiles: {
+              ...state.cameraProfiles,
+              [DEFAULT_CAMERA_PROFILE_ID]: {
+                ...state.cameraProfiles[DEFAULT_CAMERA_PROFILE_ID],
+                ...updates,
+                position: cloneVector(state.cameraProfiles[DEFAULT_CAMERA_PROFILE_ID].position),
+                target: cloneVector(state.cameraProfiles[DEFAULT_CAMERA_PROFILE_ID].target),
+              },
+            },
           })),
         setEditorState: (updates) => set((state) => ({ ...state, ...updates })),
       }),
       {
         name: "libre3d-scene-state",
-        version: 6,
+        version: 7,
         storage: createJSONStorage(() => localStorage),
         migrate: (persistedState: any, version: number) => {
           if (version < 4) {
@@ -701,14 +824,56 @@ export const useEditorStore = create<EditorState>()(
           if (version < 6) {
             if (persistedState) {
               if (persistedState.activeCameraId === undefined) {
-                persistedState.activeCameraId = "default";
+                persistedState.activeCameraId = DEFAULT_CAMERA_PROFILE_ID;
               }
+            }
+          }
+
+          if (version < 7) {
+            if (persistedState) {
+              const legacyCameraEntities = Array.isArray(persistedState.entities)
+                ? persistedState.entities.filter((entity: any) => entity?.type === "camera")
+                : [];
+
+              const legacyProfiles: Record<string, CameraProfile> = {};
+              legacyCameraEntities.forEach((entity: any, index: number) => {
+                legacyProfiles[entity.id] = createCameraProfile(entity.id, {
+                  id: entity.id,
+                  name: entity.name ?? `Camera ${index + 1}`,
+                  position: entity.position ?? [0, 5, 10],
+                  target: [0, 0, 0],
+                  fov: entity.cameraProperties?.fov ?? DEFAULT_CAMERA_PROFILE.fov,
+                  near: entity.cameraProperties?.near ?? DEFAULT_CAMERA_PROFILE.near,
+                  far: entity.cameraProperties?.far ?? DEFAULT_CAMERA_PROFILE.far,
+                  zoom: entity.cameraProperties?.zoom ?? DEFAULT_CAMERA_PROFILE.zoom,
+                });
+              });
+
+              persistedState.entities = Array.isArray(persistedState.entities)
+                ? persistedState.entities.filter((entity: any) => entity?.type !== "camera")
+                : persistedState.entities;
+
+              const persistedPersonalProperties = persistedState.personalCameraProperties ?? {};
+              const personalProfile = createCameraProfile(DEFAULT_CAMERA_PROFILE_ID, {
+                ...DEFAULT_CAMERA_PROFILE,
+                ...persistedPersonalProperties,
+              });
+
+              persistedState.cameraProfiles = {
+                [DEFAULT_CAMERA_PROFILE_ID]: personalProfile,
+                ...legacyProfiles,
+                ...(persistedState.cameraProfiles ?? {}),
+              };
+              persistedState.activeProfileId = persistedState.activeProfileId ?? persistedState.activeCameraId ?? DEFAULT_CAMERA_PROFILE_ID;
+              persistedState.activeCameraId = persistedState.activeProfileId;
             }
           }
           return persistedState;
         },
         partialize: (state) => ({
           activeCameraId: state.activeCameraId,
+          activeProfileId: state.activeProfileId,
+          cameraProfiles: state.cameraProfiles,
           entities: state.entities,
           selectedEntityId: state.selectedEntityId,
           currentPublishId: state.currentPublishId,

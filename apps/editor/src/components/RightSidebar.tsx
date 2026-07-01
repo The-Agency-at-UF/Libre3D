@@ -14,14 +14,14 @@ export interface RightSidebarProps {
 export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps) {
   const viewportZoom = useEditorStore((state) => state.viewportZoom);
   const selectedEntityId = useEditorStore((state) => state.selectedEntityId);
-  const activeCameraId = useEditorStore((state) => state.activeCameraId);
-  const setActiveCameraId = useEditorStore((state) => state.setActiveCameraId);
   const entities = useEditorStore((state) => state.entities) ?? [];
-  const addEntity = useEditorStore((state) => state.addEntity);
+  const activeProfileId = useEditorStore((state) => state.activeProfileId);
+  const setActiveProfile = useEditorStore((state) => state.setActiveProfile);
+  const addCameraProfile = useEditorStore((state) => state.addCameraProfile);
+  const cameraProfiles = useEditorStore((state) => state.cameraProfiles);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
-  const personalCameraProperties = useEditorStore((state) => state.personalCameraProperties);
 
-  const cameraEntities = entities.filter((e) => e.type === "camera");
+  const cameraProfileEntries = Object.values(cameraProfiles);
   const selectedEntity = entities.find((e) => e.id === selectedEntityId);
 
   return (
@@ -39,17 +39,26 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
           <Select
             label="Camera"
             options={[
-              { label: "Personal Camera (Orbit View)", value: "default" },
-              ...cameraEntities.map((cam) => ({ label: cam.name, value: cam.id })),
+              ...cameraProfileEntries.map((profile) => ({ label: profile.name, value: profile.id })),
               { label: "➕ Add New Camera...", value: "__ADD_NEW__" },
             ]}
-            value={activeCameraId}
+            value={activeProfileId}
             onChange={(val) => {
               if (val === "__ADD_NEW__") {
-                const newId = addEntity("camera");
-                setActiveCameraId(newId);
+                const nextIndex = cameraProfileEntries.filter((profile) => profile.id !== "personal").length + 1;
+                const nextId = `camera_${nextIndex}`;
+                addCameraProfile(nextId, {
+                  id: nextId,
+                  name: `Camera ${nextIndex}`,
+                  position: [5, 5, 5],
+                  target: [0, 0, 0],
+                  fov: 45,
+                  near: 0.5,
+                  far: 1000,
+                  zoom: 1,
+                });
               } else {
-                setActiveCameraId(val);
+                setActiveProfile(val);
               }
             }}
           />
@@ -60,25 +69,9 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
         {selectedEntity ? (
           <>
             <TransformPanel selectedEntity={selectedEntity} />
-            {selectedEntity.type === "camera" && (
-              <CameraPanel selectedEntity={selectedEntity} />
-            )}
           </>
         ) : (
-          <CameraPanel
-            selectedEntity={{
-              id: "default",
-              type: "camera",
-              name: "Personal Camera",
-              position: [0, 0, 0],
-              rotation: [0, 0, 0],
-              scale: [1, 1, 1],
-              color: "#ffffff",
-              visible: true,
-              locked: false,
-              cameraProperties: personalCameraProperties,
-            }}
-          />
+          <CameraPanel />
         )}
       </div>
     </aside>

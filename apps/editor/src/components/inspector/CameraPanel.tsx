@@ -1,39 +1,21 @@
-import { useEditorStore, type Entity } from "../../store/useEditorStore";
+import { useEditorStore } from "../../store/useEditorStore";
 import { PanelSection } from "../ui/PanelSection";
 import { Slider } from "../ui/Slider";
 
-interface CameraPanelProps {
-  selectedEntity: Entity;
-}
-
-export function CameraPanel({ selectedEntity }: CameraPanelProps) {
-  const updateEntityTransform = useEditorStore((state) => state.updateEntityTransform);
-  const updatePersonalCameraProperties = useEditorStore((state) => state.updatePersonalCameraProperties);
+export function CameraPanel() {
+  const activeProfileId = useEditorStore((state) => state.activeProfileId);
+  const activeProfile = useEditorStore(
+    (state) => state.cameraProfiles[state.activeProfileId] ?? state.cameraProfiles.personal
+  );
+  const updateProfileData = useEditorStore((state) => state.updateProfileData);
   const projectionMode = useEditorStore((state) => state.projectionMode);
 
-  const cameraProperties = selectedEntity.cameraProperties || {
-    fov: 45,
-    near: 0.5,
-    far: 1000,
-    zoom: 1,
-  };
+  const cameraProperties = activeProfile;
 
-  const handlePropertyChange = (field: keyof Required<Entity>["cameraProperties"], value: number) => {
-    if (selectedEntity.id === "default") {
-      updatePersonalCameraProperties({ [field]: value });
-    } else {
-      updateEntityTransform(selectedEntity.id, {
-        cameraProperties: {
-          ...cameraProperties,
-          [field]: value,
-        },
-      });
-    }
-
-    const activeCamera = (window as any).__libre3dActiveCamera;
-    if (activeCamera && typeof activeCamera.updateProjectionMatrix === "function") {
-      activeCamera.updateProjectionMatrix();
-    }
+  const handlePropertyChange = (field: "fov" | "near" | "far" | "zoom", value: number) => {
+    updateProfileData(activeProfileId, {
+      [field]: value,
+    } as Partial<typeof cameraProperties>);
   };
 
   return (

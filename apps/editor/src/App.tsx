@@ -109,7 +109,19 @@ function EditorApp() {
           }
         ],
         selectedEntityId: null,
-        activeCameraId: "default",
+        activeProfileId: "personal",
+        cameraProfiles: {
+          personal: {
+            id: "personal",
+            name: "Personal Camera",
+            position: [0, 5, 10],
+            target: [0, 0, 0],
+            fov: 45,
+            near: 0.1,
+            far: 100,
+            zoom: 1,
+          },
+        },
         activeTransformTool: "translate"
       });
     }
@@ -144,7 +156,7 @@ function EditorApp() {
   const handleResetCamera = () => {
     setEditorState({
       viewportZoom: 100,
-      activeCameraId: "default",
+      activeProfileId: "personal",
       projectionMode: "perspective"
     });
   };
