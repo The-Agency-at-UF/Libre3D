@@ -18,7 +18,7 @@ import { exportLiveScene, getLiveScene } from "./utils/exportScene";
 import { publishLiveScene } from "./utils/publishScene";
 
 //import tsx hook for editor store
-import { useEditorStore } from "./store/useEditorStore";
+import { initialFrameDefaults, useEditorStore } from "./store/useEditorStore";
 
 
 export function App() {
@@ -122,6 +122,7 @@ function EditorApp() {
             zoom: 1,
           },
         },
+        frame: { ...initialFrameDefaults },
         activeTransformTool: "translate"
       });
     }

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
@@ -49,10 +49,6 @@ const createSceneObject = (entity: Entity, scene: THREE.Scene): THREE.Object3D =
 
     return light;
   } else {
-    if (entity.type === "camera") {
-      return new THREE.Group();
-    }
-
     const mesh = new THREE.Mesh(createGeometry(entity), createMaterial(entity));
     mesh.position.set(...entity.position);
     mesh.rotation.set(...entity.rotation);
@@ -103,8 +99,62 @@ const syncEntityToSceneObject = (obj: THREE.Object3D, entity: Entity, isBeingDra
   }
 };
 
+const updateGridColors = (gridHelper: THREE.GridHelper, gridPlane: string) => {
+  const colorAttr = gridHelper.geometry.attributes.color as THREE.BufferAttribute;
+  const posAttr = gridHelper.geometry.attributes.position as THREE.BufferAttribute;
+  if (!colorAttr || !posAttr) return;
+
+  const colorRed = new THREE.Color("#ef4444");
+  const colorGreen = new THREE.Color("#22c55e");
+  const colorBlue = new THREE.Color("#3b82f6");
+  const colorGrid = new THREE.Color("#1f2937");
+
+  let zAxisColor = colorBlue; // Local Z axis
+  let xAxisColor = colorRed;  // Local X axis
+
+  if (gridPlane === "Wall (XY)") {
+    zAxisColor = colorGreen; // Local Z lies along Y axis
+    xAxisColor = colorRed;   // Local X lies along X axis
+  } else if (gridPlane === "Side (YZ)") {
+    zAxisColor = colorBlue;  // Local Z lies along Z axis
+    xAxisColor = colorGreen; // Local X lies along Y axis
+  }
+
+  // Reset all vertices to the default grid color first
+  for (let i = 0; i < colorAttr.count; i++) {
+    colorAttr.setXYZ(i, colorGrid.r, colorGrid.g, colorGrid.b);
+  }
+
+  // Identify and color center axes lines based on vertex position coordinates
+  const totalLines = posAttr.count / 2;
+  for (let j = 0; j < totalLines; j++) {
+    const idx1 = j * 2;
+    const idx2 = j * 2 + 1;
+
+    const x1 = posAttr.getX(idx1);
+    const z1 = posAttr.getZ(idx1);
+    const x2 = posAttr.getX(idx2);
+    const z2 = posAttr.getZ(idx2);
+
+    // If both vertices have X ≈ 0, this line lies along the local Z axis
+    if (Math.abs(x1) < 0.0001 && Math.abs(x2) < 0.0001) {
+      colorAttr.setXYZ(idx1, zAxisColor.r, zAxisColor.g, zAxisColor.b);
+      colorAttr.setXYZ(idx2, zAxisColor.r, zAxisColor.g, zAxisColor.b);
+    }
+    // If both vertices have Z ≈ 0, this line lies along the local X axis
+    else if (Math.abs(z1) < 0.0001 && Math.abs(z2) < 0.0001) {
+      colorAttr.setXYZ(idx1, xAxisColor.r, xAxisColor.g, xAxisColor.b);
+      colorAttr.setXYZ(idx2, xAxisColor.r, xAxisColor.g, xAxisColor.b);
+    }
+  }
+
+  colorAttr.needsUpdate = true;
+};
+
 export function ViewportCanvas() {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const resizeRendererRef = useRef<(() => void) | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.Camera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -118,10 +168,12 @@ export function ViewportCanvas() {
   const profileCommitFrameRef = useRef<number | null>(null);
 
   const projectionMode = useEditorStore((state) => state.projectionMode);
+  const frame = useEditorStore((state) => state.frame);
   const activeProfile = useEditorStore(
     (state) => state.cameraProfiles[state.activeProfileId] ?? state.cameraProfiles.personal
   );
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
+  const [autoScaleFactor, setAutoScaleFactor] = useState(1);
 
   const syncViewportFromProfile = () => {
     const profile = activeProfile;
@@ -221,6 +273,7 @@ export function ViewportCanvas() {
     } else if (initialStoreState.sceneSettings.gridPlane === "Side (YZ)") {
       gridHelper.rotation.z = Math.PI / 2;
     }
+    updateGridColors(gridHelper, initialStoreState.sceneSettings.gridPlane);
 
     const meshMap = new Map<string, THREE.Object3D>();
     let selectedObj: THREE.Object3D | null = null;
@@ -340,6 +393,7 @@ export function ViewportCanvas() {
 
       renderer.setSize(nextWidth, nextHeight, false);
     };
+    resizeRendererRef.current = resizeRenderer;
 
     // Selection application
     const applySelectionState = (selectedEntityId: string | null): void => {
@@ -532,6 +586,7 @@ export function ViewportCanvas() {
         } else if (gridPlane === "Side (YZ)") {
           gridHelper.rotation.z = Math.PI / 2;
         }
+        updateGridColors(gridHelper, gridPlane);
       }
     );
 
@@ -724,6 +779,7 @@ export function ViewportCanvas() {
       stats.dom.remove();
       resizeObserverRef.current?.disconnect();
       resizeObserverRef.current = null;
+      resizeRendererRef.current = null;
 
       for (const obj of meshMap.values()) {
         scene.remove(obj);
@@ -762,19 +818,88 @@ export function ViewportCanvas() {
     }
   }, [projectionMode, activeProfile]);
 
+  useEffect(() => {
+    resizeRendererRef.current?.();
+  }, [frame.mode, frame.width, frame.height]);
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    const viewportHost = wrapper?.parentElement;
+
+    if (!wrapper || !viewportHost) {
+      setAutoScaleFactor(1);
+      return;
+    }
+
+    const updateScale = () => {
+      if (frame.mode !== "fixed") {
+        setAutoScaleFactor(1);
+        return;
+      }
+
+      const viewportRect = viewportHost.getBoundingClientRect();
+      const leftSidebar = document.querySelector<HTMLElement>(".left-sidebar");
+      const rightSidebar = document.querySelector<HTMLElement>(".right-sidebar");
+      const floatingToolbar = document.querySelector<HTMLElement>(".floating-toolbar");
+
+      const leftInset = leftSidebar ? Math.max(0, leftSidebar.getBoundingClientRect().right - viewportRect.left) : 280;
+      const rightInset = rightSidebar ? Math.max(0, viewportRect.right - rightSidebar.getBoundingClientRect().left) : 320;
+      const topInset = floatingToolbar ? Math.max(0, floatingToolbar.getBoundingClientRect().bottom - viewportRect.top) : 0;
+      const bottomInset = 0;
+
+      const availableWidth = Math.max(1, viewportRect.width - leftInset - rightInset);
+      const availableHeight = Math.max(1, viewportRect.height - topInset - bottomInset);
+      const nextScale = Math.min(1, availableWidth / frame.width, availableHeight / frame.height);
+      setAutoScaleFactor(Number.isFinite(nextScale) ? Math.max(nextScale, 0.1) : 1);
+    };
+
+    updateScale();
+
+    const observer = new ResizeObserver(updateScale);
+    observer.observe(viewportHost);
+    const leftSidebar = document.querySelector<HTMLElement>(".left-sidebar");
+    const rightSidebar = document.querySelector<HTMLElement>(".right-sidebar");
+    const floatingToolbar = document.querySelector<HTMLElement>(".floating-toolbar");
+
+    if (leftSidebar) {
+      observer.observe(leftSidebar);
+    }
+    if (rightSidebar) {
+      observer.observe(rightSidebar);
+    }
+    if (floatingToolbar) {
+      observer.observe(floatingToolbar);
+    }
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [frame.mode, frame.width, frame.height]);
+
+  const frameScaleLabel = `${Math.round(autoScaleFactor * 100)}%`;
+
   return (
     <div
-      ref={containerRef}
+      ref={wrapperRef}
+      className="viewport-sandbox-wrapper"
       style={{
-        position: "relative",
-        width: "100%",
-        height: "100%",
-        minHeight: "360px",
-        overflow: "hidden",
-        borderRadius: "0px",
-        background: "#0b1020",
-        display: isPreviewMode ? "none" : "block",
+        display: isPreviewMode ? "none" : "flex",
+        width: frame.mode === "fixed" ? frame.width : "100%",
+        height: frame.mode === "fixed" ? frame.height : "100%",
+        transform: frame.mode === "fixed" ? `scale(${autoScaleFactor})` : "scale(1)",
+        transformOrigin: "center center",
       }}
-    />
+    >
+      <div
+        ref={containerRef}
+        className={`viewport-sandbox-container${frame.mode === "fixed" ? " fixed-bounds" : ""}`}
+        style={{ width: "100%", height: "100%" }}
+      />
+      {frame.mode === "fixed" && (
+        <div className="badge green viewport-sandbox-badge">
+          {frame.width.toLocaleString()} × {frame.height.toLocaleString()} ({frameScaleLabel})
+        </div>
+      )}
+    </div>
   );
 }
