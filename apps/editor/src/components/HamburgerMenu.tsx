@@ -6,6 +6,8 @@ interface HamburgerMenuProps {
   onResetCamera: () => void;
   onToggleTheme: () => void;
   onTriggerPlaceholder: (action: string) => void;
+  showAxisGuides: boolean;
+  onToggleAxisGuides: () => void;
 }
 
 /*
@@ -19,6 +21,8 @@ export function HamburgerMenu({
   onResetCamera,
   onToggleTheme,
   onTriggerPlaceholder,
+  showAxisGuides,
+  onToggleAxisGuides,
 }: HamburgerMenuProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -118,6 +122,17 @@ export function HamburgerMenu({
                 <i className="ti ti-palette" style={{ marginRight: "6px" }}></i>
                 Toggle Theme
               </span>
+            </button>
+            <button
+              className="hamburger-dropdown-btn"
+              type="button"
+              onClick={() => handleItemClick(onToggleAxisGuides)}
+            >
+              <span>
+                <i className={showAxisGuides ? "ti ti-axis-3d" : "ti ti-axis-3d"} style={{ marginRight: "6px", opacity: showAxisGuides ? 1 : 0.4 }}></i>
+                Axis Guidelines
+              </span>
+              <span className="hamburger-dropdown-shortcut">{showAxisGuides ? "On" : "Off"}</span>
             </button>
           </div>
         </>

@@ -87,6 +87,7 @@ export interface SceneSettingsConfig {
   wireframe: boolean;
   fogEnabled: boolean;
   environment: string;
+  showAxisGuides?: boolean;
   lights: {
     intensity: number;
     color: string;
@@ -165,6 +166,7 @@ export const initialSceneDefaults: SceneSettingsConfig = {
   wireframe: false,
   fogEnabled: false,
   environment: "Studio",
+  showAxisGuides: false,
   lights: {
     intensity: 0.75,
     color: "#ffffff",

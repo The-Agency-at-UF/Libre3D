@@ -38,6 +38,10 @@ function EditorApp() {
   const setCurrentPublishId = useEditorStore((state) => state.setCurrentPublishId);
   const addEntity = useEditorStore((state) => state.addEntity);
   const setEditorState = useEditorStore((state) => state.setEditorState);
+  const sceneSettings = useEditorStore((state) => state.sceneSettings);
+  const updateSceneSettings = useEditorStore((state) => state.updateSceneSettings);
+  const showAxisGuides = sceneSettings.showAxisGuides === true;
+  const handleToggleAxisGuides = () => updateSceneSettings({ showAxisGuides: !showAxisGuides });
 
   const activeTransformTool = useEditorStore((state) => state.activeTransformTool);
   const transformSpace = useEditorStore((state) => state.transformSpace);
@@ -320,6 +324,8 @@ function EditorApp() {
               onResetCamera={handleResetCamera}
               onToggleTheme={handleToggleTheme}
               onTriggerPlaceholder={triggerPlaceholder}
+              showAxisGuides={showAxisGuides}
+              onToggleAxisGuides={handleToggleAxisGuides}
             />
           </div>
 

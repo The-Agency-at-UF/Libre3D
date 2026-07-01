@@ -173,6 +173,7 @@ export function ViewportCanvas() {
     (state) => state.cameraProfiles[state.activeProfileId] ?? state.cameraProfiles.personal
   );
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
+  const showAxisGuides = useEditorStore((state) => state.sceneSettings.showAxisGuides) === true;
   const [autoScaleFactor, setAutoScaleFactor] = useState(1);
 
   const syncViewportFromProfile = () => {
@@ -355,8 +356,39 @@ export function ViewportCanvas() {
     const transformControls = new TransformControls(activeCamera, renderer.domElement);
     transformControls.setMode(activeTransformTool);
     transformControls.setSpace(transformSpace);
-    scene.add(transformControls.getHelper());
+    const helperObj = transformControls.getHelper();
+    scene.add(helperObj);
     transformControlsRef.current = transformControls;
+
+    // ── Axis-guideline toggle via Layers mask ──────────────────────────────
+    // getHelper() returns TransformControlsRoot; the .helper dict lives on
+    // _gizmo (TransformControlsGizmo), a private field on TransformControls.
+    // We collect all Line children via the correct path, then toggle their
+    // layer membership. Layer 31 is never enabled on the camera, so objects
+    // there are silently culled — immune to Three.js internal .visible resets.
+    const HIDDEN_LAYER = 31;
+    const gizmo = (transformControls as any)._gizmo as THREE.Object3D & {
+      helper: Record<string, THREE.Object3D>;
+    };
+    const guidelineLines: THREE.Object3D[] = [];
+    if (gizmo && gizmo.helper && typeof gizmo.helper === 'object') {
+      Object.values(gizmo.helper).forEach((subGroup: THREE.Object3D) => {
+        if (typeof subGroup.traverse !== 'function') return;
+        subGroup.traverse((child: THREE.Object3D) => {
+          if ((child as THREE.Line).isLine) guidelineLines.push(child);
+        });
+      });
+    }
+
+    const setGuidelineLayers = (show: boolean) => {
+      guidelineLines.forEach((line) => line.layers.set(show ? 0 : HIDDEN_LAYER));
+    };
+
+    // Apply immediately — defaults to hidden (showAxisGuides defaults false)
+    setGuidelineLayers(useEditorStore.getState().sceneSettings.showAxisGuides === true);
+
+    // Stash so the reactive useEffect can reach the closure
+    (transformControls as any).__setGuidelineLayers = setGuidelineLayers;
 
     // Temporarily disable OrbitControls while transforming
     transformControls.addEventListener("dragging-changed", (event) => {
@@ -875,6 +907,14 @@ export function ViewportCanvas() {
       observer.disconnect();
     };
   }, [frame.mode, frame.width, frame.height]);
+
+  // Axis-guideline toggle — re-applies layer mask whenever the store changes
+  useEffect(() => {
+    const tc = transformControlsRef.current;
+    if (!tc) return;
+    const apply = (tc as any).__setGuidelineLayers as ((show: boolean) => void) | undefined;
+    apply?.(showAxisGuides);
+  }, [showAxisGuides]);
 
   const frameScaleLabel = `${Math.round(autoScaleFactor * 100)}%`;
 
