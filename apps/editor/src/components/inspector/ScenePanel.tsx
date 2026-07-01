@@ -43,36 +43,17 @@ export function ScenePanel() {
   return (
     <PanelSection title="Scene Settings" defaultOpen={true}>
       <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-        {/* Background Color */}
-        <div className="prop">
+        {/* Phase 5+6: Stacked layout + compound color control */}
+        <div className="prop prop--stacked">
           <span className="prop-label">Background Color</span>
-          <div className="color-row" style={{ flex: 1, display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-            <div
-              style={{
-                position: "relative",
-                width: "20px",
-                height: "20px",
-                borderRadius: "4px",
-                overflow: "hidden",
-                border: "1px solid var(--border-strong)",
-                cursor: "pointer",
-              }}
-            >
+          {/* Swatch and hex input share a single bordered compound control */}
+          <div className="inspector-color-field">
+            <div className="inspector-color-swatch" style={{ background: sceneSettings.bgColor }}>
               <input
                 type="color"
                 value={sceneSettings.bgColor}
                 onChange={handleColorChange}
-                style={{
-                  position: "absolute",
-                  top: "-5px",
-                  left: "-5px",
-                  width: "30px",
-                  height: "30px",
-                  padding: 0,
-                  border: "none",
-                  cursor: "pointer",
-                  background: "transparent",
-                }}
+                aria-label="Background color picker"
               />
             </div>
             <input
@@ -82,7 +63,8 @@ export function ScenePanel() {
               onChange={handleTextChange}
               onBlur={handleBlur}
               onClick={(e) => e.currentTarget.select()}
-              style={{ width: "70px", flex: "none" }}
+              style={{ padding: "5px 8px" }}
+              aria-label="Background color hex value"
             />
           </div>
         </div>
@@ -90,5 +72,3 @@ export function ScenePanel() {
     </PanelSection>
   );
 }
-
-

@@ -1046,8 +1046,8 @@
 
 /* ── SCROLLABLE BODY ── */
 .panel-body {
-  flex: 1;
-  overflow-y: auto;
+  flex: unset; /* Phase 7: size to content, scroll on outer .right-sidebar.panel */
+  overflow-y: visible;
   overflow-x: hidden;
   padding: 12px 14px;
   display: flex;
@@ -1065,14 +1065,29 @@
 }
 
 /* ── SECTION ACCORDIONS ── */
+
+/* Phase 1: Spacing rhythm — sections breathe with 24px between them */
 .section {
   width: 100%;
   min-width: 0;
+  position: relative; /* Phase 3: anchor for accent ::before rule */
+  margin-top: 24px;
 }
 
+.section:first-child {
+  margin-top: 0;
+}
+
+/* Phase 1: Separator lives in the 24px gap, not hard against the header */
+.section + .section {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+/* Remove old bottom-border approach */
 .panel-body .section:not(:last-child) {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 8px;
+  border-bottom: none;
+  padding-bottom: 0;
 }
 
 .section-header {
@@ -1081,7 +1096,7 @@
   justify-content: space-between;
   list-style: none;
   cursor: pointer;
-  padding: 10px 0 8px;
+  padding: 0 0 12px; /* Phase 1: 12px below header before first row */
   user-select: none;
 }
 
@@ -1095,12 +1110,13 @@
   gap: 6px;
 }
 
+/* Phase 2: Section labels recede — they label, they don't lead */
 .section-label {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
 }
 
 .section-actions {
@@ -1119,9 +1135,10 @@
   color: var(--text-secondary);
 }
 
+/* Phase 2: Chevron bumped to secondary so it's visible but not dominant */
 .chevron {
   font-size: 11px;
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   transition: transform 0.15s;
 }
 
@@ -1133,11 +1150,26 @@ details[open]>summary .chevron {
   transform: rotate(90deg);
 }
 
+/* Phase 1: 10px row-to-row gap within a section */
 .section-body {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 10px;
   padding-bottom: 12px;
+}
+
+/* Phase 3: Accent left-edge rule on expanded sections */
+details[open].section::before {
+  content: "";
+  position: absolute;
+  left: -14px; /* inset to panel-body padding edge */
+  top: 0;
+  bottom: 12px; /* matches section-body padding-bottom */
+  width: 2px;
+  background: var(--accent);
+  opacity: 0.55;
+  border-radius: 0 1px 1px 0;
+  pointer-events: none;
 }
 
 .section-divider {
@@ -1156,13 +1188,29 @@ details[open]>summary .chevron {
   min-width: 0;
 }
 
+/* Phase 5B: Stacked variant — label above, control below */
+.prop--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.prop--stacked .prop-label {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  white-space: normal;
+  min-width: unset;
+}
+
+/* Phase 2+5A: Labels are secondary text, min-width prevents truncation */
 .prop-label {
+  font-size: 13px;
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
-  flex-shrink: 1;
+  min-width: 72px;
+  flex-shrink: 0;
 }
 
 /* ── INPUTS ── */
@@ -1390,30 +1438,59 @@ input[type="number"]:focus,
   width: 100%;
 }
 
+/* Phase 2: Value shown in Space Grotesk medium — it's primary data */
 .slider-val {
+  font-family: "Space Grotesk", "Segoe UI", sans-serif;
   font-size: 11px;
+  font-weight: 500;
   color: var(--text-primary);
-  min-width: 28px;
+  min-width: 32px;
   text-align: right;
 }
 
+/* Phase 4: Accent-filled track via --value-percent set by JS on each slider */
 input[type="range"] {
   flex: 1;
+  -webkit-appearance: none;
   appearance: none;
-  background: var(--bg-input);
-  height: 3px;
-  border-radius: 2px;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--accent) 0%,
+    var(--accent) var(--value-percent, 0%),
+    var(--border-strong) var(--value-percent, 0%),
+    var(--border-strong) 100%
+  );
   outline: none;
   cursor: pointer;
 }
 
 input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
   appearance: none;
-  width: 11px;
-  height: 11px;
-  background: var(--text-primary);
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+  background: var(--text-primary);
+  border: 2px solid var(--accent);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transition: border-color 0.1s, transform 0.1s;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  border: 2px solid var(--accent);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
 }
 
 /* ── TOGGLE ── */
@@ -1469,6 +1546,51 @@ input[type="range"]::-webkit-slider-thumb {
   display: flex;
   align-items: center;
   gap: 5px;
+}
+
+/* Phase 6: Compound color-field — swatch + hex share one bordered container */
+.inspector-color-field {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--input-bg);
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+
+.inspector-color-field:focus-within {
+  border-color: var(--input-border-focus);
+  box-shadow: 0 0 0 2px var(--input-focus-shadow);
+}
+
+.inspector-color-swatch {
+  width: 28px;
+  height: 28px;
+  border-right: 1px solid var(--border-strong);
+  flex-shrink: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.inspector-color-swatch input[type="color"] {
+  position: absolute;
+  inset: -4px;
+  width: calc(100% + 8px);
+  height: calc(100% + 8px);
+  padding: 0;
+  border: none;
+  cursor: pointer;
+  background: transparent;
+}
+
+.inspector-color-field .hex-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  outline: none;
+  box-shadow: none !important;
 }
 
 .swatch {
