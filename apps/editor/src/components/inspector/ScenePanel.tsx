@@ -45,7 +45,43 @@ export function ScenePanel() {
       <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
         {/* Phase 5+6: Stacked layout + compound color control */}
         <div className="prop prop--stacked">
-          <span className="prop-label">Background Color</span>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+            <span className="prop-label">Background Color</span>
+            {sceneSettings.bgColor.toLowerCase() !== "#0b1020" && (
+              <button
+                type="button"
+                onClick={() => {
+                  updateSceneSettings({ bgColor: "#0b1020" });
+                  setLocalColor("#0b1020");
+                }}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--text-tertiary)",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "4px",
+                  fontSize: "10.5px",
+                  padding: "2px 6px",
+                  borderRadius: "4px",
+                  transition: "all 120ms ease",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "var(--text-secondary)";
+                  e.currentTarget.style.background = "var(--bg-hover)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "var(--text-tertiary)";
+                  e.currentTarget.style.background = "transparent";
+                }}
+                title="Reset to default background color"
+              >
+                <i className="ti ti-arrow-back-up" style={{ fontSize: "11px" }}></i>
+                <span>Reset</span>
+              </button>
+            )}
+          </div>
           {/* Swatch and hex input share a single bordered compound control */}
           <div className="inspector-color-field">
             <div className="inspector-color-swatch" style={{ background: sceneSettings.bgColor }}>
