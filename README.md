@@ -77,14 +77,20 @@ When a formal test suite is added, this section should be updated to include the
 - **Scene Hierarchy Panel**: Manage entities with capabilities to rename, toggle visibility (show/hide), toggle lock, and delete entities.
 - **Viewport Raycasting Selection**: Select objects directly inside the 3D canvas viewport using mouse/pointer clicks, with smart raycasting that ignores transform gizmo interactions.
 - **Interactive Transform Gizmo**: Move, rotate, and scale selected entities using an interactive Three.js transform controls gizmo.
+- **Frame Sandbox & Auto-Scaling**: Constrains fixed frame resolutions (e.g., 1920x1080, 1080x1080 Square, or Custom) directly within the active editor workspace.
+- **Live Status Badge**: Displays a real-time responsive text dimensions indicator (Width × Height (Zoom%)) anchored to the baseline footer of the frame layer.
 - **Local Play Mode / Scene Preview**: Preview scenes locally using an integrated `<model-viewer>` component and the local GLB exporter. The WebGL context is preserved during toggling, and editor panels are locked/dimmed to indicate active preview state.
 - **Zustand State Persistence**: Keeps editor state synced, fully persisted, and versioned in `localStorage` with state-migration support.
-- **Scene Customization**: Adjust viewport settings such as background color, grid plane orientation (Floor XZ, Wall XY, Side YZ, or None), wireframe rendering mode, light color/intensity, and fog settings.
+- **Scene Customization & Fixed Grid Alignment**: Adjust viewport settings such as background color (with one-click reset), grid plane orientation (Floor XZ, Wall XY, Side YZ, or None). Center lines of the main grid helper map directly to the global gizmo axes color tokens (X = Red, Y = Green, Z = Blue).
+- **Streamlined Gizmo Interactors**: The invasive, infinite dashed layout guidelines drawn by Three.js TransformControls during hover and drag loops have been permanently stripped from the internal object graph. By deep-filtering and purging the Line children blocks directly from the translate, rotate, and scale dictionaries of `getHelper()` at initialization, the viewport maintains a distraction-free environment.
 
 ## Next Milestones
 
+- Integration of a floating top Play Mode capsule UI overlay.
 - Import pipeline for GLTF and other common assets.
 - Advanced multi-selection and layout organization tools.
+- Materials & Textures
+- Lighting
 
 ## Notes
 
