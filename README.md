@@ -1,98 +1,51 @@
 # Libre3D
+An open-source, code-free browser tool for building interactive 3D elements for websites.
 
-Libre3D is an open-source, code-free browser tool for building interactive 3D elements for websites. It is positioned as an open alternative to Spline and is being developed as a pnpm + Turborepo monorepo with a Vite + React + TypeScript editor, Three.js rendering, and Zustand state management.
+# Table of Contents
+- [What is the Libre3D project?](#what-is-the-libre3d-project)
+- [Tech Stack](#tech-stack)
+- [Prerequisites](#prerequisites)
+- [How to get started](#how-to-get-started)
+- [How to contribute](#how-to-contribute)
+- [How to review code](#how-to-review-code)
 
-The current "walking skeleton" focuses on a minimal but real editor surface:
+# What is the Libre3D project?
 
-- a left sidebar for scene controls
-- a Three.js viewport that renders primitive objects
-- a Zustand store that owns the editor scene state
-- a path toward exporting scenes for future `<model-viewer>` integration
+Libre3D is an open-source, code-free browser tool designed for building interactive 3D elements for websites. Positioned as an open-source alternative to Spline, it allows creators to assemble, customize, and view 3D canvas coordinates directly from a web interface without touching code.
 
-## Repository Layout
+The project is structured as a robust "walking skeleton" monorepo designed to grow without requiring massive architectural overrides down the line.
 
-- `apps/editor` - the main editor app
-- `pnpm-workspace.yaml` - workspace package definition
-- `pnpm-lock.yaml` - lockfile for reproducible installs
+**The problem:** Traditional web-based 3D content generation usually requires heavy engineering overhead, complex asset setup, or lock-in to closed-source ecosystems with restrictive embedding models.
 
-## Prerequisites
+**The solution:** A high-performance, full-bleed 3D workspace powered by state persistence, dynamic camera constraints, and isolated spatial environments. It enables non-technical creators to compose 3D scenes and instantly verify production boundaries, mapping towards seamless downstream `<model-viewer>` integrations.
 
-- Node.js 18+ recommended
-- pnpm 11+
+**What the editor does today:**
+- **Scene Hierarchy Panel** — Full CRUD control over entities with options to rename, toggle visibility (show/hide), toggle lock state, and delete elements cleanly from the tree.
+- **Viewport Raycasting Selection** — Intuitive object selection directly on the 3D canvas utilizing smart raycasting that automatically ignores active transformation handles.
+- **Interactive Transform Gizmo** — Precise manipulation of translated, rotated, and scaled entities using a streamlined Three.js engine.
+- **Spline-Style Frame Sandbox & Auto-Scaling** — Hard-bounded resolution layout testing (e.g., `1920x1080`, `1080x1080 Square`, or `Custom`) centered within the sidebar void space. Uses a `ResizeObserver` matrix to scale frames down proportionally via CSS transforms (e.g., `83%`) to maintain a clean letterbox crop.
+- **Local Play Mode / Scene Preview** — Instant layout locking and panel dimming to preview pristine user perspectives using local GLB exporters while preserving active WebGL contexts.
+- **Scene Customization & Fixed Grid Alignment** — Absolute canvas background matching and grid orientations (Floor XZ, Wall XY, Side YZ) mapped directly to matching spatial coordinate axis color tokens (X = Red, Y = Green, Z = Blue).
+- **Streamlined Gizmo Interactors** — Clutter-free workspaces achieved by physically pruning structural line guideline vectors out of the helper object graph upon initialization.
 
-## Install
+# Tech Stack
 
-From the repository root:
+**Frontend & Monorepo Infrastructure**
+- [pnpm workspaces](https://pnpm.io/workspaces) + [Turborepo](https://turbo.build/) for lightning-fast caching and monorepo task management
+- [Vite](https://vite.dev/) as the build tool and development bundling engine
+- [React 19](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) for highly structured UI components
+- [Three.js](https://threejs.org/) for rendering the underlying WebGL graphics context
+- [Zustand](https://github.com/pmndrs/zustand) for reactive, versioned, and local-storage-persisted editor scene state
 
+# Prerequisites
+Before getting started, make sure you have:
+- [Node.js](https://nodejs.org/) (v18 or higher recommended)
+- [pnpm](https://pnpm.io/installation) (v11 or higher recommended)
+- [VSCode](https://code.visualstudio.com/) or your preferred IDE
+
+# How to get started
+1. Clone this repository to your local machine.
+2. Open the project root directory in your code editor or terminal.
+3. Install the workspace-wide dependencies from the root directory:
 ```bash
 pnpm install
-```
-
-This installs the workspace dependencies and prepares the editor app for local development.
-
-## Run In Development
-
-Start the editor from the repository root:
-
-```bash
-pnpm dev
-```
-
-This runs the Vite dev server for the editor app and serves it locally at `http://localhost:5173/`.
-
-If you want to run the app package directly, you can also use:
-
-```bash
-pnpm --filter editor dev
-```
-
-## Build
-
-Create a production build from the repository root:
-
-```bash
-pnpm build
-```
-
-You can also build the app package directly with:
-
-```bash
-pnpm --filter editor build
-```
-
-## Testing And Verification
-
-Automated tests have not been added yet. For now, the project is verified with the following checks:
-
-```bash
-pnpm build
-```
-
-The build runs TypeScript compilation and Vite production bundling for the editor app, which is the current best end-to-end check for regressions in the walking skeleton.
-
-When a formal test suite is added, this section should be updated to include the test command and any component or integration test workflow.
-
-## What The Editor Does Today
-
-- **Scene Hierarchy Panel**: Manage entities with capabilities to rename, toggle visibility (show/hide), toggle lock, and delete entities.
-- **Viewport Raycasting Selection**: Select objects directly inside the 3D canvas viewport using mouse/pointer clicks, with smart raycasting that ignores transform gizmo interactions.
-- **Interactive Transform Gizmo**: Move, rotate, and scale selected entities using an interactive Three.js transform controls gizmo.
-- **Frame Sandbox & Auto-Scaling**: Constrains fixed frame resolutions (e.g., 1920x1080, 1080x1080 Square, or Custom) directly within the active editor workspace.
-- **Live Status Badge**: Displays a real-time responsive text dimensions indicator (Width × Height (Zoom%)) anchored to the baseline footer of the frame layer.
-- **Local Play Mode / Scene Preview**: Preview scenes locally using an integrated `<model-viewer>` component and the local GLB exporter. The WebGL context is preserved during toggling, and editor panels are locked/dimmed to indicate active preview state.
-- **Zustand State Persistence**: Keeps editor state synced, fully persisted, and versioned in `localStorage` with state-migration support.
-- **Scene Customization & Fixed Grid Alignment**: Adjust viewport settings such as background color (with one-click reset), grid plane orientation (Floor XZ, Wall XY, Side YZ, or None). Center lines of the main grid helper map directly to the global gizmo axes color tokens (X = Red, Y = Green, Z = Blue).
-- **Streamlined Gizmo Interactors**: The invasive, infinite dashed layout guidelines drawn by Three.js TransformControls during hover and drag loops have been permanently stripped from the internal object graph. By deep-filtering and purging the Line children blocks directly from the translate, rotate, and scale dictionaries of `getHelper()` at initialization, the viewport maintains a distraction-free environment.
-
-## Next Milestones
-
-- Integration of a floating top Play Mode capsule UI overlay.
-- Import pipeline for GLTF and other common assets.
-- Advanced multi-selection and layout organization tools.
-- Materials & Textures
-- Lighting
-
-## Notes
-
-- The repository is currently focused on the editor app and does not yet include a full test runner.
-- The editor app is intentionally minimal so the architecture can be expanded without a large refactor later.
