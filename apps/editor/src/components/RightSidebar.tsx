@@ -13,11 +13,11 @@ export interface RightSidebarProps {
 
 export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps) {
   const viewportZoom = useEditorStore((state) => state.viewportZoom);
-  const selectedEntityId = useEditorStore((state) => state.selectedEntityId);
+  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const entities = useEditorStore((state) => state.entities) ?? [];
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
 
-  const selectedEntity = entities.find((e) => e.id === selectedEntityId);
+  const selectedEntities = entities.filter((e) => selectedEntityIds.includes(e.id));
 
   return (
     <aside className="right-sidebar panel" aria-label="Properties inspector">
@@ -25,7 +25,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
         setIsModalOpen={setIsModalOpen}
         setActiveTab={setActiveTab}
         viewportZoom={viewportZoom}
-        selectedEntityId={selectedEntityId}
+        hasSelection={selectedEntityIds.length > 0}
       />
 
       {/* SCROLLABLE BODY */}
@@ -34,9 +34,9 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
         <ViewportSettingsPanel />
         <ScenePanel />
 
-        {selectedEntity ? (
+        {selectedEntities.length > 0 ? (
           <>
-            <TransformPanel selectedEntity={selectedEntity} />
+            <TransformPanel selectedEntities={selectedEntities} />
           </>
         ) : (
           <CameraPanel />

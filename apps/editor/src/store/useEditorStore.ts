@@ -189,7 +189,7 @@ export const initialFrameDefaults: FrameSettingsConfig = {
 
 export interface EditorState {
   entities: Entity[];
-  selectedEntityId: string | null;
+  selectedEntityIds: string[];
   currentPublishId: string | null;
   activeProfileId: string;
   cameraProfiles: Record<string, CameraProfile>;
@@ -198,10 +198,11 @@ export interface EditorState {
   deleteCameraProfile: (id: string) => void;
   updateProfileData: (id: string, updates: Partial<CameraProfile>) => void;
   addEntity: (type: EntityType) => string;
-  duplicateEntity: (id: string) => void;
-  removeEntity: (id: string) => void;
+  duplicateEntity: (ids: string[]) => void;
+  removeEntity: (ids: string[]) => void;
   updateEntityTransform: (id: string, updates: EntityTransformUpdates) => void;
-  selectEntity: (id: string | null) => void;
+  updateMultipleEntityTransforms: (updates: Record<string, EntityTransformUpdates>) => void;
+  selectEntity: (id: string | null, multi?: boolean) => void;
   setCurrentPublishId: (id: string | null) => void;
   toggleVisibility: (id: string) => void;
   toggleLock: (id: string) => void;
@@ -228,7 +229,7 @@ export interface EditorState {
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityId" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "selectEntity" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode">>) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, Pick<Entity, "name" | "color">> = {
@@ -355,7 +356,7 @@ export const useEditorStore = create<EditorState>()(
       persist(
         (set) => ({
           entities: initialEntities.map(cloneEntity),
-          selectedEntityId: null,
+          selectedEntityIds: [],
           currentPublishId: null,
           activeProfileId: DEFAULT_CAMERA_PROFILE_ID,
           cameraProfiles: {
@@ -415,39 +416,46 @@ export const useEditorStore = create<EditorState>()(
 
               return {
                 entities: [...state.entities, entity],
-                selectedEntityId: entity.id,
+                selectedEntityIds: [entity.id],
               };
             });
             return newId;
           },
-          duplicateEntity: (id) => {
+          duplicateEntity: (ids) => {
             set((state) => {
-              const entityToDuplicate = state.entities.find(e => e.id === id);
-              if (!entityToDuplicate) return state;
+              const newEntities: Entity[] = [];
+              const newIds: string[] = [];
+              
+              ids.forEach((id) => {
+                const entityToDuplicate = state.entities.find(e => e.id === id);
+                if (entityToDuplicate) {
+                  const newId = `entity-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+                  newIds.push(newId);
+                  newEntities.push({
+                    ...entityToDuplicate,
+                    id: newId,
+                    name: `${entityToDuplicate.name} (Copy)`,
+                    position: [
+                      entityToDuplicate.position[0] + 0.5,
+                      entityToDuplicate.position[1],
+                      entityToDuplicate.position[2] + 0.5
+                    ] as [number, number, number]
+                  });
+                }
+              });
 
-              const newId = `entity-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-              const duplicatedEntity = {
-                ...entityToDuplicate,
-                id: newId,
-                name: `${entityToDuplicate.name} (Copy)`,
-                position: [
-                  entityToDuplicate.position[0] + 0.5,
-                  entityToDuplicate.position[1],
-                  entityToDuplicate.position[2] + 0.5
-                ] as [number, number, number]
-              };
+              if (newEntities.length === 0) return state;
 
               return {
-                entities: [...state.entities, duplicatedEntity],
-                selectedEntityId: newId
+                entities: [...state.entities, ...newEntities],
+                selectedEntityIds: newIds
               };
             });
           },
-          removeEntity: (id) =>
+          removeEntity: (ids) =>
             set((state) => ({
-              entities: state.entities.filter((entity) => entity.id !== id),
-              selectedEntityId:
-                state.selectedEntityId === id ? null : state.selectedEntityId,
+              entities: state.entities.filter((entity) => !ids.includes(entity.id)),
+              selectedEntityIds: state.selectedEntityIds.filter(id => !ids.includes(id)),
             })),
           updateEntityTransform: (id, updates) =>
             set((state) => ({
@@ -469,9 +477,32 @@ export const useEditorStore = create<EditorState>()(
                   : entity,
               ),
             })),
-          selectEntity: (id) =>
-            set({
-              selectedEntityId: id,
+          updateMultipleEntityTransforms: (updatesMap) =>
+            set((state) => ({
+              entities: state.entities.map((entity) => {
+                const updates = updatesMap[entity.id];
+                if (!updates) return entity;
+                return {
+                  ...entity,
+                  ...(updates.position ? { position: cloneVector(updates.position) } : null),
+                  ...(updates.rotation ? { rotation: cloneVector(updates.rotation) } : null),
+                  ...(updates.scale ? { scale: cloneVector(updates.scale) } : null),
+                  ...(updates.color ? { color: updates.color } : null),
+                };
+              }),
+            })),
+          selectEntity: (id, multi = false) =>
+            set((state) => {
+              if (!id) return { selectedEntityIds: [] };
+              if (multi) {
+                const isSelected = state.selectedEntityIds.includes(id);
+                return {
+                  selectedEntityIds: isSelected
+                    ? state.selectedEntityIds.filter(selId => selId !== id)
+                    : [...state.selectedEntityIds, id]
+                };
+              }
+              return { selectedEntityIds: [id] };
             }),
           setCurrentPublishId: (id) =>
             set({
@@ -488,8 +519,7 @@ export const useEditorStore = create<EditorState>()(
               entities: state.entities.map((entity) =>
                 entity.id === id ? { ...entity, locked: !entity.locked } : entity,
               ),
-              selectedEntityId:
-                state.selectedEntityId === id ? null : state.selectedEntityId,
+              selectedEntityIds: state.selectedEntityIds.filter(selId => selId !== id),
             })),
           renameEntity: (id, newName) =>
             set((state) => ({
@@ -531,9 +561,16 @@ export const useEditorStore = create<EditorState>()(
         }),
         {
           name: "libre3d-scene-state",
-          version: 10,
+          version: 11,
           storage: createJSONStorage(() => localStorage),
           migrate: (persistedState: any, version: number) => {
+            if (version < 11) {
+              if (persistedState && persistedState.selectedEntityId !== undefined) {
+                persistedState.selectedEntityIds = persistedState.selectedEntityId ? [persistedState.selectedEntityId] : [];
+                delete persistedState.selectedEntityId;
+              }
+            }
+
             if (version < 10) {
               if (persistedState && Array.isArray(persistedState.entities)) {
                 persistedState.entities = persistedState.entities.map((entity: any) => {
@@ -782,7 +819,7 @@ export const useEditorStore = create<EditorState>()(
             activeProfileId: state.activeProfileId,
             cameraProfiles: state.cameraProfiles,
             entities: state.entities,
-            selectedEntityId: state.selectedEntityId,
+            selectedEntityIds: state.selectedEntityIds,
             currentPublishId: state.currentPublishId,
 
             activeTransformTool: state.activeTransformTool,

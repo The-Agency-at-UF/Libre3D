@@ -111,7 +111,7 @@ function EditorApp() {
             locked: false,
           }
         ],
-        selectedEntityId: null,
+        selectedEntityIds: [],
         activeProfileId: "personal",
         cameraProfiles: {
           personal: {
@@ -132,9 +132,9 @@ function EditorApp() {
   };
 
   const handleDuplicate = () => {
-    const selectedId = useEditorStore.getState().selectedEntityId;
-    if (selectedId) {
-      duplicateEntity(selectedId);
+    const selectedIds = useEditorStore.getState().selectedEntityIds;
+    if (selectedIds.length > 0) {
+      duplicateEntity(selectedIds);
     } else {
       window.alert("Please select an object first to duplicate.");
     }

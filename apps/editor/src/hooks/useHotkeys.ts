@@ -82,9 +82,17 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
             break;
           case "delete":
           case "backspace": {
-            const selectedId = useEditorStore.getState().selectedEntityId;
-            if (selectedId) {
-              useEditorStore.getState().removeEntity(selectedId);
+            const selectedIds = useEditorStore.getState().selectedEntityIds;
+            if (selectedIds.length > 0) {
+              useEditorStore.getState().removeEntity(selectedIds);
+            }
+            break;
+          }
+          case "f": {
+            const selectedIds = useEditorStore.getState().selectedEntityIds;
+            if (selectedIds.length > 0) {
+              window.dispatchEvent(new CustomEvent("libre3d-center-on-selected"));
+              window.dispatchEvent(new CustomEvent("libre3d-orientate-to-selected"));
             }
             break;
           }

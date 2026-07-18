@@ -11,7 +11,7 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
   const entity = useEditorStore((state) =>
     state.entities.find((e) => e.id === entityId)
   );
-  const selectedEntityId = useEditorStore((state) => state.selectedEntityId);
+  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const selectEntity = useEditorStore((state) => state.selectEntity);
   const removeEntity = useEditorStore((state) => state.removeEntity);
   const toggleVisibility = useEditorStore((state) => state.toggleVisibility);
@@ -31,7 +31,7 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
 
   if (!entity) return null;
 
-  const isSelected = entity.id === selectedEntityId;
+  const isSelected = selectedEntityIds.includes(entity.id);
 
   const handleDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -78,7 +78,7 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              selectEntity(entity.id);
+              selectEntity(entity.id, e.shiftKey);
             }}
             onDoubleClick={handleDoubleClick}
           >
@@ -117,7 +117,7 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
             disabled={entity.locked}
             onClick={(event) => {
               event.stopPropagation();
-              removeEntity(entity.id);
+              removeEntity([entity.id]);
             }}
           >
             ×
@@ -139,7 +139,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   return (
     <div
       style={{ display: "grid", gap: "0.85rem", minHeight: "100%" }}
-      onClick={() => selectEntity(null)}
+      onClick={(e) => selectEntity(null, e.shiftKey)}
     >
       <div className="editor-tree" aria-label="Scene hierarchy">
         {filtered.map((entity) => (

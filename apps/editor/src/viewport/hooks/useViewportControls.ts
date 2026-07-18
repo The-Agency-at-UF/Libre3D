@@ -30,16 +30,40 @@ export function useViewportControls(
 
     const transformControls = new TransformControls(camera, rendererRef.current.domElement);
 
-    // Spline-like aesthetic: keep the visual gizmo small but make hitboxes huge
-    transformControls.size = 0.5;
+    const DEBUG_HITBOXES = false; // Toggle this to true to see the gizmo hitboxes
+
+    // Spline-like aesthetic: keep the visual gizmo slightly larger but with good hitboxes
+    transformControls.size = 1.0;
     try {
       const gizmo = (transformControls as any)._gizmo;
       if (gizmo && gizmo.picker) {
         Object.values(gizmo.picker).forEach((modeGroup: any) => {
+          if (DEBUG_HITBOXES) {
+            modeGroup.visible = true; // Force the parent group to be visible
+          }
+          
           modeGroup.children.forEach((handle: any) => {
             if (handle.geometry) {
-              handle.geometry = handle.geometry.clone(); // Prevent double-scaling shared geometries
-              handle.geometry.scale(3.5, 3.5, 3.5); // Make invisible hitboxes 3.5x thicker
+              // Only scale the center and planar handles.
+              // Scaling X/Y/Z scales the rotation torus major radius, misaligning it with the visual gizmo!
+              if (handle.name === 'XYZ') {
+                handle.geometry = handle.geometry.clone();
+                handle.geometry.scale(2.5, 2.5, 2.5); // Make center easy to hit
+              } else if (['XY', 'YZ', 'XZ'].includes(handle.name)) {
+                handle.geometry = handle.geometry.clone();
+                handle.geometry.scale(1.2, 1.2, 1.2); // Planar handles slightly larger
+              }
+            }
+            if (DEBUG_HITBOXES && handle.material) {
+              handle.material = handle.material.clone();
+              handle.material.visible = true; // Temp debug: make hitboxes visible
+              handle.material.opacity = 0.5;
+              handle.material.transparent = true;
+              handle.material.wireframe = true;
+              if (handle.material.color) {
+                handle.material.color.setHex(0xff00ff); // Magenta so it stands out
+              }
+              handle.visible = true; // Force mesh to be visible
             }
           });
         });
@@ -110,10 +134,10 @@ export function useViewportControls(
 
       if (isSpacePressed) {
         orbitControls.mouseButtons.LEFT = THREE.MOUSE.PAN;
-        rendererRef.current.domElement.style.cursor = "grab";
+        if (rendererRef.current) rendererRef.current.domElement.style.cursor = "grab";
       } else {
         orbitControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
-        rendererRef.current.domElement.style.cursor = "";
+        if (rendererRef.current) rendererRef.current.domElement.style.cursor = "";
       }
     };
 
@@ -152,13 +176,13 @@ export function useViewportControls(
     };
 
     const handlePointerDown = () => {
-      if (isSpacePressed) {
+      if (isSpacePressed && rendererRef.current) {
         rendererRef.current.domElement.style.cursor = "grabbing";
       }
     };
 
     const handlePointerUp = () => {
-      if (isSpacePressed) {
+      if (isSpacePressed && rendererRef.current) {
         rendererRef.current.domElement.style.cursor = "grab";
       }
     };
@@ -169,8 +193,8 @@ export function useViewportControls(
     window.addEventListener("keyup", handleKeyUp);
     window.addEventListener("blur", handleBlur);
 
-    transformControls.addEventListener("dragging-changed", (event) => {
-      isDragging = event.value;
+    transformControls.addEventListener("dragging-changed", (event: any) => {
+      isDragging = !!event.value;
       updateOrbitControls();
       if (!isDragging) {
         useEditorStore.temporal.getState().resume();
@@ -186,11 +210,11 @@ export function useViewportControls(
           rotation: [target.rotation.x, target.rotation.y, target.rotation.z],
           scale: [target.scale.x, target.scale.y, target.scale.z],
         });
+      }
 
-        if (isDragging && !hasPausedForDrag) {
-          useEditorStore.temporal.getState().pause();
-          hasPausedForDrag = true;
-        }
+      if (isDragging && !hasPausedForDrag) {
+        useEditorStore.temporal.getState().pause();
+        hasPausedForDrag = true;
       }
     });
 

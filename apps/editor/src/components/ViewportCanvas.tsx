@@ -20,7 +20,7 @@ export function ViewportCanvas() {
   const isPreviewMode   = useEditorStore((state) => state.isPreviewMode);
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
   const entities        = useEditorStore((state) => state.entities);
-  const selectedEntityId = useEditorStore((state) => state.selectedEntityId);
+  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
 
   const [autoScaleFactor, setAutoScaleFactor] = useState(1);
 
@@ -39,6 +39,16 @@ export function ViewportCanvas() {
 
   const { sceneManager, cameraManager, objectManager } = managers;
   const scene = sceneManager.scene;
+
+  // -- Multi-select Proxy --
+  const selectionProxyRef = useRef(new THREE.Group());
+  const initialOffsetsRef = useRef<Map<string, THREE.Matrix4>>(new Map());
+
+  useEffect(() => {
+    const proxy = selectionProxyRef.current;
+    scene.add(proxy);
+    return () => { scene.remove(proxy); };
+  }, [scene]);
 
   // ── Single shared camera ref ─────────────────────────────────────────────
   // All three viewport hooks read from this ref so they always use the live
@@ -71,6 +81,68 @@ export function ViewportCanvas() {
     objectManager.getMeshes(),
     transformControlsRef
   );
+
+  // -- Proxy Setup --
+  useEffect(() => {
+    const proxy = selectionProxyRef.current;
+    scene.add(proxy);
+    return () => {
+      scene.remove(proxy);
+    };
+  }, [scene]);
+
+  // -- Multi-select Drag Handlers --
+  useEffect(() => {
+    const tc = transformControlsRef.current;
+    if (!tc) return;
+
+    const onDragChange = (event: any) => {
+      const isDragging = event.value;
+      const proxy = selectionProxyRef.current;
+      if (isDragging && tc.object === proxy) {
+        initialOffsetsRef.current.clear();
+        proxy.updateMatrixWorld(true);
+        const proxyInverse = proxy.matrixWorld.clone().invert();
+        useEditorStore.getState().selectedEntityIds.forEach(id => {
+          const obj = objectManager.getObject(id);
+          if (obj) {
+            obj.updateMatrixWorld(true);
+            initialOffsetsRef.current.set(id, proxyInverse.clone().multiply(obj.matrixWorld));
+          }
+        });
+      }
+    };
+
+    const onObjectChange = () => {
+      const target = tc.object;
+      const proxy = selectionProxyRef.current;
+      if (target === proxy) {
+        const updates: Record<string, any> = {};
+        proxy.updateMatrixWorld(true);
+        const proxyMat = proxy.matrixWorld;
+        useEditorStore.getState().selectedEntityIds.forEach(id => {
+          const localMat = initialOffsetsRef.current.get(id);
+          if (localMat) {
+            const newWorldMat = proxyMat.clone().multiply(localMat);
+            const pos = new THREE.Vector3();
+            const quat = new THREE.Quaternion();
+            const scale = new THREE.Vector3();
+            newWorldMat.decompose(pos, quat, scale);
+            const rot = new THREE.Euler().setFromQuaternion(quat);
+            updates[id] = { position: pos.toArray(), rotation: rot.toArray(), scale: scale.toArray() };
+          }
+        });
+        useEditorStore.getState().updateMultipleEntityTransforms(updates);
+      }
+    };
+
+    tc.addEventListener("dragging-changed", onDragChange);
+    tc.addEventListener("objectChange", onObjectChange);
+    return () => {
+      tc.removeEventListener("dragging-changed", onDragChange);
+      tc.removeEventListener("objectChange", onObjectChange);
+    };
+  }, [transformControlsRef, objectManager]);
 
   // -- Sync Scene Settings --
   useEffect(() => {
@@ -120,17 +192,33 @@ export function ViewportCanvas() {
       }
     });
 
-    const selectedObj = selectedEntityId ? objectManager.getObject(selectedEntityId) : null;
-    if (selectedObj && !selectedObj.userData.locked) {
-      transformControlsRef.current?.attach(selectedObj);
-    } else {
+    const locked = selectedEntityIds.some(id => objectManager.getObject(id)?.userData.locked);
+    if (locked || selectedEntityIds.length === 0) {
       transformControlsRef.current?.detach();
+    } else if (selectedEntityIds.length === 1) {
+      const selectedObj = objectManager.getObject(selectedEntityIds[0]);
+      if (selectedObj) transformControlsRef.current?.attach(selectedObj);
+    } else {
+      const proxy = selectionProxyRef.current;
+      const box = new THREE.Box3();
+      selectedEntityIds.forEach(id => {
+        const obj = objectManager.getObject(id);
+        if (obj) box.expandByObject(obj);
+      });
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+      proxy.position.copy(center);
+      proxy.rotation.set(0, 0, 0);
+      proxy.scale.set(1, 1, 1);
+      proxy.updateMatrixWorld();
+      
+      transformControlsRef.current?.attach(proxy);
     }
 
     // Helper visibility
     objectManager.getMeshes().forEach((obj, id) => {
       const entity     = entities.find(e => e.id === id);
-      const isSelected = id === selectedEntityId;
+      const isSelected = selectedEntityIds.includes(id);
       if (obj.userData.helper) {
         const helper = obj.userData.helper as THREE.DirectionalLightHelper;
         if (entity?.visible) {
@@ -144,7 +232,7 @@ export function ViewportCanvas() {
         }
       }
     });
-  }, [entities, selectedEntityId, objectManager, sceneManager, transformControlsRef]);
+  }, [entities, selectedEntityIds, objectManager, sceneManager, transformControlsRef]);
 
   // -- Resize Logic --
   useEffect(() => {
@@ -202,41 +290,55 @@ export function ViewportCanvas() {
   useEffect(() => {
     const handleCenterOnSelected = () => {
       if (!orbitControlsRef.current || !objectManager) return;
-      const selectedId = useEditorStore.getState().selectedEntityId;
-      if (!selectedId) return;
+      const selectedIds = useEditorStore.getState().selectedEntityIds;
+      if (selectedIds.length === 0) return;
 
-      const mesh = objectManager.getObject(selectedId);
-      if (mesh) {
-        const camera    = cameraRef.current;
-        const targetPos = new THREE.Vector3();
-        mesh.getWorldPosition(targetPos);
-        const offset = new THREE.Vector3().subVectors(camera.position, orbitControlsRef.current.target);
-        orbitControlsRef.current.target.copy(targetPos);
-        camera.position.copy(targetPos).add(offset);
-        orbitControlsRef.current.update();
-      }
+      const box = new THREE.Box3();
+      selectedIds.forEach(id => {
+        const mesh = objectManager.getObject(id);
+        if (mesh) {
+           const targetPos = new THREE.Vector3();
+           mesh.getWorldPosition(targetPos);
+           box.expandByPoint(targetPos);
+        }
+      });
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+      
+      const camera    = cameraRef.current;
+      const offset = new THREE.Vector3().subVectors(camera.position, orbitControlsRef.current.target);
+      orbitControlsRef.current.target.copy(center);
+      camera.position.copy(center).add(offset);
+      orbitControlsRef.current.update();
     };
 
     const handleOrientateToSelected = () => {
       if (!orbitControlsRef.current || !objectManager) return;
-      const selectedId = useEditorStore.getState().selectedEntityId;
-      if (!selectedId) return;
+      const selectedIds = useEditorStore.getState().selectedEntityIds;
+      if (selectedIds.length === 0) return;
 
-      const mesh = objectManager.getObject(selectedId);
-      if (mesh) {
-        const camera        = cameraRef.current;
-        const targetPos     = new THREE.Vector3();
-        mesh.getWorldPosition(targetPos);
-        orbitControlsRef.current.target.copy(targetPos);
-        const currentZoom   = useEditorStore.getState().viewportZoom || 100;
-        const defaultDistance = 11.180339887498949;
-        camera.position.set(
-          targetPos.x,
-          targetPos.y,
-          targetPos.z + defaultDistance * (100 / currentZoom)
-        );
-        orbitControlsRef.current.update();
-      }
+      const box = new THREE.Box3();
+      selectedIds.forEach(id => {
+        const mesh = objectManager.getObject(id);
+        if (mesh) {
+           const targetPos = new THREE.Vector3();
+           mesh.getWorldPosition(targetPos);
+           box.expandByPoint(targetPos);
+        }
+      });
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+
+      const camera        = cameraRef.current;
+      orbitControlsRef.current.target.copy(center);
+      const currentZoom   = useEditorStore.getState().viewportZoom || 100;
+      const defaultDistance = 11.180339887498949;
+      camera.position.set(
+        center.x,
+        center.y,
+        center.z + defaultDistance * (100 / currentZoom)
+      );
+      orbitControlsRef.current.update();
     };
 
     window.addEventListener("libre3d-center-on-selected",    handleCenterOnSelected);

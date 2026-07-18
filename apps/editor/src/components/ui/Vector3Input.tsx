@@ -1,6 +1,6 @@
 export interface Vector3InputProps {
   label: string;
-  values: [number, number, number];
+  values: [number | null, number | null, number | null];
   onChange: (index: number, val: number) => void;
 }
 
@@ -28,7 +28,8 @@ export function Vector3Input({ label, values, onChange }: Vector3InputProps) {
             <input
               type="number"
               step="0.1"
-              value={Number((values[i] || 0).toFixed(2))}
+              value={values[i] === null ? "" : Number((values[i] as number).toFixed(2))}
+              placeholder={values[i] === null ? "---" : ""}
               onChange={(e) => onChange(i, parseFloat(e.target.value) || 0)}
               style={{
                 width: "100%",

@@ -58,12 +58,12 @@ export function useViewportRaycaster(
             hitObject = hitObject.parent;
           }
           if (hitObject && hitObject.userData.entityId) {
-            useEditorStore.getState().selectEntity(hitObject.userData.entityId);
+            useEditorStore.getState().selectEntity(hitObject.userData.entityId, event.shiftKey);
             return;
           }
         }
 
-        useEditorStore.getState().selectEntity(null);
+        useEditorStore.getState().selectEntity(null, event.shiftKey);
       }
     };
 

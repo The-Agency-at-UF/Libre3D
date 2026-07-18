@@ -6,14 +6,14 @@ interface InspectorTopbarProps {
   setIsModalOpen: (open: boolean) => void;
   setActiveTab: (tab: "export" | "share") => void;
   viewportZoom: number;
-  selectedEntityId: string | null;
+  hasSelection: boolean;
 }
 
 export function InspectorTopbar({
   setIsModalOpen,
   setActiveTab,
   viewportZoom,
-  selectedEntityId,
+  hasSelection,
 }: InspectorTopbarProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const setEditorState = useEditorStore((state) => state.setEditorState);
@@ -70,13 +70,13 @@ export function InspectorTopbar({
   };
 
   const triggerCenterOnObject = () => {
-    if (!selectedEntityId) return;
+    if (!hasSelection) return;
     window.dispatchEvent(new CustomEvent("libre3d-center-on-selected"));
     setDropdownOpen(false);
   };
 
   const triggerOrientToObject = () => {
-    if (!selectedEntityId) return;
+    if (!hasSelection) return;
     window.dispatchEvent(new CustomEvent("libre3d-orientate-to-selected"));
     setDropdownOpen(false);
   };
@@ -210,58 +210,64 @@ export function InspectorTopbar({
                 <div
                   style={{
                     padding: "6px 12px",
-                    cursor: selectedEntityId ? "pointer" : "not-allowed",
+                    cursor: hasSelection ? "pointer" : "not-allowed",
                     fontSize: "11px",
-                    color: selectedEntityId ? "rgba(255, 255, 255, 0.7)" : "rgba(255, 255, 255, 0.3)",
+                    color: hasSelection ? "rgba(255, 255, 255, 0.7)" : "rgba(255, 255, 255, 0.3)",
                     display: "flex",
+                    justifyContent: "space-between",
                     alignItems: "center",
-                    gap: "6px",
                   }}
                   onMouseEnter={(e) => {
-                    if (selectedEntityId) {
+                    if (hasSelection) {
                       e.currentTarget.style.background = "rgba(255, 255, 255, 0.05)";
                       e.currentTarget.style.color = "#fff";
                     }
                   }}
                   onMouseLeave={(e) => {
-                    if (selectedEntityId) {
+                    if (hasSelection) {
                       e.currentTarget.style.background = "transparent";
                       e.currentTarget.style.color = "rgba(255, 255, 255, 0.7)";
                     }
                   }}
                   onClick={triggerCenterOnObject}
                 >
-                  <i className="ti ti-focus-2" style={{ fontSize: "12px" }}></i>
-                  <span>Center on Object</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <i className="ti ti-focus-2" style={{ fontSize: "12px" }}></i>
+                    <span>Center on Object</span>
+                  </div>
+                  <span style={{ fontSize: "9px", opacity: 0.5 }}>F</span>
                 </div>
 
                 {/* Orient to Object */}
                 <div
                   style={{
                     padding: "6px 12px",
-                    cursor: selectedEntityId ? "pointer" : "not-allowed",
+                    cursor: hasSelection ? "pointer" : "not-allowed",
                     fontSize: "11px",
-                    color: selectedEntityId ? "rgba(255, 255, 255, 0.7)" : "rgba(255, 255, 255, 0.3)",
+                    color: hasSelection ? "rgba(255, 255, 255, 0.7)" : "rgba(255, 255, 255, 0.3)",
                     display: "flex",
+                    justifyContent: "space-between",
                     alignItems: "center",
-                    gap: "6px",
                   }}
                   onMouseEnter={(e) => {
-                    if (selectedEntityId) {
+                    if (hasSelection) {
                       e.currentTarget.style.background = "rgba(255, 255, 255, 0.05)";
                       e.currentTarget.style.color = "#fff";
                     }
                   }}
                   onMouseLeave={(e) => {
-                    if (selectedEntityId) {
+                    if (hasSelection) {
                       e.currentTarget.style.background = "transparent";
                       e.currentTarget.style.color = "rgba(255, 255, 255, 0.7)";
                     }
                   }}
                   onClick={triggerOrientToObject}
                 >
-                  <i className="ti ti-compass" style={{ fontSize: "12px" }}></i>
-                  <span>Orient to Object</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <i className="ti ti-compass" style={{ fontSize: "12px" }}></i>
+                    <span>Orient to Object</span>
+                  </div>
+                  <span style={{ fontSize: "9px", opacity: 0.5 }}>F</span>
                 </div>
               </div>
             </>
