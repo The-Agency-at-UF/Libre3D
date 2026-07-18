@@ -24,7 +24,7 @@ const getSceneWindow = (): LiveSceneWindow | null => {
   return window as LiveSceneWindow;
 };
 
-const createDownload = (content: BlobPart, fileName: string, mimeType: string): void => {
+export const createDownload = (content: BlobPart, fileName: string, mimeType: string): void => {
   const blob = new Blob([content], { type: mimeType });
   const objectUrl = window.URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -50,21 +50,6 @@ const hasExportableMeshes = (scene: THREE.Scene): boolean => {
   });
 
   return meshCount > 0;
-};
-
-const downloadFromResult = (result: GLTFExporterResult, fileName: string, format: "glb" | "gltf"): void => {
-  if (result instanceof ArrayBuffer) {
-    createDownload(result, fileName, "model/gltf-binary");
-    return;
-  }
-
-  if (result instanceof Blob) {
-    createDownload(result, fileName, format === "glb" ? "model/gltf-binary" : "application/gltf+json");
-    return;
-  }
-
-  const payload = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-  createDownload(payload, fileName, "application/gltf+json");
 };
 
 export const getLiveScene = (): THREE.Scene | null => getSceneWindow()?.__libre3dScene ?? null;

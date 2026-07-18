@@ -12,9 +12,10 @@ import { FloatingToolbar } from "./components/FloatingToolbar";
 
 // Custom state hook to manage right sidebar UI states like exporting, publishing, search, and tab selections
 import { useRightSidebarState } from "./hooks/useRightSidebarState";
+import { useHotkeys } from "./hooks/useHotkeys";
 
 //import tsx utils for editor export and publish
-import { exportLiveScene, getLiveScene } from "./utils/exportScene";
+import { exportLiveScene, getLiveScene, createDownload } from "./utils/exportScene";
 import { publishLiveScene } from "./utils/publishScene";
 
 //import tsx hook for editor store
@@ -36,15 +37,13 @@ function EditorApp() {
   const entities = useEditorStore((state) => state.entities) ?? [];
   const currentPublishId = useEditorStore((state) => state.currentPublishId);
   const setCurrentPublishId = useEditorStore((state) => state.setCurrentPublishId);
-  const addEntity = useEditorStore((state) => state.addEntity);
   const setEditorState = useEditorStore((state) => state.setEditorState);
+  const duplicateEntity = useEditorStore((state) => state.duplicateEntity);
   const sceneSettings = useEditorStore((state) => state.sceneSettings);
   const updateSceneSettings = useEditorStore((state) => state.updateSceneSettings);
   const showAxisGuides = sceneSettings.showAxisGuides === true;
   const handleToggleAxisGuides = () => updateSceneSettings({ showAxisGuides: !showAxisGuides });
 
-  const activeTransformTool = useEditorStore((state) => state.activeTransformTool);
-  const transformSpace = useEditorStore((state) => state.transformSpace);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
   const previewGlbUrl = useEditorStore((state) => state.previewGlbUrl);
 
@@ -135,24 +134,7 @@ function EditorApp() {
   const handleDuplicate = () => {
     const selectedId = useEditorStore.getState().selectedEntityId;
     if (selectedId) {
-      const entityToDuplicate = entities.find(e => e.id === selectedId);
-      if (entityToDuplicate) {
-        const newId = `entity-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-        const duplicatedEntity = {
-          ...entityToDuplicate,
-          id: newId,
-          name: `${entityToDuplicate.name} (Copy)`,
-          position: [
-            entityToDuplicate.position[0] + 0.5,
-            entityToDuplicate.position[1],
-            entityToDuplicate.position[2] + 0.5
-          ] as [number, number, number]
-        };
-        useEditorStore.setState({
-          entities: [...entities, duplicatedEntity],
-          selectedEntityId: newId
-        });
-      }
+      duplicateEntity(selectedId);
     } else {
       window.alert("Please select an object first to duplicate.");
     }
@@ -170,53 +152,11 @@ function EditorApp() {
     window.alert(`${action} action triggered.`);
   };
 
-  // Hotkeys for transform tools
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const activeEl = document.activeElement;
-      if (
-        activeEl &&
-        (activeEl.tagName === "INPUT" ||
-          activeEl.tagName === "TEXTAREA" ||
-          activeEl.getAttribute("contenteditable") === "true")
-      ) {
-        return;
-      }
-
-      // Ctrl + Key or Cmd + Key shortcuts
-      if (event.ctrlKey || event.metaKey) {
-        if (event.key.toLowerCase() === "d") {
-          event.preventDefault();
-          handleDuplicate();
-          return;
-        }
-        if (event.key.toLowerCase() === "n") {
-          event.preventDefault();
-          handleNewFile();
-          return;
-        }
-      }
-
-      switch (event.key.toLowerCase()) {
-        case "w":
-          setEditorState({ activeTransformTool: "translate" });
-          break;
-        case "e":
-          setEditorState({ activeTransformTool: "rotate" });
-          break;
-        case "r":
-          setEditorState({ activeTransformTool: "scale" });
-          break;
-        default:
-          break;
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [setEditorState, entities]);
+  // Global Hotkeys
+  useHotkeys({
+    onDuplicate: handleDuplicate,
+    onNewFile: handleNewFile
+  });
 
   const handleExportAsset = async (): Promise<void> => {
     if (sidebarUI.isExporting) {
@@ -249,15 +189,7 @@ function EditorApp() {
   const handleExportJson = () => {
     try {
       const dataStr = JSON.stringify(entities, null, 2);
-      const blob = new Blob([dataStr], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const downloadAnchor = document.createElement("a");
-      downloadAnchor.setAttribute("href", url);
-      downloadAnchor.setAttribute("download", "libre3d-scene.json");
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      downloadAnchor.remove();
-      URL.revokeObjectURL(url);
+      createDownload(dataStr, "libre3d-scene.json", "application/json");
     } catch (error) {
       console.error("Failed to export JSON:", error);
       window.alert("Failed to export JSON.");

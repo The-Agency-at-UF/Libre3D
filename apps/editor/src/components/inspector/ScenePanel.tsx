@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { useEditorStore } from "../../store/useEditorStore";
 import { PanelSection } from "../ui/PanelSection";
+import { Switch } from "../ui/Switch";
+import { Select } from "../ui/Select";
 
 export function ScenePanel() {
   const sceneSettings = useEditorStore((state) => state.sceneSettings);
@@ -43,7 +45,8 @@ export function ScenePanel() {
   return (
     <PanelSection title="Scene Settings" defaultOpen={true}>
       <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-        {/* Phase 5+6: Stacked layout + compound color control */}
+
+        {/* Background Color */}
         <div className="prop prop--stacked">
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
             <span className="prop-label">Background Color</span>
@@ -82,7 +85,6 @@ export function ScenePanel() {
               </button>
             )}
           </div>
-          {/* Swatch and hex input share a single bordered compound control */}
           <div className="inspector-color-field">
             <div className="inspector-color-swatch" style={{ background: sceneSettings.bgColor }}>
               <input
@@ -104,6 +106,29 @@ export function ScenePanel() {
             />
           </div>
         </div>
+
+
+        {/* Grid */}
+        <Switch
+          label="Show Grid"
+          checked={sceneSettings.showGrid !== false}
+          onChange={(val) => updateSceneSettings({ showGrid: val })}
+        />
+
+        {/* Wireframe */}
+        <Switch
+          label="Wireframe Mode"
+          checked={sceneSettings.wireframe}
+          onChange={(val) => updateSceneSettings({ wireframe: val })}
+        />
+
+        {/* Fog */}
+        <Switch
+          label="Fog Effect"
+          checked={sceneSettings.fogEnabled}
+          onChange={(val) => updateSceneSettings({ fogEnabled: val })}
+        />
+
       </div>
     </PanelSection>
   );

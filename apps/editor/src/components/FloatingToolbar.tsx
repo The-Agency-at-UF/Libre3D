@@ -1,4 +1,5 @@
 import { useEditorStore } from "../store/useEditorStore";
+import { TranslateIcon, RotateIcon, ScaleIcon, PlusIcon } from "./ui/Icons";
 
 interface FloatingToolbarProps {
   isShapeDropdownOpen: boolean;
@@ -30,24 +31,7 @@ export function FloatingToolbar({
         title="Translate Tool"
         onClick={() => setEditorState({ activeTransformTool: "translate" })}
       >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          width="16"
-          height="16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <polyline points="5 9 2 12 5 15" />
-          <polyline points="9 5 12 2 15 5" />
-          <polyline points="15 19 12 22 9 19" />
-          <polyline points="19 9 22 12 19 15" />
-          <line x1="2" y1="12" x2="22" y2="12" />
-          <line x1="12" y1="2" x2="12" y2="22" />
-        </svg>
+        <TranslateIcon />
       </button>
 
       {/* Rotate Tool Button */}
@@ -57,19 +41,7 @@ export function FloatingToolbar({
         title="Rotate Tool"
         onClick={() => setEditorState({ activeTransformTool: "rotate" })}
       >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          width="16"
-          height="16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
-        </svg>
+        <RotateIcon />
       </button>
 
       {/* Scale Tool Button */}
@@ -79,21 +51,7 @@ export function FloatingToolbar({
         title="Scale Tool"
         onClick={() => setEditorState({ activeTransformTool: "scale" })}
       >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          width="16"
-          height="16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <rect x="2" y="2" width="6" height="6" rx="1" />
-          <rect x="16" y="16" width="6" height="6" rx="1" />
-          <path d="M8 8l8 8" />
-        </svg>
+        <ScaleIcon />
       </button>
 
       <div style={{ width: "1px", background: "rgba(255, 255, 255, 0.15)", margin: "4px 2px" }}></div>
@@ -117,20 +75,7 @@ export function FloatingToolbar({
           title="Add Shape"
           onClick={() => setIsShapeDropdownOpen(!isShapeDropdownOpen)}
         >
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
+          <PlusIcon />
         </button>
         {isShapeDropdownOpen && (
           <div
@@ -246,3 +191,4 @@ export function FloatingToolbar({
     </div>
   );
 }
+
