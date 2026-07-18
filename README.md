@@ -34,6 +34,13 @@ The project is set up as a "monorepo." This means all of Libre3D's code lives in
 - **Scene Background & Grid Settings** — Customize the canvas background and choose which grid to show (Floor, Wall, or Side view). Each direction has its own color for clarity: X = Red, Y = Green, Z = Blue.
 - **Cleaner Selection Handles** — Extra guideline clutter is automatically removed from the move/rotate/scale handles, so your workspace stays tidy.
 
+## Next Milestones
+- Integration of a floating top Play Mode capsule VI overlay.
+- Import pipeline for GLTF and other common assets.
+- Advanced multi-selection and layout organization tools.
+- Materials & Textures
+- Lighting
+
 ## Tech Stack
 
 ### Frontend & Monorepo Infrastructure
