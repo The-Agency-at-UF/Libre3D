@@ -1,6 +1,12 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import { useEditorStore } from "../store/useEditorStore";
-import { getChildren, getAncestorIds, getDescendantIds } from "../store/entityIndex";
+import { useEditorStore, type Entity } from "../store/useEditorStore";
+import {
+  getChildren,
+  getAncestorIds,
+  getDescendantIds,
+  filterMoveRoots,
+  canReparentEntities,
+} from "../store/entityIndex";
 
 import { EyeIcon, LockIcon } from "./ui/Icons";
 
@@ -23,8 +29,146 @@ interface HierarchyItemProps {
   isRenaming: boolean;
   onToggleExpand: (id: string) => void;
   onRowClick: (id: string, event: React.MouseEvent) => void;
+  onRowContextMenu: (id: string, event: React.MouseEvent) => void;
   onRequestRename: (id: string) => void;
   onFinishRename: () => void;
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  targetId: string | null;
+}
+
+// Right-click menu. Every action operates on the whole current selection
+// (Blender's convention); enablement mirrors the same store guards the
+// actions themselves enforce, so a disabled item is never a lie.
+function HierarchyContextMenu({
+  menu,
+  onClose,
+  onRename,
+}: {
+  menu: ContextMenuState;
+  onClose: () => void;
+  onRename: (id: string) => void;
+}) {
+  const entities = useEditorStore((state) => state.entities);
+  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
+  const duplicateEntity = useEditorStore((state) => state.duplicateEntity);
+  const removeEntity = useEditorStore((state) => state.removeEntity);
+  const groupEntities = useEditorStore((state) => state.groupEntities);
+  const ungroupEntity = useEditorStore((state) => state.ungroupEntity);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const byId = new Map(entities.map((entity) => [entity.id, entity]));
+  const selected = selectedEntityIds
+    .map((id) => byId.get(id))
+    .filter((entity): entity is Entity => !!entity);
+  const targetEntity = menu.targetId ? byId.get(menu.targetId) : undefined;
+
+  const canRename = !!targetEntity && !targetEntity.locked;
+
+  const moveRoots = filterMoveRoots(entities, selectedEntityIds);
+  const parentIds = new Set(moveRoots.map((id) => byId.get(id)?.parentId ?? null));
+  const groupParentId = parentIds.size === 1 ? [...parentIds][0] : null;
+  const canGroup = moveRoots.length > 0 && canReparentEntities(entities, moveRoots, groupParentId);
+
+  const selectedGroups = selected.filter((entity) => entity.type === "group");
+  const deletableIds = selected.filter((entity) => !entity.locked).map((entity) => entity.id);
+  const hasSelection = selected.length > 0;
+
+  // Keep the menu on-screen when invoked near the viewport edge.
+  const MENU_WIDTH = 190;
+  const MENU_HEIGHT = 230;
+  const x = Math.max(4, Math.min(menu.x, window.innerWidth - MENU_WIDTH - 8));
+  const y = Math.max(4, Math.min(menu.y, window.innerHeight - MENU_HEIGHT - 8));
+
+  const run = (action: () => void) => {
+    action();
+    onClose();
+  };
+
+  return (
+    <>
+      <div
+        className="hierarchy-context-overlay"
+        onClick={onClose}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onClose();
+        }}
+      />
+      <div className="hierarchy-context-menu" style={{ left: x, top: y }}>
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={!canRename}
+          onClick={() => run(() => onRename(menu.targetId!))}
+        >
+          <span>Rename</span>
+          <span className="hamburger-dropdown-shortcut">F2</span>
+        </button>
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={!hasSelection}
+          onClick={() => run(() => duplicateEntity(useEditorStore.getState().selectedEntityIds))}
+        >
+          <span>Duplicate</span>
+          <span className="hamburger-dropdown-shortcut">Ctrl+D</span>
+        </button>
+        <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={!canGroup}
+          onClick={() => run(() => groupEntities(useEditorStore.getState().selectedEntityIds))}
+        >
+          <span>Group Selection</span>
+        </button>
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={selectedGroups.length === 0}
+          onClick={() => run(() => selectedGroups.forEach((group) => ungroupEntity(group.id)))}
+        >
+          <span>Ungroup</span>
+        </button>
+        <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={!hasSelection}
+          onClick={() =>
+            run(() => {
+              window.dispatchEvent(new CustomEvent("libre3d-center-on-selected"));
+              window.dispatchEvent(new CustomEvent("libre3d-orientate-to-selected"));
+            })
+          }
+        >
+          <span>Frame Selected</span>
+          <span className="hamburger-dropdown-shortcut">F</span>
+        </button>
+        <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={deletableIds.length === 0}
+          onClick={() => run(() => removeEntity(deletableIds))}
+        >
+          <span>Delete</span>
+          <span className="hamburger-dropdown-shortcut">Del</span>
+        </button>
+      </div>
+    </>
+  );
 }
 
 function HierarchyItem({
@@ -36,6 +180,7 @@ function HierarchyItem({
   isRenaming,
   onToggleExpand,
   onRowClick,
+  onRowContextMenu,
   onRequestRename,
   onFinishRename,
 }: HierarchyItemProps) {
@@ -105,6 +250,7 @@ function HierarchyItem({
       className={`editor-tree-item${isSelected ? " editor-tree-item--selected" : ""}${isActive ? " editor-tree-item--active" : ""}${entity.locked ? " editor-tree-item--locked" : ""}`}
       style={{ paddingLeft: `${0.85 + visualDepth * 0.85}rem` }}
       data-entity-id={entity.id}
+      onContextMenu={(e) => onRowContextMenu(entity.id, e)}
     >
       <div className="editor-tree-main-row">
         {hasChildren ? (
@@ -198,6 +344,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [anchorId, setAnchorId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const toggleExpand = (id: string) => {
@@ -291,6 +438,20 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     return true;
   };
 
+  // Right-clicking an unselected row selects it first (Blender/Spline
+  // behavior); right-clicking inside the selection keeps it, so menu actions
+  // operate on the whole multi-selection.
+  const handleRowContextMenu = (id: string, event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!useEditorStore.getState().selectedEntityIds.includes(id)) {
+      selectEntity(id, false);
+      setActiveId(id);
+      setAnchorId(id);
+    }
+    setContextMenu({ x: event.clientX, y: event.clientY, targetId: id });
+  };
+
   const handleRowClick = (id: string, event: React.MouseEvent) => {
     if (event.shiftKey && anchorId && selectRange(anchorId, id)) {
       setActiveId(id);
@@ -371,6 +532,10 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       onClick={(e) => {
         if (!e.shiftKey && !e.ctrlKey && !e.metaKey) selectEntity(null);
       }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setContextMenu({ x: e.clientX, y: e.clientY, targetId: null });
+      }}
     >
       <div className="editor-tree" aria-label="Scene hierarchy">
         {flatRows.map((row) => (
@@ -384,6 +549,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
             isRenaming={row.id === renamingId}
             onToggleExpand={toggleExpand}
             onRowClick={handleRowClick}
+            onRowContextMenu={handleRowContextMenu}
             onRequestRename={(id) => {
               setRenamingId(id);
               setActiveId(id);
@@ -392,6 +558,17 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
           />
         ))}
       </div>
+
+      {contextMenu && (
+        <HierarchyContextMenu
+          menu={contextMenu}
+          onClose={() => setContextMenu(null)}
+          onRename={(id) => {
+            setRenamingId(id);
+            setActiveId(id);
+          }}
+        />
+      )}
     </div>
   );
 }

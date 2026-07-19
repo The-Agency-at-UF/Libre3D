@@ -945,6 +945,40 @@
   margin-left: 12px;
 }
 
+/* Hierarchy right-click context menu — same visual language as
+   .hamburger-dropdown, but positioned at the cursor. */
+.hierarchy-context-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+
+.hierarchy-context-menu {
+  position: fixed;
+  background: var(--bg-panel);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 1000;
+  min-width: 170px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-sizing: border-box;
+}
+
+.hierarchy-context-menu .hamburger-dropdown-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.hierarchy-context-menu .hamburger-dropdown-btn:disabled:hover {
+  background: transparent;
+}
+
 /* Search and Tabs in Left Sidebar */
 .left-sidebar-tabs {
   display: flex;
