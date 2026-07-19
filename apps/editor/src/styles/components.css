@@ -430,6 +430,36 @@
   min-width: 0;
 }
 
+.hierarchy-expand-btn {
+  background: transparent;
+  border: none;
+  color: rgba(226, 232, 240, 0.55);
+  cursor: pointer;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  font-size: 10px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+}
+
+.hierarchy-expand-btn:hover {
+  color: #e2e8f0;
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.editor-tree-item--selected .hierarchy-expand-btn {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.hierarchy-expand-spacer {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
 .hierarchy-rename-input {
   flex: 1;
   background: var(--rename-bg);

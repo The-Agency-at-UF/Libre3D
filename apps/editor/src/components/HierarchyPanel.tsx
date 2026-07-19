@@ -1,13 +1,18 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import { useEditorStore } from "../store/useEditorStore";
+import { getChildren, getAncestorIds } from "../store/entityIndex";
 
 import { EyeIcon, LockIcon } from "./ui/Icons";
 
 interface HierarchyItemProps {
   entityId: string;
+  depth: number;
+  hasChildren: boolean;
+  isExpanded: boolean;
+  onToggleExpand: (id: string) => void;
 }
 
-function HierarchyItem({ entityId }: HierarchyItemProps) {
+function HierarchyItem({ entityId, depth, hasChildren, isExpanded, onToggleExpand }: HierarchyItemProps) {
   const entity = useEditorStore((state) =>
     state.entities.find((e) => e.id === entityId)
   );
@@ -59,9 +64,24 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
   return (
     <div
       className={`editor-tree-item${isSelected ? " editor-tree-item--selected" : ""}${entity.locked ? " editor-tree-item--locked" : ""}`}
-      style={{ paddingLeft: "0.85rem" }}
+      style={{ paddingLeft: `${0.85 + depth * 0.85}rem` }}
     >
       <div className="editor-tree-main-row">
+        {hasChildren ? (
+          <button
+            className="hierarchy-expand-btn"
+            type="button"
+            aria-label={isExpanded ? "Collapse" : "Expand"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpand(entity.id);
+            }}
+          >
+            {isExpanded ? "▾" : "▸"}
+          </button>
+        ) : (
+          <span className="hierarchy-expand-spacer" />
+        )}
         {isEditing ? (
           <input
             ref={inputRef}
@@ -131,10 +151,65 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
 export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const entities = useEditorStore((state) => state.entities) ?? [];
   const selectEntity = useEditorStore((state) => state.selectEntity);
-  const filtered = entities.filter((e) =>
-    e.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    e.type.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+
+  const toggleExpand = (id: string) => {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+
+  // null means "no filter, show everything". When searching, a node is visible
+  // if it matches directly or is an ancestor of a match — otherwise a matching
+  // leaf deep in the tree would render with no parent rows above it.
+  const visibleIds = useMemo(() => {
+    if (!trimmedQuery) return null;
+
+    const visible = new Set<string>();
+    entities.forEach((entity) => {
+      if (entity.name.toLowerCase().includes(trimmedQuery) || entity.type.toLowerCase().includes(trimmedQuery)) {
+        visible.add(entity.id);
+        getAncestorIds(entities, entity.id).forEach((ancestorId) => visible.add(ancestorId));
+      }
+    });
+    return visible;
+  }, [entities, trimmedQuery]);
+
+  const renderChildren = (parentId: string | null, depth: number): React.ReactNode[] => {
+    const rows: React.ReactNode[] = [];
+
+    for (const child of getChildren(entities, parentId)) {
+      if (visibleIds && !visibleIds.has(child.id)) continue;
+
+      const hasChildren = getChildren(entities, child.id).length > 0;
+      const isExpanded = trimmedQuery.length > 0 || !collapsedIds.has(child.id);
+
+      rows.push(
+        <HierarchyItem
+          key={child.id}
+          entityId={child.id}
+          depth={depth}
+          hasChildren={hasChildren}
+          isExpanded={isExpanded}
+          onToggleExpand={toggleExpand}
+        />
+      );
+
+      if (hasChildren && isExpanded) {
+        rows.push(...renderChildren(child.id, depth + 1));
+      }
+    }
+
+    return rows;
+  };
 
   return (
     <div
@@ -142,9 +217,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       onClick={(e) => selectEntity(null, e.shiftKey)}
     >
       <div className="editor-tree" aria-label="Scene hierarchy">
-        {filtered.map((entity) => (
-          <HierarchyItem key={entity.id} entityId={entity.id} />
-        ))}
+        {renderChildren(null, 0)}
       </div>
     </div>
   );
