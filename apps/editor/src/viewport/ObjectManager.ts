@@ -82,6 +82,38 @@ export class ObjectManager {
     }
   }
 
+  // A thin wireframe box parented directly to the mesh, sized from the mesh's own
+  // geometry bounding box. Parenting it (rather than recomputing a world-space AABB
+  // every frame, e.g. THREE.BoxHelper) means it inherits the mesh's full transform for
+  // free — it stays a tight, correctly oriented box even when the object is rotated,
+  // matching Spline's selection indicator instead of a looser world-axis-aligned box.
+  private createSelectionOutline(boundingBox: THREE.Box3): THREE.LineSegments {
+    const size = new THREE.Vector3();
+    boundingBox.getSize(size);
+    const center = new THREE.Vector3();
+    boundingBox.getCenter(center);
+
+    const boxGeometry = new THREE.BoxGeometry(size.x, size.y, size.z);
+    boxGeometry.translate(center.x, center.y, center.z);
+    const edges = new THREE.EdgesGeometry(boxGeometry);
+    boxGeometry.dispose();
+
+    const material = new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: false, // always render on top, same convention TransformControls uses
+    });
+
+    const outline = new THREE.LineSegments(edges, material);
+    outline.visible = false;
+    outline.renderOrder = 999;
+    outline.raycast = () => {}; // never an independent click/box-select target —
+                                 // Raycaster doesn't check .visible, so this guards
+                                 // against it being hit while hidden (see gizmo picker fix)
+    return outline;
+  }
+
   private createSceneObject(entity: Entity): THREE.Object3D {
     if (entity.type === "directionalLight") {
       const light = new THREE.DirectionalLight(new THREE.Color(entity.color ?? "#ffffff"), 2.2);
@@ -102,10 +134,17 @@ export class ObjectManager {
 
       return light;
     } else {
-      const mesh = new THREE.Mesh(this.createGeometry(entity), this.createMaterialFromLayers(entity.materialLayers));
+      const geometry = this.createGeometry(entity);
+      geometry.computeBoundingBox();
+      const mesh = new THREE.Mesh(geometry, this.createMaterialFromLayers(entity.materialLayers));
       mesh.position.set(...entity.position);
       mesh.rotation.set(...entity.rotation);
       mesh.scale.set(...entity.scale);
+
+      const outline = this.createSelectionOutline(geometry.boundingBox!);
+      mesh.add(outline);
+      mesh.userData.selectionOutline = outline;
+
       return mesh;
     }
   }
@@ -118,6 +157,11 @@ export class ObjectManager {
         material.forEach((entry) => entry.dispose());
       } else {
         material.dispose();
+      }
+      const outline = obj.userData.selectionOutline as THREE.LineSegments | undefined;
+      if (outline) {
+        outline.geometry.dispose();
+        (outline.material as THREE.Material).dispose();
       }
     } else if (obj instanceof THREE.DirectionalLight) {
       if (obj.userData.helper) {

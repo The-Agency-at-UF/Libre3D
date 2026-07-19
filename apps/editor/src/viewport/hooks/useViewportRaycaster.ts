@@ -3,6 +3,10 @@ import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 
+// Matches the existing click-tolerance below (`dist < 10`) so a genuine click with a
+// little accidental jitter still registers as a click, not a box-select drag.
+const DRAG_THRESHOLD_PX = 10;
+
 export function useViewportRaycaster(
   // Accept a ref so raycasting always uses the current active camera.
   cameraRef: React.RefObject<THREE.Camera>,
@@ -16,17 +20,124 @@ export function useViewportRaycaster(
 
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
+    const worldPos = new THREE.Vector3();
+    const camSpace = new THREE.Vector3();
     let pointerDownTime = 0;
     const pointerDownPos = new THREE.Vector2();
     let clickedGizmo = false;
 
+    // Plain left-drag on empty canvas is otherwise a dead gesture (OrbitControls only
+    // rotates/pans while Alt/Space are held), so it's free to repurpose for box-select.
+    // Box-select state below only lives between pointerdown and pointerup.
+    let isSpacePressed = false;
+    let isDragSelecting = false;
+    let marqueeEl: HTMLDivElement | null = null;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.code === "Space") isSpacePressed = true;
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "Space") isSpacePressed = false;
+    };
+
+    const ensureMarqueeEl = (): HTMLDivElement | null => {
+      const container = renderer.domElement.parentElement;
+      if (!container) return null;
+      if (!marqueeEl) {
+        marqueeEl = document.createElement("div");
+        marqueeEl.className = "viewport-marquee-select";
+        container.appendChild(marqueeEl);
+      }
+      return marqueeEl;
+    };
+
+    const updateMarqueeRect = (currentX: number, currentY: number) => {
+      const el = ensureMarqueeEl();
+      const container = renderer.domElement.parentElement;
+      if (!el || !container) return;
+      const containerRect = container.getBoundingClientRect();
+      const startX = pointerDownPos.x - containerRect.left;
+      const startY = pointerDownPos.y - containerRect.top;
+      const curX = currentX - containerRect.left;
+      const curY = currentY - containerRect.top;
+
+      el.style.left = `${Math.min(startX, curX)}px`;
+      el.style.top = `${Math.min(startY, curY)}px`;
+      el.style.width = `${Math.abs(curX - startX)}px`;
+      el.style.height = `${Math.abs(curY - startY)}px`;
+    };
+
+    const removeMarqueeEl = () => {
+      marqueeEl?.remove();
+      marqueeEl = null;
+    };
+
+    const selectWithinRect = (endX: number, endY: number, event: PointerEvent) => {
+      const minX = Math.min(pointerDownPos.x, endX);
+      const maxX = Math.max(pointerDownPos.x, endX);
+      const minY = Math.min(pointerDownPos.y, endY);
+      const maxY = Math.max(pointerDownPos.y, endY);
+
+      const camera = cameraRef.current;
+      const rect = renderer.domElement.getBoundingClientRect();
+      const hitIds: string[] = [];
+
+      meshMap.forEach((obj, entityId) => {
+        if (!obj.visible || obj.userData.locked) return;
+
+        obj.getWorldPosition(worldPos);
+
+        // Skip anything behind the camera — project() doesn't clip, so a point behind
+        // the camera can still land inside the NDC range after the perspective divide's
+        // sign flip, which would otherwise let box-select grab off-screen objects.
+        camSpace.copy(worldPos).applyMatrix4(camera.matrixWorldInverse);
+        if (camSpace.z > 0) return;
+
+        const projected = worldPos.clone().project(camera);
+        const screenX = rect.left + ((projected.x + 1) / 2) * rect.width;
+        const screenY = rect.top + ((1 - projected.y) / 2) * rect.height;
+
+        if (screenX >= minX && screenX <= maxX && screenY >= minY && screenY <= maxY) {
+          hitIds.push(entityId);
+        }
+      });
+
+      const mode = event.shiftKey ? "add" : event.ctrlKey || event.metaKey ? "subtract" : "replace";
+      useEditorStore.getState().selectEntities(hitIds, mode);
+    };
+
     const onPointerDown = (event: PointerEvent) => {
+      if (useEditorStore.getState().isPreviewMode) return;
       pointerDownTime = Date.now();
       pointerDownPos.set(event.clientX, event.clientY);
       clickedGizmo = transformControlsRef.current?.axis !== null;
+      isDragSelecting = false;
+      renderer.domElement.addEventListener("pointermove", onPointerMove);
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      // Don't hijack a gizmo drag or a camera rotate/pan gesture into a box-select.
+      if (clickedGizmo || event.altKey || isSpacePressed) return;
+
+      const dist = pointerDownPos.distanceTo(new THREE.Vector2(event.clientX, event.clientY));
+      if (!isDragSelecting && dist > DRAG_THRESHOLD_PX) {
+        isDragSelecting = true;
+      }
+      if (isDragSelecting) {
+        updateMarqueeRect(event.clientX, event.clientY);
+      }
     };
 
     const onPointerUp = (event: PointerEvent) => {
+      renderer.domElement.removeEventListener("pointermove", onPointerMove);
+
+      if (isDragSelecting) {
+        selectWithinRect(event.clientX, event.clientY, event);
+        isDragSelecting = false;
+        removeMarqueeEl();
+        return;
+      }
+
       const duration = Date.now() - pointerDownTime;
       const dist = pointerDownPos.distanceTo(new THREE.Vector2(event.clientX, event.clientY));
 
@@ -69,10 +180,16 @@ export function useViewportRaycaster(
 
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
     renderer.domElement.addEventListener("pointerup",   onPointerUp);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
 
     return () => {
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointerup",   onPointerUp);
+      renderer.domElement.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+      removeMarqueeEl();
     };
     // camera is read via ref each event — no need to re-register listeners on switch.
     // eslint-disable-next-line react-hooks/exhaustive-deps

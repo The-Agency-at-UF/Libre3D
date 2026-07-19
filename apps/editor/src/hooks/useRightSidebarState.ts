@@ -40,7 +40,6 @@ export function useRightSidebarState(initialPublishId: string | null): RightSide
     frame: true,
     scene: true,
     globalSettings: true,
-    materialAssets: true,
   });
 
   const toggleCollapsible = (section: string) => {

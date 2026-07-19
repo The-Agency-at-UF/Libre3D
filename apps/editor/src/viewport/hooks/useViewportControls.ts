@@ -30,41 +30,45 @@ export function useViewportControls(
 
     const transformControls = new TransformControls(camera, rendererRef.current.domElement);
 
-    const DEBUG_HITBOXES = false; // Toggle this to true to see the gizmo hitboxes
-
     // Spline-like aesthetic: keep the visual gizmo slightly larger but with good hitboxes
     transformControls.size = 1.0;
+
+    // Tuned so the center (XYZ) picker stays easy to grab without swallowing
+    // the base of the axis arrows, and the planar pickers shrink without
+    // drifting toward the origin (see note below on why a naive .scale() breaks this).
+    const CENTER_HITBOX_SCALE = 1.6;
+    const PLANE_HITBOX_SCALE = 0.5;
+
     try {
       const gizmo = (transformControls as any)._gizmo;
       if (gizmo && gizmo.picker) {
         Object.values(gizmo.picker).forEach((modeGroup: any) => {
-          if (DEBUG_HITBOXES) {
-            modeGroup.visible = true; // Force the parent group to be visible
-          }
-          
           modeGroup.children.forEach((handle: any) => {
-            if (handle.geometry) {
-              // Only scale the center and planar handles.
-              // Scaling X/Y/Z scales the rotation torus major radius, misaligning it with the visual gizmo!
-              if (handle.name === 'XYZ') {
-                handle.geometry = handle.geometry.clone();
-                handle.geometry.scale(2.5, 2.5, 2.5); // Make center easy to hit
-              } else if (['XY', 'YZ', 'XZ'].includes(handle.name)) {
-                handle.geometry = handle.geometry.clone();
-                handle.geometry.scale(1.2, 1.2, 1.2); // Planar handles slightly larger
-              }
-            }
-            if (DEBUG_HITBOXES && handle.material) {
-              handle.material = handle.material.clone();
-              handle.material.visible = true; // Temp debug: make hitboxes visible
-              handle.material.opacity = 0.5;
-              handle.material.transparent = true;
-              handle.material.wireframe = true;
-              if (handle.material.color) {
-                handle.material.color.setHex(0xff00ff); // Magenta so it stands out
-              }
-              handle.visible = true; // Force mesh to be visible
-            }
+            if (!handle.geometry) return;
+
+            // Only scale the center and planar handles.
+            // Scaling X/Y/Z scales the rotation torus major radius, misaligning it with the visual gizmo!
+            const isCenter = handle.name === 'XYZ';
+            const isPlane = ['XY', 'YZ', 'XZ'].includes(handle.name);
+            if (!isCenter && !isPlane) return;
+
+            const scaleFactor = isCenter ? CENTER_HITBOX_SCALE : PLANE_HITBOX_SCALE;
+
+            // TransformControls bakes each handle's position/rotation into its
+            // geometry vertices (see setupGizmo() in TransformControls.js), so the
+            // planar handles' vertices are already offset to e.g. (0.15, 0.15, 0) —
+            // not centered at the origin. BufferGeometry.scale() scales around the
+            // geometry's local origin, so scaling this geometry directly would also
+            // drag the handle's position toward the gizmo center, not just resize it.
+            // Translate to origin, scale, then translate back to preserve the center.
+            const geometry = handle.geometry.clone();
+            geometry.computeBoundingBox();
+            const center = new THREE.Vector3();
+            geometry.boundingBox!.getCenter(center);
+            geometry.translate(-center.x, -center.y, -center.z);
+            geometry.scale(scaleFactor, scaleFactor, scaleFactor);
+            geometry.translate(center.x, center.y, center.z);
+            handle.geometry = geometry;
           });
         });
       }

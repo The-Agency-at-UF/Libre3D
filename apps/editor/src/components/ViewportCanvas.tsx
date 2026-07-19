@@ -212,6 +212,9 @@ export function ViewportCanvas() {
     objectManager.getMeshes().forEach((obj, id) => {
       const entity     = entities.find(e => e.id === id);
       const isSelected = selectedEntityIds.includes(id);
+      if (obj.userData.selectionOutline) {
+        (obj.userData.selectionOutline as THREE.LineSegments).visible = isSelected && (entity?.visible ?? true);
+      }
       if (obj.userData.helper) {
         const helper = obj.userData.helper as THREE.DirectionalLightHelper;
         if (entity?.visible) {

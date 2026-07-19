@@ -230,6 +230,7 @@ export interface EditorState {
   updateEntityTransform: (id: string, updates: EntityTransformUpdates) => void;
   updateMultipleEntityTransforms: (updates: Record<string, EntityTransformUpdates>) => void;
   selectEntity: (id: string | null, multi?: boolean) => void;
+  selectEntities: (ids: string[], mode?: "replace" | "add" | "subtract") => void;
   setCurrentPublishId: (id: string | null) => void;
   toggleVisibility: (id: string) => void;
   toggleLock: (id: string) => void;
@@ -260,7 +261,7 @@ export interface EditorState {
   removeMaterialLayer: (entityId: string, layerId: string) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -566,6 +567,18 @@ export const useEditorStore = create<EditorState>()(
                 };
               }
               return { selectedEntityIds: [id] };
+            }),
+          selectEntities: (ids, mode = "replace") =>
+            set((state) => {
+              if (mode === "replace") {
+                return { selectedEntityIds: [...new Set(ids)] };
+              }
+              if (mode === "add") {
+                return { selectedEntityIds: [...new Set([...state.selectedEntityIds, ...ids])] };
+              }
+              // subtract
+              const remove = new Set(ids);
+              return { selectedEntityIds: state.selectedEntityIds.filter((id) => !remove.has(id)) };
             }),
           setCurrentPublishId: (id) =>
             set({
