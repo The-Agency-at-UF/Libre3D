@@ -41,6 +41,16 @@ export function ViewportCanvas() {
   const { sceneManager, cameraManager, objectManager } = managers;
   const scene = sceneManager.scene;
 
+  // Dev-only console handle for manual smoke tests (no test suite — the THREE
+  // graph is inspected from the devtools console, see main.tsx). Set in an
+  // effect so it always points at the committed managers, not a render pass
+  // StrictMode discarded.
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__libre3dViewport = { sceneManager, objectManager };
+    }
+  }, [sceneManager, objectManager]);
+
   // -- Multi-select Proxy --
   const selectionProxyRef = useRef(new THREE.Group());
   const initialOffsetsRef = useRef<Map<string, THREE.Matrix4>>(new Map());
