@@ -2,3 +2,4 @@ node_modules
 CLAUDE.md
 docs
 .CLAUDE
+apps/editor/dist

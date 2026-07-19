@@ -92,7 +92,7 @@ function ColorSwatchField({
 export function MaterialsPanel({ selectedEntities: allSelectedEntities }: MaterialsPanelProps) {
   const updateMultipleEntityMaterialLayers = useEditorStore((state) => state.updateMultipleEntityMaterialLayers);
 
-  const selectedEntities = allSelectedEntities.filter((e) => e.type !== "directionalLight" && e.materialLayers);
+  const selectedEntities = allSelectedEntities.filter((e) => e.type !== "directionalLight" && e.type !== "importedModel" && e.materialLayers);
   if (selectedEntities.length === 0) return null;
 
   const colorLayers = selectedEntities.map((e) => ({ entity: e, layer: getColorLayer(e) })).filter((x) => x.layer);

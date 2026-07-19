@@ -1,33 +1,349 @@
-import { useState, useRef, useEffect } from "react";
-import { useEditorStore } from "../store/useEditorStore";
+import { useState, useRef, useEffect, useMemo } from "react";
+import { useEditorStore, type Entity } from "../store/useEditorStore";
+import {
+  getChildren,
+  getAncestorIds,
+  getDescendantIds,
+  getEntityIndex,
+  filterMoveRoots,
+  canReparentEntities,
+} from "../store/entityIndex";
 
 import { EyeIcon, LockIcon } from "./ui/Icons";
 
-interface HierarchyItemProps {
-  entityId: string;
+// One entry per row the tree is currently showing, in visual (top-to-bottom)
+// order. Range select, arrow-key navigation, drag-and-drop indices, and
+// virtualization all index into this same list.
+interface FlatRow {
+  id: string;
+  depth: number;
+  hasChildren: boolean;
+  isExpanded: boolean;
 }
 
-function HierarchyItem({ entityId }: HierarchyItemProps) {
+interface HierarchyItemProps {
+  entityId: string;
+  depth: number;
+  hasChildren: boolean;
+  isExpanded: boolean;
+  isActive: boolean;
+  isRenaming: boolean;
+  dropIndicator: "onto" | "top" | "bottom" | null;
+  dropDepth: number;
+  onToggleExpand: (id: string) => void;
+  onRowClick: (id: string, event: React.MouseEvent) => void;
+  onRowContextMenu: (id: string, event: React.MouseEvent) => void;
+  onRowDragStart: (id: string, event: React.DragEvent) => void;
+  onRowDragOver: (id: string, event: React.DragEvent) => void;
+  onRowDrop: (id: string, event: React.DragEvent) => void;
+  onRowDragEnd: () => void;
+  onRequestRename: (id: string) => void;
+  onFinishRename: () => void;
+}
+
+interface ContextMenuState {
+  x: number;
+  y: number;
+  targetId: string | null;
+}
+
+// Where the current drag would land. "onto" reparents under the row; "between"
+// inserts as a sibling at `index` under `parentId` — the indicator line renders
+// on `indicatorRowId`'s top/bottom edge at `depth`'s indent.
+type DropTarget =
+  | { kind: "onto"; targetId: string }
+  | {
+    kind: "between";
+    parentId: string | null;
+    index: number;
+    indicatorRowId: string;
+    edge: "top" | "bottom";
+    depth: number;
+  };
+
+const ROW_INDENT_BASE_REM = 0.85;
+const ROW_INDENT_STEP_REM = 0.85;
+
+// Above this many visible rows the tree windows its rendering: only rows in
+// (and near) the scroll viewport mount, with spacer divs standing in for the
+// rest. Below it, plain full rendering — simpler and plenty fast.
+const VIRTUALIZE_THRESHOLD = 200;
+const VIRTUALIZE_OVERSCAN = 12;
+
+// Tabler webfont classes (already loaded via CDN in index.html) — the
+// glanceable replacement for the removed text type badge.
+const iconClassForEntity = (entity: Entity): string => {
+  switch (entity.type) {
+    case "cube":
+      return "ti ti-cube";
+    case "sphere":
+      return "ti ti-sphere";
+    case "torus":
+      return "ti ti-torus";
+    case "directionalLight":
+      return "ti ti-sun";
+    case "group":
+      return "ti ti-folder";
+    case "importedModel":
+      // The import root carries the asset; inner nodes are plain glTF nodes.
+      return entity.assetId ? "ti ti-package" : "ti ti-point";
+    default:
+      return "ti ti-point";
+  }
+};
+
+// Blender's Ctrl+F2 equivalent: find/replace plus prefix/suffix across the
+// whole selection, applied through renameEntities in one undo step.
+function BatchRenameDialog({ onClose }: { onClose: () => void }) {
+  const [find, setFind] = useState("");
+  const [replace, setReplace] = useState("");
+  const [prefix, setPrefix] = useState("");
+  const [suffix, setSuffix] = useState("");
+  const selectedCount = useEditorStore((state) => state.selectedEntityIds.length);
+
+  const apply = () => {
+    const state = useEditorStore.getState();
+    const updates: Record<string, string> = {};
+    state.selectedEntityIds.forEach((id) => {
+      const entity = state.entities.find((e) => e.id === id);
+      if (!entity || entity.locked) return;
+      let name = entity.name;
+      if (find) name = name.split(find).join(replace);
+      name = `${prefix}${name}${suffix}`;
+      if (name.trim() && name !== entity.name) updates[id] = name;
+    });
+    if (Object.keys(updates).length > 0) state.renameEntities(updates);
+    onClose();
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter") apply();
+    if (event.key === "Escape") onClose();
+  };
+
+  return (
+    <>
+      <div className="hierarchy-context-overlay" onClick={onClose} />
+      <div className="hierarchy-batch-rename" onKeyDown={handleKeyDown}>
+        <div className="hierarchy-batch-rename-title">
+          Batch Rename ({selectedCount} selected)
+        </div>
+        <label>
+          Find
+          <input autoFocus type="text" value={find} onChange={(e) => setFind(e.target.value)} />
+        </label>
+        <label>
+          Replace with
+          <input type="text" value={replace} onChange={(e) => setReplace(e.target.value)} />
+        </label>
+        <label>
+          Prefix
+          <input type="text" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
+        </label>
+        <label>
+          Suffix
+          <input type="text" value={suffix} onChange={(e) => setSuffix(e.target.value)} />
+        </label>
+        <div className="hierarchy-batch-rename-actions">
+          <button type="button" className="hamburger-dropdown-btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="hamburger-dropdown-btn hierarchy-batch-rename-apply" onClick={apply}>
+            Apply
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// Right-click menu. Every action operates on the whole current selection
+// (Blender's convention); enablement mirrors the same store guards the
+// actions themselves enforce, so a disabled item is never a lie.
+function HierarchyContextMenu({
+  menu,
+  onClose,
+  onRename,
+  onBatchRename,
+}: {
+  menu: ContextMenuState;
+  onClose: () => void;
+  onRename: (id: string) => void;
+  onBatchRename: () => void;
+}) {
+  const entities = useEditorStore((state) => state.entities);
+  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
+  const duplicateEntity = useEditorStore((state) => state.duplicateEntity);
+  const removeEntity = useEditorStore((state) => state.removeEntity);
+  const groupEntities = useEditorStore((state) => state.groupEntities);
+  const ungroupEntity = useEditorStore((state) => state.ungroupEntity);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const byId = new Map(entities.map((entity) => [entity.id, entity]));
+  const selected = selectedEntityIds
+    .map((id) => byId.get(id))
+    .filter((entity): entity is Entity => !!entity);
+  const targetEntity = menu.targetId ? byId.get(menu.targetId) : undefined;
+
+  const canRename = !!targetEntity && !targetEntity.locked;
+
+  const moveRoots = filterMoveRoots(entities, selectedEntityIds);
+  const parentIds = new Set(moveRoots.map((id) => byId.get(id)?.parentId ?? null));
+  const groupParentId = parentIds.size === 1 ? [...parentIds][0] : null;
+  const canGroup = moveRoots.length > 0 && canReparentEntities(entities, moveRoots, groupParentId);
+
+  const selectedGroups = selected.filter((entity) => entity.type === "group");
+  const deletableIds = selected.filter((entity) => !entity.locked).map((entity) => entity.id);
+  const hasSelection = selected.length > 0;
+
+  // Keep the menu on-screen when invoked near the viewport edge.
+  const MENU_WIDTH = 190;
+  const MENU_HEIGHT = 230;
+  const x = Math.max(4, Math.min(menu.x, window.innerWidth - MENU_WIDTH - 8));
+  const y = Math.max(4, Math.min(menu.y, window.innerHeight - MENU_HEIGHT - 8));
+
+  const run = (action: () => void) => {
+    action();
+    onClose();
+  };
+
+  return (
+    <>
+      <div
+        className="hierarchy-context-overlay"
+        onClick={onClose}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onClose();
+        }}
+      />
+      <div className="hierarchy-context-menu" style={{ left: x, top: y }}>
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={!canRename}
+          onClick={() => run(() => onRename(menu.targetId!))}
+        >
+          <span>Rename</span>
+          <span className="hamburger-dropdown-shortcut">F2</span>
+        </button>
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={selected.length < 2}
+          onClick={() => run(onBatchRename)}
+        >
+          <span>Batch Rename…</span>
+        </button>
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={!hasSelection}
+          onClick={() => run(() => duplicateEntity(useEditorStore.getState().selectedEntityIds))}
+        >
+          <span>Duplicate</span>
+          <span className="hamburger-dropdown-shortcut">Ctrl+D</span>
+        </button>
+        <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={!canGroup}
+          onClick={() => run(() => groupEntities(useEditorStore.getState().selectedEntityIds))}
+        >
+          <span>Group Selection</span>
+        </button>
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={selectedGroups.length === 0}
+          onClick={() => run(() => selectedGroups.forEach((group) => ungroupEntity(group.id)))}
+        >
+          <span>Ungroup</span>
+        </button>
+        <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={!hasSelection}
+          onClick={() =>
+            run(() => {
+              window.dispatchEvent(new CustomEvent("libre3d-center-on-selected"));
+              window.dispatchEvent(new CustomEvent("libre3d-orientate-to-selected"));
+            })
+          }
+        >
+          <span>Frame Selected</span>
+          <span className="hamburger-dropdown-shortcut">F</span>
+        </button>
+        <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={deletableIds.length === 0}
+          onClick={() => run(() => removeEntity(deletableIds))}
+        >
+          <span>Delete</span>
+          <span className="hamburger-dropdown-shortcut">Del</span>
+        </button>
+      </div>
+    </>
+  );
+}
+
+function HierarchyItem({
+  entityId,
+  depth,
+  hasChildren,
+  isExpanded,
+  isActive,
+  isRenaming,
+  dropIndicator,
+  dropDepth,
+  onToggleExpand,
+  onRowClick,
+  onRowContextMenu,
+  onRowDragStart,
+  onRowDragOver,
+  onRowDrop,
+  onRowDragEnd,
+  onRequestRename,
+  onFinishRename,
+}: HierarchyItemProps) {
   const entity = useEditorStore((state) =>
     state.entities.find((e) => e.id === entityId)
   );
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
-  const selectEntity = useEditorStore((state) => state.selectEntity);
   const removeEntity = useEditorStore((state) => state.removeEntity);
   const toggleVisibility = useEditorStore((state) => state.toggleVisibility);
   const toggleLock = useEditorStore((state) => state.toggleLock);
   const renameEntity = useEditorStore((state) => state.renameEntity);
 
-  const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
 
+  // Rename can start from double-click or F2 — either way the panel owns
+  // `renamingId`, and this effect seeds/focuses the input when it points here.
+  // Focus is deferred a frame so select() runs against the seeded value, not
+  // the input's initial empty string.
+  const entityName = entity?.name ?? "";
   useEffect(() => {
-    if (isEditing && inputRef.current) {
-      inputRef.current.focus();
-      inputRef.current.select();
-    }
-  }, [isEditing]);
+    if (!isRenaming) return;
+    setEditName(entityName);
+    const frame = requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+    return () => cancelAnimationFrame(frame);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isRenaming]);
 
   if (!entity) return null;
 
@@ -36,15 +352,14 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
   const handleDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (entity.locked) return; // Cannot rename locked elements
-    setEditName(entity.name);
-    setIsEditing(true);
+    onRequestRename(entity.id);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       saveRename();
     } else if (e.key === "Escape") {
-      setIsEditing(false);
+      onFinishRename();
     }
   };
 
@@ -53,16 +368,60 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
     if (trimmed) {
       renameEntity(entity.id, trimmed);
     }
-    setIsEditing(false);
+    onFinishRename();
   };
+
+  // Depth is already compressed by the caller so single-child "pass-through"
+  // chains (common in imported glTF: RootNode > Object_4 > _rootJoint, etc.)
+  // don't each consume their own indent level. This cap is just a last-resort
+  // safety net for genuinely wide/deep branching trees so a row can never be
+  // indented so far that its label and controls get clipped.
+  const visualDepth = Math.min(depth, 24);
 
   return (
     <div
-      className={`editor-tree-item${isSelected ? " editor-tree-item--selected" : ""}${entity.locked ? " editor-tree-item--locked" : ""}`}
-      style={{ paddingLeft: "0.85rem" }}
+      className={`editor-tree-item${isSelected ? " editor-tree-item--selected" : ""}${isActive ? " editor-tree-item--active" : ""}${entity.locked ? " editor-tree-item--locked" : ""}${dropIndicator === "onto" ? " editor-tree-item--drop-onto" : ""}`}
+      style={{ paddingLeft: `${ROW_INDENT_BASE_REM + visualDepth * ROW_INDENT_STEP_REM}rem` }}
+      data-entity-id={entity.id}
+      onContextMenu={(e) => onRowContextMenu(entity.id, e)}
+      draggable={!isRenaming}
+      onDragStart={(e) => onRowDragStart(entity.id, e)}
+      onDragOver={(e) => onRowDragOver(entity.id, e)}
+      onDrop={(e) => onRowDrop(entity.id, e)}
+      onDragEnd={onRowDragEnd}
     >
+      {(dropIndicator === "top" || dropIndicator === "bottom") && (
+        <div
+          className={`hierarchy-drop-line hierarchy-drop-line--${dropIndicator}`}
+          style={{ left: `${ROW_INDENT_BASE_REM + Math.min(dropDepth, 24) * ROW_INDENT_STEP_REM}rem` }}
+        />
+      )}
+      {/* One vertical connector per ancestor indent level, centered under the
+          ancestor's expand arrow; -2px top bridges the tree's row gap. */}
+      {Array.from({ length: visualDepth }, (_, level) => (
+        <span
+          key={level}
+          className="hierarchy-depth-guide"
+          style={{ left: `${ROW_INDENT_BASE_REM + level * ROW_INDENT_STEP_REM + 0.32}rem` }}
+        />
+      ))}
       <div className="editor-tree-main-row">
-        {isEditing ? (
+        {hasChildren ? (
+          <button
+            className="hierarchy-expand-btn"
+            type="button"
+            aria-label={isExpanded ? "Collapse" : "Expand"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleExpand(entity.id);
+            }}
+          >
+            {isExpanded ? "▾" : "▸"}
+          </button>
+        ) : (
+          <span className="hierarchy-expand-spacer" />
+        )}
+        {isRenaming ? (
           <input
             ref={inputRef}
             className="hierarchy-rename-input"
@@ -78,12 +437,12 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              selectEntity(entity.id, e.shiftKey);
+              onRowClick(entity.id, e);
             }}
             onDoubleClick={handleDoubleClick}
           >
+            <i className={`editor-tree-icon ${iconClassForEntity(entity)}`} aria-hidden="true" />
             <span className="editor-tree-name">{entity.name}</span>
-            <span className="editor-tree-type">{entity.type}</span>
           </button>
         )}
 
@@ -131,21 +490,589 @@ function HierarchyItem({ entityId }: HierarchyItemProps) {
 export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const entities = useEditorStore((state) => state.entities) ?? [];
   const selectEntity = useEditorStore((state) => state.selectEntity);
-  const filtered = entities.filter((e) =>
-    e.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    e.type.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const selectEntities = useEditorStore((state) => state.selectEntities);
+  const reparentEntities = useEditorStore((state) => state.reparentEntities);
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  // Keyboard cursor + range anchor. `activeId` follows every click and arrow
+  // move; `anchorId` only follows non-shift clicks, so successive Shift+Clicks
+  // extend from the same origin (standard file-browser / Blender behavior).
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [anchorId, setAnchorId] = useState<string | null>(null);
+  const pendingImportCount = useEditorStore((state) => state.pendingImportCount);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  // The ids being dragged live in a ref, not dataTransfer — browsers hide
+  // dataTransfer contents during dragover, and we need them there to compute
+  // legality (blocked cursor) per hovered row.
+  const draggedIdsRef = useRef<string[]>([]);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const dragExpandTimer = useRef<{ id: string; timer: number } | null>(null);
+  const [batchRenameOpen, setBatchRenameOpen] = useState(false);
+  // Virtualization: mounted row window (null = render everything).
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  const scrollParentRef = useRef<HTMLElement | null>(null);
+  const rowPitchRef = useRef(26);
+  const [rowWindow, setRowWindow] = useState<{ start: number; end: number } | null>(null);
+
+  const toggleExpand = (id: string) => {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const setSubtreeCollapsed = (id: string, collapsed: boolean) => {
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      const targets = [id, ...getDescendantIds(entities, id)];
+      targets.forEach((targetId) => {
+        if (collapsed) {
+          next.add(targetId);
+        } else {
+          next.delete(targetId);
+        }
+      });
+      return next;
+    });
+  };
+
+  const trimmedQuery = searchQuery.trim().toLowerCase();
+
+  // null means "no filter, show everything". When searching, a node is visible
+  // if it matches directly or is an ancestor of a match — otherwise a matching
+  // leaf deep in the tree would render with no parent rows above it.
+  const visibleIds = useMemo(() => {
+    if (!trimmedQuery) return null;
+
+    const visible = new Set<string>();
+    entities.forEach((entity) => {
+      if (entity.name.toLowerCase().includes(trimmedQuery) || entity.type.toLowerCase().includes(trimmedQuery)) {
+        visible.add(entity.id);
+        getAncestorIds(entities, entity.id).forEach((ancestorId) => visible.add(ancestorId));
+      }
+    });
+    return visible;
+  }, [entities, trimmedQuery]);
+
+  const flatRows = useMemo(() => {
+    const rows: FlatRow[] = [];
+
+    // Single-child "pass-through" nodes (near-universal in imported glTF —
+    // wrapper groups that exist only to carry a name/compensation transform,
+    // e.g. RootNode > Object_4 > _rootJoint) render at the same indent as
+    // their parent instead of each claiming their own level. Indent only
+    // advances at an actual branch point (a node with 2+ children) or a leaf.
+    // This is purely a rendering choice — it doesn't touch entity data, so
+    // selection/rename/delete/nodePath hydration are unaffected.
+    const walk = (parentId: string | null, depth: number) => {
+      const siblings = getChildren(entities, parentId);
+      const childDepth = siblings.length === 1 ? depth : depth + 1;
+
+      for (const child of siblings) {
+        if (visibleIds && !visibleIds.has(child.id)) continue;
+
+        const hasChildren = getChildren(entities, child.id).length > 0;
+        const isExpanded = trimmedQuery.length > 0 || !collapsedIds.has(child.id);
+
+        rows.push({ id: child.id, depth: childDepth, hasChildren, isExpanded });
+        if (hasChildren && isExpanded) walk(child.id, childDepth);
+      }
+    };
+
+    walk(null, 0);
+    return rows;
+  }, [entities, visibleIds, collapsedIds, trimmedQuery]);
+
+  // Window the mounted rows to the scroll viewport once the tree is large.
+  useEffect(() => {
+    if (flatRows.length <= VIRTUALIZE_THRESHOLD) {
+      scrollParentRef.current = null;
+      setRowWindow(null);
+      return;
+    }
+    const treeEl = treeRef.current;
+    if (!treeEl) return;
+
+    let scroller: HTMLElement | null = treeEl.parentElement;
+    while (scroller && scroller !== document.body) {
+      const { overflowY } = getComputedStyle(scroller);
+      if (overflowY === "auto" || overflowY === "scroll") break;
+      scroller = scroller.parentElement;
+    }
+    if (scroller === document.body) scroller = null;
+    scrollParentRef.current = scroller;
+
+    const update = () => {
+      // Pitch (row height + tree gap) measured from two mounted neighbors.
+      const rows = treeEl.querySelectorAll("[data-entity-id]");
+      if (rows.length >= 2) {
+        const pitch = rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top;
+        if (pitch > 8) rowPitchRef.current = pitch;
+      }
+      const pitch = rowPitchRef.current;
+      const viewTop = scroller ? scroller.getBoundingClientRect().top : 0;
+      const viewHeight = scroller ? scroller.clientHeight : window.innerHeight;
+      const scrolledPast = viewTop - treeEl.getBoundingClientRect().top;
+      const start = Math.max(0, Math.floor(scrolledPast / pitch) - VIRTUALIZE_OVERSCAN);
+      const count = Math.ceil(viewHeight / pitch) + VIRTUALIZE_OVERSCAN * 2;
+      setRowWindow((prev) => {
+        const next = { start, end: Math.min(flatRows.length, start + count) };
+        return prev && prev.start === next.start && prev.end === next.end ? prev : next;
+      });
+    };
+
+    update();
+    const target: HTMLElement | Window = scroller ?? window;
+    target.addEventListener("scroll", update, { passive: true });
+    const resizeObserver = new ResizeObserver(update);
+    if (scroller) resizeObserver.observe(scroller);
+    return () => {
+      target.removeEventListener("scroll", update);
+      resizeObserver.disconnect();
+    };
+  }, [flatRows.length]);
+
+  const scrollRowIntoView = (id: string) => {
+    const el = containerRef.current?.querySelector(`[data-entity-id="${CSS.escape(id)}"]`);
+    if (el) {
+      el.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    // Virtualized and not mounted: jump the scroll container to the row's
+    // computed offset; the window effect mounts it on the resulting scroll.
+    const rowIndex = flatRows.findIndex((row) => row.id === id);
+    const scroller = scrollParentRef.current;
+    const treeEl = treeRef.current;
+    if (rowIndex === -1 || !scroller || !treeEl) return;
+    const treeTopInScroller =
+      treeEl.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    scroller.scrollTop = treeTopInScroller + rowIndex * rowPitchRef.current - scroller.clientHeight / 2;
+  };
+
+  // Replace-select every visible row between the two ids (inclusive).
+  const selectRange = (fromId: string, toId: string): boolean => {
+    const fromIndex = flatRows.findIndex((row) => row.id === fromId);
+    const toIndex = flatRows.findIndex((row) => row.id === toId);
+    if (fromIndex === -1 || toIndex === -1) return false;
+
+    const [lo, hi] = fromIndex < toIndex ? [fromIndex, toIndex] : [toIndex, fromIndex];
+    selectEntities(flatRows.slice(lo, hi + 1).map((row) => row.id), "replace");
+    return true;
+  };
+
+  // --- Drag and drop ---
+
+  const cancelAutoExpand = () => {
+    if (dragExpandTimer.current) {
+      clearTimeout(dragExpandTimer.current.timer);
+      dragExpandTimer.current = null;
+    }
+  };
+
+  const clearDrag = () => {
+    draggedIdsRef.current = [];
+    setDropTarget(null);
+    cancelAutoExpand();
+  };
+
+  // Hovering "onto" a collapsed branch expands it after a short dwell so the
+  // user can dive into subtrees mid-drag (standard file-tree behavior).
+  const scheduleAutoExpand = (id: string) => {
+    if (!collapsedIds.has(id) || dragExpandTimer.current?.id === id) return;
+    cancelAutoExpand();
+    dragExpandTimer.current = {
+      id,
+      timer: window.setTimeout(() => {
+        dragExpandTimer.current = null;
+        setCollapsedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }, 650),
+    };
+  };
+
+  // Insertion index among `parentId`'s children with the dragged entities
+  // removed — exactly the semantics reparentEntities expects.
+  const insertionIndex = (parentId: string | null, referenceId: string | null, after: boolean): number => {
+    const dragged = new Set(draggedIdsRef.current);
+    const siblings = getChildren(entities, parentId).filter((sibling) => !dragged.has(sibling.id));
+    if (!referenceId) return siblings.length;
+    const referenceIndex = siblings.findIndex((sibling) => sibling.id === referenceId);
+    if (referenceIndex === -1) return siblings.length;
+    return after ? referenceIndex + 1 : referenceIndex;
+  };
+
+  const computeDropTarget = (rowId: string, event: React.DragEvent): DropTarget | null => {
+    const rowIndex = flatRows.findIndex((row) => row.id === rowId);
+    if (rowIndex === -1) return null;
+    const row = flatRows[rowIndex];
+    const { byId } = getEntityIndex(entities);
+    const entity = byId.get(row.id);
+    if (!entity) return null;
+
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    const ratio = (event.clientY - rect.top) / Math.max(rect.height, 1);
+
+    // Top quarter: insert before this row among its siblings.
+    if (ratio < 0.25) {
+      const parentId = entity.parentId ?? null;
+      return {
+        kind: "between",
+        parentId,
+        index: insertionIndex(parentId, row.id, false),
+        indicatorRowId: row.id,
+        edge: "top",
+        depth: row.depth,
+      };
+    }
+
+    // Bottom quarter: insert after. An expanded branch's "after" slot is its
+    // first-child position; at the end of a subtree the same gap visually
+    // belongs to several ancestors, so cursor X picks the indent level
+    // (Blender's drop-indicator indent snap).
+    if (ratio > 0.75) {
+      if (row.hasChildren && row.isExpanded) {
+        return {
+          kind: "between",
+          parentId: row.id,
+          index: 0,
+          indicatorRowId: row.id,
+          edge: "bottom",
+          depth: row.depth + 1,
+        };
+      }
+
+      const nextRow = flatRows[rowIndex + 1] ?? null;
+      const minDepth = nextRow ? nextRow.depth : (flatRows[0]?.depth ?? 0);
+
+      const candidates = [{ parentId: entity.parentId ?? null, refId: entity.id, depth: row.depth }];
+      let current = entity;
+      while (current.parentId && candidates[candidates.length - 1].depth > minDepth) {
+        const parent = byId.get(current.parentId);
+        if (!parent) break;
+        const parentRow = flatRows.find((r) => r.id === parent.id);
+        const parentDepth = parentRow?.depth ?? 0;
+        if (parentDepth < minDepth) break;
+        candidates.push({ parentId: parent.parentId ?? null, refId: parent.id, depth: parentDepth });
+        current = parent;
+      }
+
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const cursorDepth = Math.round(
+        ((event.clientX - rect.left) / rem - ROW_INDENT_BASE_REM) / ROW_INDENT_STEP_REM,
+      );
+      let best = candidates[0];
+      for (const candidate of candidates) {
+        if (Math.abs(candidate.depth - cursorDepth) < Math.abs(best.depth - cursorDepth)) best = candidate;
+      }
+      return {
+        kind: "between",
+        parentId: best.parentId,
+        index: insertionIndex(best.parentId, best.refId, true),
+        indicatorRowId: row.id,
+        edge: "bottom",
+        depth: best.depth,
+      };
+    }
+
+    return { kind: "onto", targetId: row.id };
+  };
+
+  const handleRowDragStart = (id: string, event: React.DragEvent) => {
+    const state = useEditorStore.getState();
+    const entity = state.entities.find((e) => e.id === id);
+    if (!entity || entity.locked) {
+      event.preventDefault();
+      return;
+    }
+
+    // Dragging a selected row moves the whole selection (its move roots);
+    // dragging an unselected row selects and moves just that row.
+    let ids: string[];
+    if (state.selectedEntityIds.includes(id)) {
+      ids = filterMoveRoots(state.entities, state.selectedEntityIds).filter((rootId) => {
+        const root = state.entities.find((e) => e.id === rootId);
+        return !!root && !root.locked;
+      });
+    } else {
+      selectEntity(id, false);
+      setActiveId(id);
+      setAnchorId(id);
+      ids = [id];
+    }
+    if (ids.length === 0) {
+      event.preventDefault();
+      return;
+    }
+
+    draggedIdsRef.current = ids;
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", "libre3d-entities"); // Firefox needs data to start a drag
+
+    if (ids.length > 1) {
+      const ghost = document.createElement("div");
+      ghost.className = "hierarchy-drag-ghost";
+      ghost.textContent = `${ids.length} objects`;
+      document.body.appendChild(ghost);
+      event.dataTransfer.setDragImage(ghost, 12, 12);
+      setTimeout(() => ghost.remove(), 0); // only needs to exist for the capture
+    }
+  };
+
+  const handleRowDragOver = (id: string, event: React.DragEvent) => {
+    event.stopPropagation();
+    if (draggedIdsRef.current.length === 0) return; // foreign drag (files, etc.)
+
+    const target = computeDropTarget(id, event);
+    const newParentId = target ? (target.kind === "onto" ? target.targetId : target.parentId) : null;
+    const legal = !!target && canReparentEntities(entities, draggedIdsRef.current, newParentId);
+
+    if (legal) {
+      // Without preventDefault the browser shows the blocked cursor and
+      // refuses the drop — exactly what an illegal target should do.
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+    }
+    setDropTarget(legal ? target : null);
+
+    if (legal && target!.kind === "onto") {
+      const row = flatRows.find((r) => r.id === id);
+      if (row?.hasChildren && !row.isExpanded) scheduleAutoExpand(id);
+    } else {
+      cancelAutoExpand();
+    }
+  };
+
+  const handleRowDrop = (id: string, event: React.DragEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const ids = draggedIdsRef.current;
+    const target = computeDropTarget(id, event);
+    if (ids.length > 0 && target) {
+      const newParentId = target.kind === "onto" ? target.targetId : target.parentId;
+      if (canReparentEntities(entities, ids, newParentId)) {
+        if (target.kind === "onto") {
+          reparentEntities(ids, target.targetId);
+        } else {
+          reparentEntities(ids, target.parentId, target.index);
+        }
+      }
+    }
+    clearDrag();
+  };
+
+  // Empty space below the rows: move to the end of the scene root.
+  const handleContainerDragOver = (event: React.DragEvent) => {
+    if (draggedIdsRef.current.length === 0) return;
+    const legal = canReparentEntities(entities, draggedIdsRef.current, null);
+    if (!legal) {
+      setDropTarget(null);
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const lastRow = flatRows[flatRows.length - 1];
+    setDropTarget({
+      kind: "between",
+      parentId: null,
+      index: insertionIndex(null, null, false),
+      indicatorRowId: lastRow?.id ?? "",
+      edge: "bottom",
+      depth: flatRows[0]?.depth ?? 0,
+    });
+  };
+
+  const handleContainerDrop = (event: React.DragEvent) => {
+    event.preventDefault();
+    const ids = draggedIdsRef.current;
+    if (ids.length > 0 && canReparentEntities(entities, ids, null)) {
+      reparentEntities(ids, null, insertionIndex(null, null, false));
+    }
+    clearDrag();
+  };
+
+  // Right-clicking an unselected row selects it first (Blender/Spline
+  // behavior); right-clicking inside the selection keeps it, so menu actions
+  // operate on the whole multi-selection.
+  const handleRowContextMenu = (id: string, event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!useEditorStore.getState().selectedEntityIds.includes(id)) {
+      selectEntity(id, false);
+      setActiveId(id);
+      setAnchorId(id);
+    }
+    setContextMenu({ x: event.clientX, y: event.clientY, targetId: id });
+  };
+
+  const handleRowClick = (id: string, event: React.MouseEvent) => {
+    if (event.shiftKey && anchorId && selectRange(anchorId, id)) {
+      setActiveId(id);
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
+      selectEntity(id, true);
+    } else {
+      selectEntity(id, false);
+    }
+    setActiveId(id);
+    setAnchorId(id);
+  };
+
+  // Outliner-scoped keys — deliberately NOT in the global useHotkeys: they
+  // should only fire while the panel (or a row inside it) has focus.
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    const target = event.target as HTMLElement;
+    if (target.tagName === "INPUT") return; // rename input owns its keys
+
+    const activeIndex = activeId ? flatRows.findIndex((row) => row.id === activeId) : -1;
+    const activeRow = activeIndex !== -1 ? flatRows[activeIndex] : null;
+
+    switch (event.key) {
+      case "ArrowDown":
+      case "ArrowUp": {
+        event.preventDefault();
+        if (flatRows.length === 0) return;
+
+        const delta = event.key === "ArrowDown" ? 1 : -1;
+        const nextIndex = activeIndex === -1
+          ? (delta === 1 ? 0 : flatRows.length - 1)
+          : Math.min(flatRows.length - 1, Math.max(0, activeIndex + delta));
+        const nextId = flatRows[nextIndex].id;
+
+        if (event.shiftKey && anchorId && selectRange(anchorId, nextId)) {
+          // extended the range; anchor stays put
+        } else {
+          selectEntity(nextId, false);
+          setAnchorId(nextId);
+        }
+        setActiveId(nextId);
+        scrollRowIntoView(nextId);
+        break;
+      }
+      case "ArrowRight":
+      case "ArrowLeft": {
+        if (!activeRow || !activeRow.hasChildren) return;
+        event.preventDefault();
+
+        const collapse = event.key === "ArrowLeft";
+        if (event.shiftKey) {
+          setSubtreeCollapsed(activeRow.id, collapse);
+        } else if (collapse === activeRow.isExpanded) {
+          toggleExpand(activeRow.id);
+        }
+        break;
+      }
+      case "F2": {
+        if (!activeId) return;
+        const entity = entities.find((e) => e.id === activeId);
+        if (!entity || entity.locked) return;
+        event.preventDefault();
+        setRenamingId(activeId);
+        break;
+      }
+      default:
+        break;
+    }
+  };
 
   return (
     <div
-      style={{ display: "grid", gap: "0.85rem", minHeight: "100%" }}
-      onClick={(e) => selectEntity(null, e.shiftKey)}
+      ref={containerRef}
+      style={{ display: "grid", gap: "0.85rem", minHeight: "100%", outline: "none" }}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
+      onClick={(e) => {
+        if (!e.shiftKey && !e.ctrlKey && !e.metaKey) selectEntity(null);
+      }}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        setContextMenu({ x: e.clientX, y: e.clientY, targetId: null });
+      }}
+      onDragOver={handleContainerDragOver}
+      onDrop={handleContainerDrop}
+      onDragLeave={(e) => {
+        // Only clear when the drag actually leaves the panel, not when moving
+        // between child rows.
+        if (!containerRef.current?.contains(e.relatedTarget as Node)) setDropTarget(null);
+      }}
     >
-      <div className="editor-tree" aria-label="Scene hierarchy">
-        {filtered.map((entity) => (
-          <HierarchyItem key={entity.id} entityId={entity.id} />
+      <div className="editor-tree" aria-label="Scene hierarchy" ref={treeRef}>
+        {pendingImportCount > 0 && (
+          <div className="hierarchy-status-note" role="status">
+            <i className="ti ti-loader-2 hierarchy-status-spinner" aria-hidden="true" />
+            Importing {pendingImportCount > 1 ? `${pendingImportCount} models` : "model"}…
+          </div>
+        )}
+        {flatRows.length === 0 && pendingImportCount === 0 && (
+          <div className="hierarchy-empty-state">
+            {trimmedQuery
+              ? `No objects match “${searchQuery.trim()}”.`
+              : "Scene is empty. Add a shape with the + button, or drop a .glb file into the viewport."}
+          </div>
+        )}
+        {rowWindow && rowWindow.start > 0 && (
+          <div style={{ height: rowWindow.start * rowPitchRef.current - 2, flexShrink: 0 }} aria-hidden="true" />
+        )}
+        {(rowWindow ? flatRows.slice(rowWindow.start, rowWindow.end) : flatRows).map((row) => (
+          <HierarchyItem
+            key={row.id}
+            entityId={row.id}
+            depth={row.depth}
+            hasChildren={row.hasChildren}
+            isExpanded={row.isExpanded}
+            isActive={row.id === activeId}
+            isRenaming={row.id === renamingId}
+            dropIndicator={
+              !dropTarget
+                ? null
+                : dropTarget.kind === "onto"
+                  ? (row.id === dropTarget.targetId ? "onto" : null)
+                  : (row.id === dropTarget.indicatorRowId ? dropTarget.edge : null)
+            }
+            dropDepth={dropTarget?.kind === "between" ? dropTarget.depth : 0}
+            onToggleExpand={toggleExpand}
+            onRowClick={handleRowClick}
+            onRowContextMenu={handleRowContextMenu}
+            onRowDragStart={handleRowDragStart}
+            onRowDragOver={handleRowDragOver}
+            onRowDrop={handleRowDrop}
+            onRowDragEnd={clearDrag}
+            onRequestRename={(id) => {
+              setRenamingId(id);
+              setActiveId(id);
+            }}
+            onFinishRename={() => setRenamingId(null)}
+          />
         ))}
+        {rowWindow && rowWindow.end < flatRows.length && (
+          <div
+            style={{ height: (flatRows.length - rowWindow.end) * rowPitchRef.current - 2, flexShrink: 0 }}
+            aria-hidden="true"
+          />
+        )}
       </div>
+
+      {contextMenu && (
+        <HierarchyContextMenu
+          menu={contextMenu}
+          onClose={() => setContextMenu(null)}
+          onRename={(id) => {
+            setRenamingId(id);
+            setActiveId(id);
+          }}
+          onBatchRename={() => setBatchRenameOpen(true)}
+        />
+      )}
+      {batchRenameOpen && <BatchRenameDialog onClose={() => setBatchRenameOpen(false)} />}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import { ObjectManager } from "../viewport/ObjectManager";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
 import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
+import { prepareModelImport } from "../utils/importModel";
 
 export function ViewportCanvas() {
   const wrapperRef   = useRef<HTMLDivElement | null>(null);
@@ -39,6 +40,16 @@ export function ViewportCanvas() {
 
   const { sceneManager, cameraManager, objectManager } = managers;
   const scene = sceneManager.scene;
+
+  // Dev-only console handle for manual smoke tests (no test suite — the THREE
+  // graph is inspected from the devtools console, see main.tsx). Set in an
+  // effect so it always points at the committed managers, not a render pass
+  // StrictMode discarded.
+  useEffect(() => {
+    if (import.meta.env.DEV) {
+      (window as unknown as Record<string, unknown>).__libre3dViewport = { sceneManager, objectManager };
+    }
+  }, [sceneManager, objectManager]);
 
   // -- Multi-select Proxy --
   const selectionProxyRef = useRef(new THREE.Group());
@@ -153,9 +164,17 @@ export function ViewportCanvas() {
     sceneManager.updateGridVisibility(sceneSettings.showGrid !== false);
 
     // Wireframe sync
-    objectManager?.getMeshes().forEach((mesh) => {
-      if (mesh instanceof THREE.Mesh && "wireframe" in mesh.material) {
-        (mesh.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
+    objectManager?.getMeshes().forEach((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        if ("wireframe" in obj.material) {
+          (obj.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
+        }
+      } else {
+        obj.traverse((child) => {
+          if (child instanceof THREE.Mesh && "wireframe" in child.material) {
+            (child.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
+          }
+        });
       }
     });
   }, [sceneManager, sceneSettings, objectManager]);
@@ -344,6 +363,43 @@ export function ViewportCanvas() {
       window.removeEventListener("libre3d-orientate-to-selected", handleOrientateToSelected);
     };
   }, [orbitControlsRef, objectManager, cameraRef]);
+
+  // -- Drag-and-drop .glb import --
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleDragOver = (event: DragEvent) => {
+      event.preventDefault();
+    };
+
+    const handleDrop = (event: DragEvent) => {
+      event.preventDefault();
+      const files = event.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+
+      Array.from(files).forEach((file) => {
+        useEditorStore.getState().adjustPendingImports(1);
+        prepareModelImport(file)
+          .then(({ assetId, nodes }) => {
+            useEditorStore.getState().addImportedModelHierarchy(assetId, nodes);
+          })
+          .catch((error) => {
+            console.error("[Libre3D] Failed to import dropped model:", error);
+          })
+          .finally(() => {
+            useEditorStore.getState().adjustPendingImports(-1);
+          });
+      });
+    };
+
+    container.addEventListener("dragover", handleDragOver);
+    container.addEventListener("drop", handleDrop);
+    return () => {
+      container.removeEventListener("dragover", handleDragOver);
+      container.removeEventListener("drop", handleDrop);
+    };
+  }, []);
 
   const frameScaleLabel = `${Math.round(autoScaleFactor * 100)}%`;
 

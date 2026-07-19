@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { type Entity, type MaterialLayer, type ColorLayer, type LightingLayer } from "../store/useEditorStore";
 import { useEditorStore } from "../store/useEditorStore";
+import { loadModelAsset } from "../utils/modelAssetStore";
+import { walkGltfScene, nodePathKey } from "../utils/gltfHierarchy";
 
 type LayeredMaterial =
   | THREE.MeshBasicMaterial
@@ -87,7 +89,7 @@ export class ObjectManager {
   // every frame, e.g. THREE.BoxHelper) means it inherits the mesh's full transform for
   // free — it stays a tight, correctly oriented box even when the object is rotated,
   // matching Spline's selection indicator instead of a looser world-axis-aligned box.
-  private createSelectionOutline(boundingBox: THREE.Box3): THREE.LineSegments {
+  private createSelectionOutline(boundingBox: THREE.Box3, color = 0xffffff): THREE.LineSegments {
     const size = new THREE.Vector3();
     boundingBox.getSize(size);
     const center = new THREE.Vector3();
@@ -99,7 +101,7 @@ export class ObjectManager {
     boxGeometry.dispose();
 
     const material = new THREE.LineBasicMaterial({
-      color: 0xffffff,
+      color,
       transparent: true,
       opacity: 0.9,
       depthTest: false, // always render on top, same convention TransformControls uses
@@ -115,7 +117,30 @@ export class ObjectManager {
   }
 
   private createSceneObject(entity: Entity): THREE.Object3D {
-    if (entity.type === "directionalLight") {
+    if (entity.type === "importedModel") {
+      const group = new THREE.Group();
+      group.position.set(...entity.position);
+      group.rotation.set(...entity.rotation);
+      group.scale.set(...entity.scale);
+      group.userData.assetId = entity.assetId;
+
+      if (entity.assetId) {
+        this.hydrateImportedModel(group, entity.assetId, entity.id);
+      } else {
+        this.showImportedModelError(group);
+      }
+
+      return group;
+    } else if (entity.type === "group") {
+      // Pure transform pivot (Blender Empty / Spline Group) — no geometry, no
+      // outline. It's selectable from the hierarchy and via its children, and
+      // the transform gizmo attaches to it like any other object.
+      const group = new THREE.Group();
+      group.position.set(...entity.position);
+      group.rotation.set(...entity.rotation);
+      group.scale.set(...entity.scale);
+      return group;
+    } else if (entity.type === "directionalLight") {
       const light = new THREE.DirectionalLight(new THREE.Color(entity.color ?? "#ffffff"), 2.2);
       light.position.set(...entity.position);
       light.rotation.set(...entity.rotation);
@@ -149,6 +174,113 @@ export class ObjectManager {
     }
   }
 
+  // Recolors/rebuilds the group's outline as a red box so a failed import stays visible,
+  // selectable, and obviously broken instead of silently vanishing from the scene.
+  private showImportedModelError(group: THREE.Group): void {
+    const existingOutline = group.userData.selectionOutline as THREE.LineSegments | undefined;
+    if (existingOutline) {
+      group.remove(existingOutline);
+      existingOutline.geometry.dispose();
+      (existingOutline.material as THREE.Material).dispose();
+    }
+
+    const errorBox = new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
+    const outline = this.createSelectionOutline(errorBox, 0xff3b30);
+    group.add(outline);
+    group.userData.selectionOutline = outline;
+    group.userData.loadError = true;
+  }
+
+  private async hydrateImportedModel(group: THREE.Group, assetId: string, rootEntityId: string): Promise<void> {
+    try {
+      const buffer = await loadModelAsset(assetId);
+      if (!buffer) {
+        console.error(`[Libre3D] Imported model asset "${assetId}" was not found in IndexedDB.`);
+        this.showImportedModelError(group);
+        return;
+      }
+
+      const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+      const loader = new GLTFLoader();
+
+      loader.parse(
+        buffer,
+        "",
+        (gltf) => {
+          // Bounding box MUST be computed before the scene is parented to `group` —
+          // once parented, world and local space diverge and the box would reflect
+          // wherever `group` happens to already be positioned in the scene.
+          const boundingBox = new THREE.Box3().setFromObject(gltf.scene);
+
+          // Map every glTF node to its nodePath so the flat node entities created
+          // by prepareModelImport can be resolved back to the actual parsed
+          // Object3D without re-parsing. walkGltfScene is the shared definition of
+          // that path convention — extraction and hydration must use the same one.
+          const nodeByPath = new Map<string, THREE.Object3D>();
+          walkGltfScene(gltf.scene, (object, nodePath) => {
+            nodeByPath.set(nodePathKey(nodePath), object);
+          });
+
+          const nodeEntities = useEditorStore
+            .getState()
+            .entities.filter((entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId);
+
+          const resolvedObjects: Array<{ entityId: string; object: THREE.Object3D }> = [];
+          for (const entity of nodeEntities) {
+            if (!entity.nodePath) continue;
+            const object = nodeByPath.get(nodePathKey(entity.nodePath));
+            if (!object) continue;
+            object.userData.entityId = entity.id;
+            object.userData.entityType = "importedModel";
+            this.meshMap.set(entity.id, object);
+            resolvedObjects.push({ entityId: entity.id, object });
+          }
+
+          // Record each node's *structural* (file-order) parent entity as its
+          // tracked parent — in a second pass, so every object already carries
+          // its entityId regardless of entity array order. applyParenting then
+          // reattaches exactly the nodes whose store parentId diverges from the
+          // file structure (i.e. nodes the user reparented in a past session).
+          // Direct children of gltf.scene structurally belong to the root group.
+          for (const { object } of resolvedObjects) {
+            object.userData.parentEntityId = object.parent?.userData?.entityId ?? rootEntityId;
+          }
+
+          // The parsed objects carry the *file's* transforms, but the store is
+          // the source of truth — the user may have moved/hidden nodes in a
+          // past session (gizmo edits update the store, and syncMeshes skipped
+          // these entities while hydration was pending, never to re-run
+          // unprompted). Re-apply the stored local TRS and flags to every
+          // registered node so a reload doesn't silently revert edits.
+          for (const entity of nodeEntities) {
+            const object = this.meshMap.get(entity.id);
+            if (object) this.syncEntityToSceneObject(object, entity, false);
+          }
+
+          // gltf.scene's internal node nesting is already correct — no manual
+          // reparenting needed once every node object is tagged and registered.
+          group.add(gltf.scene);
+
+          const outline = this.createSelectionOutline(boundingBox);
+          group.add(outline);
+          group.userData.selectionOutline = outline;
+
+          // Now that the nodes exist, apply any store-level hierarchy that
+          // diverges from the file structure, and attach any entities that were
+          // waiting for one of these nodes as their parent.
+          this.applyParenting(useEditorStore.getState().entities);
+        },
+        (error) => {
+          console.error(`[Libre3D] Failed to parse imported model asset "${assetId}":`, error);
+          this.showImportedModelError(group);
+        },
+      );
+    } catch (error) {
+      console.error(`[Libre3D] Failed to load imported model asset "${assetId}":`, error);
+      this.showImportedModelError(group);
+    }
+  }
+
   public disposeSceneObject(obj: THREE.Object3D): void {
     if (obj instanceof THREE.Mesh) {
       obj.geometry.dispose();
@@ -171,6 +303,33 @@ export class ObjectManager {
       if (obj.userData.target) {
         this.scene.remove(obj.userData.target);
       }
+    } else if (obj instanceof THREE.Group) {
+      const outline = obj.userData.selectionOutline as THREE.LineSegments | undefined;
+      if (outline) {
+        outline.geometry.dispose();
+        (outline.material as THREE.Material).dispose();
+      }
+
+      const textureSlots = [
+        "map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap",
+        "aoMap", "alphaMap", "bumpMap", "displacementMap", "envMap",
+        "lightMap", "clearcoatMap", "clearcoatNormalMap", "clearcoatRoughnessMap",
+        "sheenColorMap", "sheenRoughnessMap", "transmissionMap", "thicknessMap",
+      ] as const;
+
+      obj.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          materials.forEach((material) => {
+            textureSlots.forEach((slot) => {
+              const texture = (material as any)[slot] as THREE.Texture | undefined;
+              if (texture) texture.dispose();
+            });
+            material.dispose();
+          });
+        }
+      });
     }
   }
 
@@ -183,7 +342,10 @@ export class ObjectManager {
     obj.visible = entity.visible;
     obj.userData.locked = entity.locked;
 
-    if (obj instanceof THREE.Mesh) {
+    // Imported model nodes are THREE.Mesh instances too but carry no materialLayers
+    // (see MaterialsPanel's importedModel filter) — skip the layered-material sync
+    // so their original glTF materials aren't overwritten with the layer defaults.
+    if (obj instanceof THREE.Mesh && entity.materialLayers) {
       const colorLayer = entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
       const lightingLayer = entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
       const model = lightingLayer?.model ?? "physical";
@@ -221,17 +383,27 @@ export class ObjectManager {
       const isBeingDragged = existingObj && transformTarget === existingObj && isDragging;
 
       if (existingObj && existingObj.userData.entityType !== entity.type) {
-        this.scene.remove(existingObj);
+        (existingObj.parent ?? this.scene).remove(existingObj);
         this.disposeSceneObject(existingObj);
         this.meshMap.delete(entity.id);
         existingObj = undefined;
       }
 
       if (!existingObj) {
+        // Imported model nodes (no assetId, but nodePath set) are resolved from
+        // the root's async hydrate — don't spawn a generic placeholder for them,
+        // just wait until hydrateImportedModel populates meshMap.
+        const isPendingImportNode = entity.type === "importedModel" && !entity.assetId;
+        if (isPendingImportNode) continue;
+
         const obj = this.createSceneObject(entity);
         obj.userData.entityId = entity.id;
         obj.userData.entityType = entity.type;
         obj.userData.locked = entity.locked;
+        // Created flat on the scene; the applyParenting pass below moves it
+        // under its store parent once every sibling object exists (parents can
+        // appear later in the entities array than their children).
+        obj.userData.parentEntityId = null;
         obj.visible = entity.visible;
         this.scene.add(obj);
         this.meshMap.set(entity.id, obj);
@@ -253,13 +425,46 @@ export class ObjectManager {
     for (const staleId of staleIds) {
       const obj = this.meshMap.get(staleId);
       if (obj) {
-        this.scene.remove(obj);
+        // Imported model node objects are nested inside gltf.scene, not direct
+        // children of `this.scene` — detach from their actual parent so deleting
+        // a single node doesn't leave it stuck (and re-rendered) inside the group.
+        (obj.parent ?? this.scene).remove(obj);
         this.disposeSceneObject(obj);
         this.meshMap.delete(staleId);
       }
     }
 
+    this.applyParenting(entities);
+
     return staleIds;
+  }
+
+  // Makes the THREE graph agree with store-level parentId. Each object tracks
+  // the parent entity it is currently attached under (userData.parentEntityId);
+  // only a diff triggers a reattach, so glTF-internal nesting (gltf.scene
+  // wrappers, file-order parents) is left untouched for entities the user never
+  // reparented. Local TRS is re-applied from the store after a reattach — the
+  // store already solved it against the new parent, so no .attach() world-math
+  // is needed here. A missing parent object (async glTF hydration still in
+  // flight) is skipped; hydrateImportedModel re-runs this pass when it finishes.
+  private applyParenting(entities: Entity[]): void {
+    for (const entity of entities) {
+      const obj = this.meshMap.get(entity.id);
+      if (!obj) continue;
+
+      const desiredParentId = entity.parentId ?? null;
+      const trackedParentId = (obj.userData.parentEntityId ?? null) as string | null;
+      if (desiredParentId === trackedParentId) continue;
+
+      const parentObj = desiredParentId ? this.meshMap.get(desiredParentId) : this.scene;
+      if (!parentObj) continue;
+
+      parentObj.add(obj);
+      obj.userData.parentEntityId = desiredParentId;
+      obj.position.set(...entity.position);
+      obj.rotation.set(...entity.rotation);
+      obj.scale.set(...entity.scale);
+    }
   }
 
   public getObject(id: string): THREE.Object3D | undefined {

@@ -1,5 +1,7 @@
+import { useRef } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 import { TranslateIcon, RotateIcon, ScaleIcon, PlusIcon } from "./ui/Icons";
+import { prepareModelImport } from "../utils/importModel";
 
 interface FloatingToolbarProps {
   isShapeDropdownOpen: boolean;
@@ -21,6 +23,24 @@ export function FloatingToolbar({
   const transformSpace = useEditorStore((state) => state.transformSpace);
   const setEditorState = useEditorStore((state) => state.setEditorState);
   const addEntity = useEditorStore((state) => state.addEntity);
+  const addImportedModelHierarchy = useEditorStore((state) => state.addImportedModelHierarchy);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    useEditorStore.getState().adjustPendingImports(1);
+    try {
+      const { assetId, nodes } = await prepareModelImport(file);
+      addImportedModelHierarchy(assetId, nodes);
+    } catch (error) {
+      console.error("[Libre3D] Failed to import model:", error);
+    } finally {
+      useEditorStore.getState().adjustPendingImports(-1);
+    }
+  };
 
   return (
     <div className="floating-toolbar">
@@ -185,8 +205,37 @@ export function FloatingToolbar({
             >
               + Directional Light
             </button>
+            <button
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text-primary)",
+                padding: "6px 10px",
+                borderRadius: "3px",
+                textAlign: "left",
+                fontSize: "11px",
+                cursor: "pointer",
+                fontFamily: "var(--font)",
+              }}
+              type="button"
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              onClick={() => {
+                fileInputRef.current?.click();
+                setIsShapeDropdownOpen(false);
+              }}
+            >
+              Import Model...
+            </button>
           </div>
         )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".glb"
+          style={{ display: "none" }}
+          onChange={handleFileSelected}
+        />
       </div>
     </div>
   );
