@@ -31,11 +31,14 @@ export function FloatingToolbar({
     event.target.value = "";
     if (!file) return;
 
+    useEditorStore.getState().adjustPendingImports(1);
     try {
       const { assetId, nodes } = await prepareModelImport(file);
       addImportedModelHierarchy(assetId, nodes);
     } catch (error) {
       console.error("[Libre3D] Failed to import model:", error);
+    } finally {
+      useEditorStore.getState().adjustPendingImports(-1);
     }
   };
 

@@ -379,12 +379,16 @@ export function ViewportCanvas() {
       if (!files || files.length === 0) return;
 
       Array.from(files).forEach((file) => {
+        useEditorStore.getState().adjustPendingImports(1);
         prepareModelImport(file)
           .then(({ assetId, nodes }) => {
             useEditorStore.getState().addImportedModelHierarchy(assetId, nodes);
           })
           .catch((error) => {
             console.error("[Libre3D] Failed to import dropped model:", error);
+          })
+          .finally(() => {
+            useEditorStore.getState().adjustPendingImports(-1);
           });
       });
     };

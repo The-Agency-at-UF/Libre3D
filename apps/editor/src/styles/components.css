@@ -147,6 +147,63 @@
   background: var(--accent);
 }
 
+/* Per-type row icon (Tabler webfont) */
+.editor-tree-icon {
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.editor-tree-item--selected .editor-tree-icon {
+  color: inherit;
+}
+
+/* Vertical connectors linking a parent to its children */
+.hierarchy-depth-guide {
+  position: absolute;
+  top: -2px; /* bridge the tree's 2px row gap */
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.editor-tree-item--selected .hierarchy-depth-guide {
+  opacity: 0.25;
+}
+
+/* Empty / importing states */
+.hierarchy-empty-state {
+  padding: 18px 12px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.hierarchy-status-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.hierarchy-status-spinner {
+  display: inline-block;
+  animation: hierarchy-spin 0.9s linear infinite;
+}
+
+@keyframes hierarchy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .hierarchy-drag-ghost {
   position: fixed;
   top: -1000px;

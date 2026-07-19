@@ -64,6 +64,28 @@ type DropTarget =
 const ROW_INDENT_BASE_REM = 0.85;
 const ROW_INDENT_STEP_REM = 0.85;
 
+// Tabler webfont classes (already loaded via CDN in index.html) — the
+// glanceable replacement for the removed text type badge.
+const iconClassForEntity = (entity: Entity): string => {
+  switch (entity.type) {
+    case "cube":
+      return "ti ti-cube";
+    case "sphere":
+      return "ti ti-sphere";
+    case "torus":
+      return "ti ti-torus";
+    case "directionalLight":
+      return "ti ti-sun";
+    case "group":
+      return "ti ti-folder";
+    case "importedModel":
+      // The import root carries the asset; inner nodes are plain glTF nodes.
+      return entity.assetId ? "ti ti-package" : "ti ti-point";
+    default:
+      return "ti ti-point";
+  }
+};
+
 // Right-click menu. Every action operates on the whole current selection
 // (Blender's convention); enablement mirrors the same store guards the
 // actions themselves enforce, so a disabled item is never a lie.
@@ -293,6 +315,15 @@ function HierarchyItem({
           style={{ left: `${ROW_INDENT_BASE_REM + Math.min(dropDepth, 24) * ROW_INDENT_STEP_REM}rem` }}
         />
       )}
+      {/* One vertical connector per ancestor indent level, centered under the
+          ancestor's expand arrow; -2px top bridges the tree's row gap. */}
+      {Array.from({ length: visualDepth }, (_, level) => (
+        <span
+          key={level}
+          className="hierarchy-depth-guide"
+          style={{ left: `${ROW_INDENT_BASE_REM + level * ROW_INDENT_STEP_REM + 0.32}rem` }}
+        />
+      ))}
       <div className="editor-tree-main-row">
         {hasChildren ? (
           <button
@@ -329,6 +360,7 @@ function HierarchyItem({
             }}
             onDoubleClick={handleDoubleClick}
           >
+            <i className={`editor-tree-icon ${iconClassForEntity(entity)}`} aria-hidden="true" />
             <span className="editor-tree-name">{entity.name}</span>
           </button>
         )}
@@ -385,6 +417,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   // extend from the same origin (standard file-browser / Blender behavior).
   const [activeId, setActiveId] = useState<string | null>(null);
   const [anchorId, setAnchorId] = useState<string | null>(null);
+  const pendingImportCount = useEditorStore((state) => state.pendingImportCount);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -826,6 +859,19 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       }}
     >
       <div className="editor-tree" aria-label="Scene hierarchy">
+        {pendingImportCount > 0 && (
+          <div className="hierarchy-status-note" role="status">
+            <i className="ti ti-loader-2 hierarchy-status-spinner" aria-hidden="true" />
+            Importing {pendingImportCount > 1 ? `${pendingImportCount} models` : "model"}…
+          </div>
+        )}
+        {flatRows.length === 0 && pendingImportCount === 0 && (
+          <div className="hierarchy-empty-state">
+            {trimmedQuery
+              ? `No objects match “${searchQuery.trim()}”.`
+              : "Scene is empty. Add a shape with the + button, or drop a .glb file into the viewport."}
+          </div>
+        )}
         {flatRows.map((row) => (
           <HierarchyItem
             key={row.id}

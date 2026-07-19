@@ -282,6 +282,12 @@ export interface EditorState {
   previewGlbUrl: string | null;
   setPreviewMode: (active: boolean, url: string | null) => void;
 
+  // Number of .glb imports currently being read/parsed (file picked but
+  // entities not yet materialized). Not persisted — like isPreviewMode it's
+  // transient session state that happens to need cross-component visibility.
+  pendingImportCount: number;
+  adjustPendingImports: (delta: number) => void;
+
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
@@ -866,6 +872,10 @@ export const useEditorStore = create<EditorState>()(
           isPreviewMode: false,
           previewGlbUrl: null,
           setPreviewMode: (active, url) => set({ isPreviewMode: active, previewGlbUrl: url }),
+
+          pendingImportCount: 0,
+          adjustPendingImports: (delta) =>
+            set((state) => ({ pendingImportCount: Math.max(0, state.pendingImportCount + delta) })),
 
           updatePostProcessing: (updates) =>
             set((state) => ({
