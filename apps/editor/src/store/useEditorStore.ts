@@ -43,6 +43,19 @@ export interface Entity {
   sourceFileName?: string;
   visible: boolean;
   locked: boolean;
+  parentId?: string | null;
+  nodePath?: number[];
+  rootEntityId?: string;
+}
+
+export interface ImportNodeSpec {
+  tempId: string;
+  parentTempId: string | null;
+  name: string;
+  nodePath: number[];
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: [number, number, number];
 }
 
 export interface CameraProfile {
@@ -504,6 +517,7 @@ export const useEditorStore = create<EditorState>()(
                 scale: [...UNIT_VECTOR] as [number, number, number],
                 assetId,
                 sourceFileName: name,
+                parentId: null,
                 visible: true,
                 locked: false,
               };
@@ -724,9 +738,18 @@ export const useEditorStore = create<EditorState>()(
         }),
         {
           name: "libre3d-scene-state",
-          version: 13,
+          version: 14,
           storage: createJSONStorage(() => localStorage),
           migrate: (persistedState: any, version: number) => {
+            if (version < 14) {
+              if (persistedState && Array.isArray(persistedState.entities)) {
+                persistedState.entities = persistedState.entities.map((entity: any) => ({
+                  ...entity,
+                  parentId: entity.parentId ?? null,
+                }));
+              }
+            }
+
             if (version < 12) {
               if (persistedState && Array.isArray(persistedState.entities)) {
                 persistedState.entities = persistedState.entities.map((entity: any) => {
