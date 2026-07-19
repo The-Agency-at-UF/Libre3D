@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
+import { getDescendantIds } from "./entityIndex";
 
 export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel";
 
@@ -542,40 +543,69 @@ export const useEditorStore = create<EditorState>()(
           },
           duplicateEntity: (ids) => {
             set((state) => {
-              const newEntities: Entity[] = [];
-              const newIds: string[] = [];
-              
+              const requestedRootIds = new Set(ids);
+              const cloneOrder: string[] = [];
+              const seen = new Set<string>();
+
               ids.forEach((id) => {
-                const entityToDuplicate = state.entities.find(e => e.id === id);
-                if (entityToDuplicate) {
-                  const newId = `entity-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-                  newIds.push(newId);
-                  newEntities.push({
-                    ...entityToDuplicate,
-                    id: newId,
-                    name: `${entityToDuplicate.name} (Copy)`,
-                    position: [
-                      entityToDuplicate.position[0] + 0.5,
-                      entityToDuplicate.position[1],
-                      entityToDuplicate.position[2] + 0.5
-                    ] as [number, number, number]
-                  });
+                if (!state.entities.some((e) => e.id === id)) return;
+                if (!seen.has(id)) {
+                  seen.add(id);
+                  cloneOrder.push(id);
                 }
+                getDescendantIds(state.entities, id).forEach((descId) => {
+                  if (!seen.has(descId)) {
+                    seen.add(descId);
+                    cloneOrder.push(descId);
+                  }
+                });
               });
 
-              if (newEntities.length === 0) return state;
+              if (cloneOrder.length === 0) return state;
+
+              const idMap = new Map<string, string>();
+              cloneOrder.forEach((id) => idMap.set(id, createEntityId()));
+
+              const newEntities: Entity[] = cloneOrder.map((id) => {
+                const original = state.entities.find((e) => e.id === id)!;
+                const isRequestedRoot = requestedRootIds.has(id);
+                const newParentId = original.parentId ? idMap.get(original.parentId) ?? original.parentId : original.parentId;
+                const newRootEntityId = original.rootEntityId ? idMap.get(original.rootEntityId) ?? original.rootEntityId : original.rootEntityId;
+
+                return {
+                  ...cloneEntity(original),
+                  id: idMap.get(id)!,
+                  name: isRequestedRoot ? `${original.name} (Copy)` : original.name,
+                  parentId: newParentId,
+                  rootEntityId: newRootEntityId,
+                  position: isRequestedRoot
+                    ? [
+                      original.position[0] + 0.5,
+                      original.position[1],
+                      original.position[2] + 0.5
+                    ] as [number, number, number]
+                    : cloneVector(original.position),
+                };
+              });
 
               return {
                 entities: [...state.entities, ...newEntities],
-                selectedEntityIds: newIds
+                selectedEntityIds: cloneOrder.filter((id) => requestedRootIds.has(id)).map((id) => idMap.get(id)!),
               };
             });
           },
           removeEntity: (ids) =>
-            set((state) => ({
-              entities: state.entities.filter((entity) => !ids.includes(entity.id)),
-              selectedEntityIds: state.selectedEntityIds.filter(id => !ids.includes(id)),
-            })),
+            set((state) => {
+              const allIds = new Set(ids);
+              ids.forEach((id) => {
+                getDescendantIds(state.entities, id).forEach((descId) => allIds.add(descId));
+              });
+
+              return {
+                entities: state.entities.filter((entity) => !allIds.has(entity.id)),
+                selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
+              };
+            }),
           updateEntityTransform: (id, updates) =>
             set((state) => ({
               entities: state.entities.map((entity) =>
