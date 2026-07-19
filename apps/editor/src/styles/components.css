@@ -530,7 +530,7 @@
   position: absolute;
   left: 0;
   top: 0;
-  width: 260px;
+  width: 260px; /* fallback only — App.tsx sets an inline width from resizable state */
   background: var(--bg-panel);
   backdrop-filter: blur(25px);
   -webkit-backdrop-filter: blur(25px);
@@ -542,6 +542,32 @@
   margin: 16px 0 16px 16px;
   z-index: 10;
   min-width: 0;
+  flex-shrink: 0;
+}
+
+.left-sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 20;
+  background: transparent;
+  touch-action: none;
+}
+
+.left-sidebar-resize-handle:hover,
+.left-sidebar-resize-handle:active {
+  background: linear-gradient(
+    to right,
+    transparent 0,
+    transparent 4px,
+    var(--accent, #3b82f6) 4px,
+    var(--accent, #3b82f6) 6px,
+    transparent 6px,
+    transparent 10px
+  );
 }
 
 .right-sidebar {
