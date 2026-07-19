@@ -76,6 +76,7 @@
 }
 
 .editor-tree-item {
+  position: relative; /* anchors .hierarchy-drop-line */
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -109,6 +110,55 @@
    (e.g. after Ctrl+Click deselects it but arrows still navigate from it). */
 .editor-tree-item--active {
   box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Drag-and-drop feedback */
+.editor-tree-item--drop-onto {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  background: var(--bg-hover);
+}
+
+.hierarchy-drop-line {
+  position: absolute;
+  right: 4px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.hierarchy-drop-line--top {
+  top: -1px;
+}
+
+.hierarchy-drop-line--bottom {
+  bottom: -1px;
+}
+
+.hierarchy-drop-line::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.hierarchy-drag-ghost {
+  position: fixed;
+  top: -1000px;
+  left: -1000px;
+  padding: 4px 10px;
+  background: var(--accent);
+  color: var(--text-on-accent, #fff);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: var(--font);
+  z-index: 2000;
+  pointer-events: none;
 }
 
 .editor-tree-select {
