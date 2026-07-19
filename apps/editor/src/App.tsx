@@ -95,6 +95,42 @@ function EditorApp() {
     localStorage.setItem("libre3d-theme", nextTheme); // Explicit manual override
   };
 
+  // Left sidebar width — non-persisted-store UI state (local component state,
+  // per the "no parallel stores" rule), mirroring the theme persistence
+  // pattern above via a plain localStorage key instead of useEditorStore.
+  const LEFT_SIDEBAR_MIN_WIDTH = 220;
+  const LEFT_SIDEBAR_MAX_WIDTH = 520;
+  const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem("libre3d-left-sidebar-width"));
+    return Number.isFinite(saved) && saved > 0 ? saved : 260;
+  });
+
+  const handleSidebarResizeStart = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = leftSidebarWidth;
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      const next = Math.min(
+        LEFT_SIDEBAR_MAX_WIDTH,
+        Math.max(LEFT_SIDEBAR_MIN_WIDTH, startWidth + (moveEvent.clientX - startX))
+      );
+      setLeftSidebarWidth(next);
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      setLeftSidebarWidth((width) => {
+        localStorage.setItem("libre3d-left-sidebar-width", String(width));
+        return width;
+      });
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+  };
+
   const handleNewFile = () => {
     if (window.confirm("Are you sure you want to clear the scene?")) {
       useEditorStore.setState({
@@ -228,7 +264,13 @@ function EditorApp() {
     <>
       <div className="editor-shell">
         {/* Left Sidebar */}
-        <aside className="left-sidebar" style={isPreviewMode ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
+        <aside
+          className="left-sidebar"
+          style={{
+            width: leftSidebarWidth,
+            ...(isPreviewMode ? { opacity: 0.5, pointerEvents: "none" } : {}),
+          }}
+        >
           {/* Top Header Row Container */}
           <div className="left-sidebar-header">
             <button
@@ -294,6 +336,14 @@ function EditorApp() {
               </div>
             )}
           </div>
+
+          <div
+            className="left-sidebar-resize-handle"
+            onPointerDown={handleSidebarResizeStart}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize left sidebar"
+          />
         </aside>
 
         {/* Center Viewport */}

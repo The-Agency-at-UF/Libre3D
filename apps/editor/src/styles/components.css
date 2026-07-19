@@ -76,6 +76,7 @@
 }
 
 .editor-tree-item {
+  position: relative; /* anchors .hierarchy-drop-line */
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -105,6 +106,118 @@
   color: inherit;
 }
 
+/* Keyboard cursor / range anchor — visible even when the row is not selected
+   (e.g. after Ctrl+Click deselects it but arrows still navigate from it). */
+.editor-tree-item--active {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* Drag-and-drop feedback */
+.editor-tree-item--drop-onto {
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+  background: var(--bg-hover);
+}
+
+.hierarchy-drop-line {
+  position: absolute;
+  right: 4px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.hierarchy-drop-line--top {
+  top: -1px;
+}
+
+.hierarchy-drop-line--bottom {
+  bottom: -1px;
+}
+
+.hierarchy-drop-line::before {
+  content: "";
+  position: absolute;
+  left: -3px;
+  top: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* Per-type row icon (Tabler webfont) */
+.editor-tree-icon {
+  font-size: 13px;
+  line-height: 1;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.editor-tree-item--selected .editor-tree-icon {
+  color: inherit;
+}
+
+/* Vertical connectors linking a parent to its children */
+.hierarchy-depth-guide {
+  position: absolute;
+  top: -2px; /* bridge the tree's 2px row gap */
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+  opacity: 0.7;
+}
+
+.editor-tree-item--selected .hierarchy-depth-guide {
+  opacity: 0.25;
+}
+
+/* Empty / importing states */
+.hierarchy-empty-state {
+  padding: 18px 12px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.hierarchy-status-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.hierarchy-status-spinner {
+  display: inline-block;
+  animation: hierarchy-spin 0.9s linear infinite;
+}
+
+@keyframes hierarchy-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.hierarchy-drag-ghost {
+  position: fixed;
+  top: -1000px;
+  left: -1000px;
+  padding: 4px 10px;
+  background: var(--accent);
+  color: var(--text-on-accent, #fff);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-family: var(--font);
+  z-index: 2000;
+  pointer-events: none;
+}
+
 .editor-tree-select {
   display: flex;
   align-items: baseline;
@@ -127,7 +240,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 1;
+  flex: 1;
   min-width: 0;
 }
 
@@ -136,6 +249,10 @@
   text-transform: uppercase;
   color: var(--text-tertiary);
   flex-shrink: 0;
+  max-width: 68px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 
@@ -430,6 +547,36 @@
   min-width: 0;
 }
 
+.hierarchy-expand-btn {
+  background: transparent;
+  border: none;
+  color: rgba(226, 232, 240, 0.55);
+  cursor: pointer;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+  font-size: 10px;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+}
+
+.hierarchy-expand-btn:hover {
+  color: #e2e8f0;
+  background: rgba(148, 163, 184, 0.1);
+}
+
+.editor-tree-item--selected .hierarchy-expand-btn {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.hierarchy-expand-spacer {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+}
+
 .hierarchy-rename-input {
   flex: 1;
   background: var(--rename-bg);
@@ -496,7 +643,7 @@
   position: absolute;
   left: 0;
   top: 0;
-  width: 260px;
+  width: 260px; /* fallback only — App.tsx sets an inline width from resizable state */
   background: var(--bg-panel);
   backdrop-filter: blur(25px);
   -webkit-backdrop-filter: blur(25px);
@@ -508,6 +655,32 @@
   margin: 16px 0 16px 16px;
   z-index: 10;
   min-width: 0;
+  flex-shrink: 0;
+}
+
+.left-sidebar-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -5px;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 20;
+  background: transparent;
+  touch-action: none;
+}
+
+.left-sidebar-resize-handle:hover,
+.left-sidebar-resize-handle:active {
+  background: linear-gradient(
+    to right,
+    transparent 0,
+    transparent 4px,
+    var(--accent, #3b82f6) 4px,
+    var(--accent, #3b82f6) 6px,
+    transparent 6px,
+    transparent 10px
+  );
 }
 
 .right-sidebar {
@@ -877,6 +1050,103 @@
   color: var(--text-tertiary);
   font-size: 9px;
   margin-left: 12px;
+}
+
+/* Hierarchy right-click context menu — same visual language as
+   .hamburger-dropdown, but positioned at the cursor. */
+.hierarchy-context-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+
+.hierarchy-context-menu {
+  position: fixed;
+  background: var(--bg-panel);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 1000;
+  min-width: 170px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-sizing: border-box;
+}
+
+.hierarchy-context-menu .hamburger-dropdown-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Batch rename dialog */
+.hierarchy-batch-rename {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 240px;
+  background: var(--bg-panel);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-sizing: border-box;
+}
+
+.hierarchy-batch-rename-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.hierarchy-batch-rename label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.hierarchy-batch-rename input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font);
+  padding: 4px 6px;
+  outline: none;
+}
+
+.hierarchy-batch-rename input:focus {
+  border-color: var(--accent);
+}
+
+.hierarchy-batch-rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.hierarchy-batch-rename-apply {
+  background: var(--accent);
+  color: var(--text-on-accent, #fff);
+}
+
+.hierarchy-context-menu .hamburger-dropdown-btn:disabled:hover {
+  background: transparent;
 }
 
 /* Search and Tabs in Left Sidebar */

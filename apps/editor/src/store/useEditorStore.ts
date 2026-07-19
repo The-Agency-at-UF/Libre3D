@@ -1,8 +1,17 @@
 import { create } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
+import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
+import { createId } from "../utils/createId";
+import {
+  getEntityWorldMatrix,
+  solveLocalFromWorld,
+  makeTranslationMatrix,
+  getWorldPosition,
+  type EntityTRS,
+} from "../utils/entityTransforms";
 
-export type EntityType = "cube" | "sphere" | "torus" | "directionalLight";
+export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel" | "group";
 
 export type MaterialLayerType = "color" | "lighting";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
@@ -39,8 +48,23 @@ export interface Entity {
   scale: [number, number, number];
   color?: string;
   materialLayers?: MaterialLayer[];
+  assetId?: string;
+  sourceFileName?: string;
   visible: boolean;
   locked: boolean;
+  parentId?: string | null;
+  nodePath?: number[];
+  rootEntityId?: string;
+}
+
+export interface ImportNodeSpec {
+  tempId: string;
+  parentTempId: string | null;
+  name: string;
+  nodePath: number[];
+  position: [number, number, number];
+  rotation: [number, number, number];
+  scale: [number, number, number];
 }
 
 export interface CameraProfile {
@@ -225,8 +249,12 @@ export interface EditorState {
   deleteCameraProfile: (id: string) => void;
   updateProfileData: (id: string, updates: Partial<CameraProfile>) => void;
   addEntity: (type: EntityType) => string;
+  addImportedModelHierarchy: (assetId: string, nodes: ImportNodeSpec[]) => string;
   duplicateEntity: (ids: string[]) => void;
   removeEntity: (ids: string[]) => void;
+  reparentEntities: (ids: string[], newParentId: string | null, index?: number) => void;
+  groupEntities: (ids: string[]) => string;
+  ungroupEntity: (id: string) => void;
   updateEntityTransform: (id: string, updates: EntityTransformUpdates) => void;
   updateMultipleEntityTransforms: (updates: Record<string, EntityTransformUpdates>) => void;
   selectEntity: (id: string | null, multi?: boolean) => void;
@@ -235,6 +263,7 @@ export interface EditorState {
   toggleVisibility: (id: string) => void;
   toggleLock: (id: string) => void;
   renameEntity: (id: string, newName: string) => void;
+  renameEntities: (updates: Record<string, string>) => void;
 
   // Viewport / Projection
   activeTransformTool: "translate" | "rotate" | "scale";
@@ -254,6 +283,12 @@ export interface EditorState {
   previewGlbUrl: string | null;
   setPreviewMode: (active: boolean, url: string | null) => void;
 
+  // Number of .glb imports currently being read/parsed (file picked but
+  // entities not yet materialized). Not persisted — like isPreviewMode it's
+  // transient session state that happens to need cross-component visibility.
+  pendingImportCount: number;
+  adjustPendingImports: (delta: number) => void;
+
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
@@ -261,7 +296,7 @@ export interface EditorState {
   removeMaterialLayer: (entityId: string, layerId: string) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -279,6 +314,14 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   },
   directionalLight: {
     name: "Directional Light",
+    color: "#ffffff",
+  },
+  importedModel: {
+    name: "Imported Model",
+    color: "#ffffff",
+  },
+  group: {
+    name: "Group",
     color: "#ffffff",
   },
 };
@@ -327,13 +370,7 @@ export const DEFAULT_CAMERA_PROFILE: CameraProfile = {
   zoom: 1,
 };
 
-const createEntityId = (): string => {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-
-  return `entity-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
+const createEntityId = (): string => createId("entity");
 
 const createEntity = (type: EntityType): Entity => ({
   id: createEntityId(),
@@ -344,7 +381,9 @@ const createEntity = (type: EntityType): Entity => ({
   scale: [...UNIT_VECTOR] as [number, number, number],
   ...(type === "directionalLight"
     ? { color: ENTITY_DEFAULTS[type].color }
-    : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
+    : type === "group"
+      ? null // groups are pure transform pivots — no material, no color
+      : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
   visible: true,
   locked: false,
 });
@@ -485,42 +524,256 @@ export const useEditorStore = create<EditorState>()(
             });
             return newId;
           },
-          duplicateEntity: (ids) => {
+          addImportedModelHierarchy: (assetId, nodes) => {
+            let rootRealId = "";
             set((state) => {
-              const newEntities: Entity[] = [];
-              const newIds: string[] = [];
-              
-              ids.forEach((id) => {
-                const entityToDuplicate = state.entities.find(e => e.id === id);
-                if (entityToDuplicate) {
-                  const newId = `entity-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-                  newIds.push(newId);
-                  newEntities.push({
-                    ...entityToDuplicate,
-                    id: newId,
-                    name: `${entityToDuplicate.name} (Copy)`,
-                    position: [
-                      entityToDuplicate.position[0] + 0.5,
-                      entityToDuplicate.position[1],
-                      entityToDuplicate.position[2] + 0.5
-                    ] as [number, number, number]
-                  });
-                }
-              });
+              const rootNode = nodes.find((node) => node.parentTempId === null);
+              if (!rootNode) return state;
 
-              if (newEntities.length === 0) return state;
+              const tempToReal = new Map<string, string>();
+              nodes.forEach((node) => tempToReal.set(node.tempId, createEntityId()));
+              rootRealId = tempToReal.get(rootNode.tempId)!;
+
+              const newEntities: Entity[] = nodes.map((node) => {
+                const isRoot = node.tempId === rootNode.tempId;
+                return {
+                  id: tempToReal.get(node.tempId)!,
+                  type: "importedModel",
+                  name: node.name,
+                  position: cloneVector(node.position),
+                  rotation: cloneVector(node.rotation),
+                  scale: cloneVector(node.scale),
+                  parentId: node.parentTempId ? tempToReal.get(node.parentTempId) ?? null : null,
+                  nodePath: [...node.nodePath],
+                  rootEntityId: rootRealId,
+                  ...(isRoot ? { assetId, sourceFileName: node.name } : {}),
+                  visible: true,
+                  locked: false,
+                };
+              });
 
               return {
                 entities: [...state.entities, ...newEntities],
-                selectedEntityIds: newIds
+                selectedEntityIds: [rootRealId],
+              };
+            });
+            return rootRealId;
+          },
+          duplicateEntity: (ids) => {
+            set((state) => {
+              const requestedRootIds = new Set(ids);
+              const cloneOrder: string[] = [];
+              const seen = new Set<string>();
+
+              ids.forEach((id) => {
+                if (!state.entities.some((e) => e.id === id)) return;
+                if (!seen.has(id)) {
+                  seen.add(id);
+                  cloneOrder.push(id);
+                }
+                getDescendantIds(state.entities, id).forEach((descId) => {
+                  if (!seen.has(descId)) {
+                    seen.add(descId);
+                    cloneOrder.push(descId);
+                  }
+                });
+              });
+
+              if (cloneOrder.length === 0) return state;
+
+              const idMap = new Map<string, string>();
+              cloneOrder.forEach((id) => idMap.set(id, createEntityId()));
+
+              const newEntities: Entity[] = cloneOrder.map((id) => {
+                const original = state.entities.find((e) => e.id === id)!;
+                const isRequestedRoot = requestedRootIds.has(id);
+                const newParentId = original.parentId ? idMap.get(original.parentId) ?? original.parentId : original.parentId;
+                const newRootEntityId = original.rootEntityId ? idMap.get(original.rootEntityId) ?? original.rootEntityId : original.rootEntityId;
+
+                return {
+                  ...cloneEntity(original),
+                  id: idMap.get(id)!,
+                  name: isRequestedRoot ? `${original.name} (Copy)` : original.name,
+                  parentId: newParentId,
+                  rootEntityId: newRootEntityId,
+                  position: isRequestedRoot
+                    ? [
+                      original.position[0] + 0.5,
+                      original.position[1],
+                      original.position[2] + 0.5
+                    ] as [number, number, number]
+                    : cloneVector(original.position),
+                };
+              });
+
+              return {
+                entities: [...state.entities, ...newEntities],
+                selectedEntityIds: cloneOrder.filter((id) => requestedRootIds.has(id)).map((id) => idMap.get(id)!),
               };
             });
           },
           removeEntity: (ids) =>
-            set((state) => ({
-              entities: state.entities.filter((entity) => !ids.includes(entity.id)),
-              selectedEntityIds: state.selectedEntityIds.filter(id => !ids.includes(id)),
-            })),
+            set((state) => {
+              const allIds = new Set(ids);
+              ids.forEach((id) => {
+                getDescendantIds(state.entities, id).forEach((descId) => allIds.add(descId));
+              });
+
+              return {
+                entities: state.entities.filter((entity) => !allIds.has(entity.id)),
+                selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
+              };
+            }),
+          // World-space placement is preserved: the new local TRS is solved from
+          // the stored parent chain so the object doesn't visually jump. One
+          // set() call = one zundo undo step for the whole move. `index` counts
+          // siblings under the new parent *after* the moved entities are removed
+          // (standard drop-index semantics); omitted/out-of-range appends last.
+          reparentEntities: (ids, newParentId, index) =>
+            set((state) => {
+              const moveRoots = filterMoveRoots(state.entities, ids);
+              if (moveRoots.length === 0 || !canReparentEntities(state.entities, moveRoots, newParentId)) {
+                return state;
+              }
+
+              const parentWorld = newParentId ? getEntityWorldMatrix(state.entities, newParentId) : null;
+              const solvedById = new Map<string, EntityTRS>();
+              for (const id of moveRoots) {
+                const entity = state.entities.find((e) => e.id === id)!;
+                // Same-parent moves are pure sibling reorders — keep the stored
+                // TRS bit-identical instead of a solve/decompose round-trip.
+                if ((entity.parentId ?? null) === (newParentId ?? null)) continue;
+                solvedById.set(id, solveLocalFromWorld(getEntityWorldMatrix(state.entities, id), parentWorld));
+              }
+
+              const movingSet = new Set(moveRoots);
+              const remaining = state.entities.filter((entity) => !movingSet.has(entity.id));
+              const moved: Entity[] = moveRoots.map((id) => {
+                const original = state.entities.find((e) => e.id === id)!;
+                const solved = solvedById.get(id);
+                return {
+                  ...original,
+                  parentId: newParentId,
+                  ...(solved
+                    ? {
+                      position: cloneVector(solved.position),
+                      rotation: cloneVector(solved.rotation),
+                      scale: cloneVector(solved.scale),
+                    }
+                    : null),
+                };
+              });
+
+              // Sibling order is array position among same-parent entities:
+              // insert before the array slot of the sibling currently at `index`.
+              let insertAt = remaining.length;
+              if (index !== undefined) {
+                const siblingArrayIndexes = remaining
+                  .map((entity, arrayIndex) => ({ entity, arrayIndex }))
+                  .filter(({ entity }) => (entity.parentId ?? null) === (newParentId ?? null))
+                  .map(({ arrayIndex }) => arrayIndex);
+                if (index < siblingArrayIndexes.length) insertAt = siblingArrayIndexes[index];
+              }
+
+              return {
+                entities: [...remaining.slice(0, insertAt), ...moved, ...remaining.slice(insertAt)],
+              };
+            }),
+          groupEntities: (ids) => {
+            let groupId = "";
+            set((state) => {
+              const moveRoots = filterMoveRoots(state.entities, ids);
+              if (moveRoots.length === 0) return state;
+
+              const parentIds = new Set(
+                moveRoots.map((id) => state.entities.find((e) => e.id === id)?.parentId ?? null),
+              );
+              const groupParentId = parentIds.size === 1 ? [...parentIds][0] : null;
+              // The members end up under the new group, whose own parent is
+              // groupParentId — legality (cycles, imported-model boundary) is
+              // identical to reparenting them straight onto groupParentId,
+              // since the group itself is a plain node.
+              if (!canReparentEntities(state.entities, moveRoots, groupParentId)) return state;
+
+              const memberWorlds = new Map(
+                moveRoots.map((id) => [id, getEntityWorldMatrix(state.entities, id)] as const),
+              );
+              const centroid: [number, number, number] = [0, 0, 0];
+              memberWorlds.forEach((world) => {
+                const [x, y, z] = getWorldPosition(world);
+                centroid[0] += x / moveRoots.length;
+                centroid[1] += y / moveRoots.length;
+                centroid[2] += z / moveRoots.length;
+              });
+
+              // The group pivots at the members' world centroid, with identity
+              // world rotation/scale (Blender's default for a new Empty parent).
+              const groupWorld = makeTranslationMatrix(centroid);
+              const groupParentWorld = groupParentId ? getEntityWorldMatrix(state.entities, groupParentId) : null;
+              const groupLocal = solveLocalFromWorld(groupWorld, groupParentWorld);
+
+              const group: Entity = {
+                id: createEntityId(),
+                type: "group",
+                name: "Group",
+                position: cloneVector(groupLocal.position),
+                rotation: cloneVector(groupLocal.rotation),
+                scale: cloneVector(groupLocal.scale),
+                visible: true,
+                locked: false,
+                parentId: groupParentId,
+              };
+              groupId = group.id;
+
+              const movingSet = new Set(moveRoots);
+              const firstMemberIndex = state.entities.findIndex((entity) => movingSet.has(entity.id));
+              const entitiesNext = state.entities.map((entity) => {
+                if (!movingSet.has(entity.id)) return entity;
+                const solved = solveLocalFromWorld(memberWorlds.get(entity.id)!, groupWorld);
+                return {
+                  ...entity,
+                  parentId: group.id,
+                  position: cloneVector(solved.position),
+                  rotation: cloneVector(solved.rotation),
+                  scale: cloneVector(solved.scale),
+                };
+              });
+              entitiesNext.splice(Math.max(firstMemberIndex, 0), 0, group);
+
+              return { entities: entitiesNext, selectedEntityIds: [group.id] };
+            });
+            return groupId;
+          },
+          ungroupEntity: (id) =>
+            set((state) => {
+              const group = state.entities.find((entity) => entity.id === id);
+              if (!group || group.type !== "group") return state;
+
+              const childIds = getChildren(state.entities, id).map((child) => child.id);
+              const parentWorld = group.parentId ? getEntityWorldMatrix(state.entities, group.parentId) : null;
+              const childSet = new Set(childIds);
+
+              const entitiesNext = state.entities
+                .filter((entity) => entity.id !== id)
+                .map((entity) => {
+                  if (!childSet.has(entity.id)) return entity;
+                  const solved = solveLocalFromWorld(getEntityWorldMatrix(state.entities, entity.id), parentWorld);
+                  return {
+                    ...entity,
+                    parentId: group.parentId ?? null,
+                    position: cloneVector(solved.position),
+                    rotation: cloneVector(solved.rotation),
+                    scale: cloneVector(solved.scale),
+                  };
+                });
+
+              return {
+                entities: entitiesNext,
+                selectedEntityIds: childIds.length > 0
+                  ? childIds
+                  : state.selectedEntityIds.filter((selId) => selId !== id),
+              };
+            }),
           updateEntityTransform: (id, updates) =>
             set((state) => ({
               entities: state.entities.map((entity) =>
@@ -603,6 +856,14 @@ export const useEditorStore = create<EditorState>()(
                 entity.id === id ? { ...entity, name: newName } : entity,
               ),
             })),
+          // Batch rename in one set() so the whole operation is one undo step.
+          renameEntities: (updates) =>
+            set((state) => ({
+              entities: state.entities.map((entity) => {
+                const newName = updates[entity.id]?.trim();
+                return newName ? { ...entity, name: newName } : entity;
+              }),
+            })),
           // Viewport / Projection
           activeTransformTool: "translate",
           projectionMode: "perspective",
@@ -620,6 +881,10 @@ export const useEditorStore = create<EditorState>()(
           isPreviewMode: false,
           previewGlbUrl: null,
           setPreviewMode: (active, url) => set({ isPreviewMode: active, previewGlbUrl: url }),
+
+          pendingImportCount: 0,
+          adjustPendingImports: (delta) =>
+            set((state) => ({ pendingImportCount: Math.max(0, state.pendingImportCount + delta) })),
 
           updatePostProcessing: (updates) =>
             set((state) => ({
@@ -693,9 +958,18 @@ export const useEditorStore = create<EditorState>()(
         }),
         {
           name: "libre3d-scene-state",
-          version: 12,
+          version: 14,
           storage: createJSONStorage(() => localStorage),
           migrate: (persistedState: any, version: number) => {
+            if (version < 14) {
+              if (persistedState && Array.isArray(persistedState.entities)) {
+                persistedState.entities = persistedState.entities.map((entity: any) => ({
+                  ...entity,
+                  parentId: entity.parentId ?? null,
+                }));
+              }
+            }
+
             if (version < 12) {
               if (persistedState && Array.isArray(persistedState.entities)) {
                 persistedState.entities = persistedState.entities.map((entity: any) => {
