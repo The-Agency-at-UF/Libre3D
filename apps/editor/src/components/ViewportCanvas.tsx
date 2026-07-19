@@ -7,6 +7,7 @@ import { ObjectManager } from "../viewport/ObjectManager";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
 import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
+import { importModelFile } from "../utils/importModel";
 
 export function ViewportCanvas() {
   const wrapperRef   = useRef<HTMLDivElement | null>(null);
@@ -153,9 +154,17 @@ export function ViewportCanvas() {
     sceneManager.updateGridVisibility(sceneSettings.showGrid !== false);
 
     // Wireframe sync
-    objectManager?.getMeshes().forEach((mesh) => {
-      if (mesh instanceof THREE.Mesh && "wireframe" in mesh.material) {
-        (mesh.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
+    objectManager?.getMeshes().forEach((obj) => {
+      if (obj instanceof THREE.Mesh) {
+        if ("wireframe" in obj.material) {
+          (obj.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
+        }
+      } else {
+        obj.traverse((child) => {
+          if (child instanceof THREE.Mesh && "wireframe" in child.material) {
+            (child.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
+          }
+        });
       }
     });
   }, [sceneManager, sceneSettings, objectManager]);
@@ -344,6 +353,39 @@ export function ViewportCanvas() {
       window.removeEventListener("libre3d-orientate-to-selected", handleOrientateToSelected);
     };
   }, [orbitControlsRef, objectManager, cameraRef]);
+
+  // -- Drag-and-drop .glb import --
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleDragOver = (event: DragEvent) => {
+      event.preventDefault();
+    };
+
+    const handleDrop = (event: DragEvent) => {
+      event.preventDefault();
+      const files = event.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+
+      Array.from(files).forEach((file) => {
+        importModelFile(file)
+          .then(({ assetId, name }) => {
+            useEditorStore.getState().addImportedModelEntity(assetId, name);
+          })
+          .catch((error) => {
+            console.error("[Libre3D] Failed to import dropped model:", error);
+          });
+      });
+    };
+
+    container.addEventListener("dragover", handleDragOver);
+    container.addEventListener("drop", handleDrop);
+    return () => {
+      container.removeEventListener("dragover", handleDragOver);
+      container.removeEventListener("drop", handleDrop);
+    };
+  }, []);
 
   const frameScaleLabel = `${Math.round(autoScaleFactor * 100)}%`;
 
