@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
 
-export type EntityType = "cube" | "sphere" | "torus" | "directionalLight";
+export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel";
 
 export type MaterialLayerType = "color" | "lighting";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
@@ -39,6 +39,8 @@ export interface Entity {
   scale: [number, number, number];
   color?: string;
   materialLayers?: MaterialLayer[];
+  assetId?: string;
+  sourceFileName?: string;
   visible: boolean;
   locked: boolean;
 }
@@ -225,6 +227,7 @@ export interface EditorState {
   deleteCameraProfile: (id: string) => void;
   updateProfileData: (id: string, updates: Partial<CameraProfile>) => void;
   addEntity: (type: EntityType) => string;
+  addImportedModelEntity: (assetId: string, name: string) => string;
   duplicateEntity: (ids: string[]) => void;
   removeEntity: (ids: string[]) => void;
   updateEntityTransform: (id: string, updates: EntityTransformUpdates) => void;
@@ -261,7 +264,7 @@ export interface EditorState {
   removeMaterialLayer: (entityId: string, layerId: string) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelEntity" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -279,6 +282,10 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   },
   directionalLight: {
     name: "Directional Light",
+    color: "#ffffff",
+  },
+  importedModel: {
+    name: "Imported Model",
     color: "#ffffff",
   },
 };
@@ -476,6 +483,30 @@ export const useEditorStore = create<EditorState>()(
             let newId = "";
             set((state) => {
               const entity = createEntity(type);
+              newId = entity.id;
+
+              return {
+                entities: [...state.entities, entity],
+                selectedEntityIds: [entity.id],
+              };
+            });
+            return newId;
+          },
+          addImportedModelEntity: (assetId, name) => {
+            let newId = "";
+            set((state) => {
+              const entity: Entity = {
+                id: createEntityId(),
+                type: "importedModel",
+                name,
+                position: [...ZERO_VECTOR] as [number, number, number],
+                rotation: [...ZERO_VECTOR] as [number, number, number],
+                scale: [...UNIT_VECTOR] as [number, number, number],
+                assetId,
+                sourceFileName: name,
+                visible: true,
+                locked: false,
+              };
               newId = entity.id;
 
               return {
@@ -693,7 +724,7 @@ export const useEditorStore = create<EditorState>()(
         }),
         {
           name: "libre3d-scene-state",
-          version: 12,
+          version: 13,
           storage: createJSONStorage(() => localStorage),
           migrate: (persistedState: any, version: number) => {
             if (version < 12) {
