@@ -61,10 +61,17 @@ function HierarchyItem({ entityId, depth, hasChildren, isExpanded, onToggleExpan
     setIsEditing(false);
   };
 
+  // Depth is already compressed by the caller so single-child "pass-through"
+  // chains (common in imported glTF: RootNode > Object_4 > _rootJoint, etc.)
+  // don't each consume their own indent level. This cap is just a last-resort
+  // safety net for genuinely wide/deep branching trees so a row can never be
+  // indented so far that its label and controls get clipped.
+  const visualDepth = Math.min(depth, 24);
+
   return (
     <div
       className={`editor-tree-item${isSelected ? " editor-tree-item--selected" : ""}${entity.locked ? " editor-tree-item--locked" : ""}`}
-      style={{ paddingLeft: `${0.85 + depth * 0.85}rem` }}
+      style={{ paddingLeft: `${0.85 + visualDepth * 0.85}rem` }}
     >
       <div className="editor-tree-main-row">
         {hasChildren ? (
@@ -103,7 +110,6 @@ function HierarchyItem({ entityId, depth, hasChildren, isExpanded, onToggleExpan
             onDoubleClick={handleDoubleClick}
           >
             <span className="editor-tree-name">{entity.name}</span>
-            <span className="editor-tree-type">{entity.type}</span>
           </button>
         )}
 
@@ -185,8 +191,17 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
 
   const renderChildren = (parentId: string | null, depth: number): React.ReactNode[] => {
     const rows: React.ReactNode[] = [];
+    const siblings = getChildren(entities, parentId);
+    // Single-child "pass-through" nodes (near-universal in imported glTF —
+    // wrapper groups that exist only to carry a name/compensation transform,
+    // e.g. RootNode > Object_4 > _rootJoint) render at the same indent as
+    // their parent instead of each claiming their own level. Indent only
+    // advances at an actual branch point (a node with 2+ children) or a leaf.
+    // This is purely a rendering choice — it doesn't touch entity data, so
+    // selection/rename/delete/nodePath hydration are unaffected.
+    const childDepth = siblings.length === 1 ? depth : depth + 1;
 
-    for (const child of getChildren(entities, parentId)) {
+    for (const child of siblings) {
       if (visibleIds && !visibleIds.has(child.id)) continue;
 
       const hasChildren = getChildren(entities, child.id).length > 0;
@@ -196,7 +211,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
         <HierarchyItem
           key={child.id}
           entityId={child.id}
-          depth={depth}
+          depth={childDepth}
           hasChildren={hasChildren}
           isExpanded={isExpanded}
           onToggleExpand={toggleExpand}
@@ -204,7 +219,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       );
 
       if (hasChildren && isExpanded) {
-        rows.push(...renderChildren(child.id, depth + 1));
+        rows.push(...renderChildren(child.id, childDepth));
       }
     }
 

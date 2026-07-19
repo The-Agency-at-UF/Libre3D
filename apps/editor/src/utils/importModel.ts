@@ -65,7 +65,11 @@ async function extractModelHierarchy(buffer: ArrayBuffer): Promise<ImportNodeSpe
     nodes.push({
       tempId,
       parentTempId,
-      name: object.name || `Node ${nodePath[nodePath.length - 1]}`,
+      // glTF nodes are frequently unnamed (compensation/wrapper nodes, loose
+      // exporters, etc.). Fall back to the THREE.js object type (Mesh, Bone,
+      // Group, SkinnedMesh...) instead of a meaningless positional "Node 4" —
+      // it's the closest thing to a name the file actually gives us.
+      name: object.name || object.type,
       nodePath,
       position: [object.position.x, object.position.y, object.position.z],
       rotation: [euler.x, euler.y, euler.z],

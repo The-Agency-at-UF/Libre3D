@@ -127,7 +127,7 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  flex-shrink: 1;
+  flex: 1;
   min-width: 0;
 }
 
@@ -136,6 +136,10 @@
   text-transform: uppercase;
   color: var(--text-tertiary);
   flex-shrink: 0;
+  max-width: 68px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 
