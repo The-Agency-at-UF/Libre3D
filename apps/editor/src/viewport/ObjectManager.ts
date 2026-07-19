@@ -124,7 +124,7 @@ export class ObjectManager {
       group.userData.assetId = entity.assetId;
 
       if (entity.assetId) {
-        this.hydrateImportedModel(group, entity.assetId);
+        this.hydrateImportedModel(group, entity.assetId, entity.id);
       } else {
         this.showImportedModelError(group);
       }
@@ -181,7 +181,7 @@ export class ObjectManager {
     group.userData.loadError = true;
   }
 
-  private async hydrateImportedModel(group: THREE.Group, assetId: string): Promise<void> {
+  private async hydrateImportedModel(group: THREE.Group, assetId: string, rootEntityId: string): Promise<void> {
     try {
       const buffer = await loadModelAsset(assetId);
       if (!buffer) {
@@ -202,6 +202,31 @@ export class ObjectManager {
           // wherever `group` happens to already be positioned in the scene.
           const boundingBox = new THREE.Box3().setFromObject(gltf.scene);
 
+          // Map every glTF node to its nodePath (child-index path from gltf.scene)
+          // so the flat node entities created by extractModelHierarchy can be
+          // resolved back to the actual parsed Object3D without re-parsing.
+          const nodeByPath = new Map<string, THREE.Object3D>();
+          const indexNode = (object: THREE.Object3D, path: number[]) => {
+            nodeByPath.set(path.join(","), object);
+            object.children.forEach((child, index) => indexNode(child, [...path, index]));
+          };
+          gltf.scene.children.forEach((child, index) => indexNode(child, [index]));
+
+          const nodeEntities = useEditorStore
+            .getState()
+            .entities.filter((entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId);
+
+          for (const entity of nodeEntities) {
+            if (!entity.nodePath) continue;
+            const object = nodeByPath.get(entity.nodePath.join(","));
+            if (!object) continue;
+            object.userData.entityId = entity.id;
+            object.userData.entityType = "importedModel";
+            this.meshMap.set(entity.id, object);
+          }
+
+          // gltf.scene's internal node nesting is already correct — no manual
+          // reparenting needed once every node object is tagged and registered.
           group.add(gltf.scene);
 
           const outline = this.createSelectionOutline(boundingBox);
@@ -280,7 +305,10 @@ export class ObjectManager {
     obj.visible = entity.visible;
     obj.userData.locked = entity.locked;
 
-    if (obj instanceof THREE.Mesh) {
+    // Imported model nodes are THREE.Mesh instances too but carry no materialLayers
+    // (see MaterialsPanel's importedModel filter) — skip the layered-material sync
+    // so their original glTF materials aren't overwritten with the layer defaults.
+    if (obj instanceof THREE.Mesh && entity.materialLayers) {
       const colorLayer = entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
       const lightingLayer = entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
       const model = lightingLayer?.model ?? "physical";
@@ -318,13 +346,19 @@ export class ObjectManager {
       const isBeingDragged = existingObj && transformTarget === existingObj && isDragging;
 
       if (existingObj && existingObj.userData.entityType !== entity.type) {
-        this.scene.remove(existingObj);
+        (existingObj.parent ?? this.scene).remove(existingObj);
         this.disposeSceneObject(existingObj);
         this.meshMap.delete(entity.id);
         existingObj = undefined;
       }
 
       if (!existingObj) {
+        // Imported model nodes (no assetId, but nodePath set) are resolved from
+        // the root's async hydrate — don't spawn a generic placeholder for them,
+        // just wait until hydrateImportedModel populates meshMap.
+        const isPendingImportNode = entity.type === "importedModel" && !entity.assetId;
+        if (isPendingImportNode) continue;
+
         const obj = this.createSceneObject(entity);
         obj.userData.entityId = entity.id;
         obj.userData.entityType = entity.type;
@@ -350,7 +384,10 @@ export class ObjectManager {
     for (const staleId of staleIds) {
       const obj = this.meshMap.get(staleId);
       if (obj) {
-        this.scene.remove(obj);
+        // Imported model node objects are nested inside gltf.scene, not direct
+        // children of `this.scene` — detach from their actual parent so deleting
+        // a single node doesn't leave it stuck (and re-rendered) inside the group.
+        (obj.parent ?? this.scene).remove(obj);
         this.disposeSceneObject(obj);
         this.meshMap.delete(staleId);
       }
