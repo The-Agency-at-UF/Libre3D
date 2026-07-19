@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 import { TranslateIcon, RotateIcon, ScaleIcon, PlusIcon } from "./ui/Icons";
-import { importModelFile, extractModelHierarchy } from "../utils/importModel";
+import { prepareModelImport } from "../utils/importModel";
 
 interface FloatingToolbarProps {
   isShapeDropdownOpen: boolean;
@@ -32,11 +32,7 @@ export function FloatingToolbar({
     if (!file) return;
 
     try {
-      const { assetId, name } = await importModelFile(file);
-      const buffer = await file.arrayBuffer();
-      const nodes = await extractModelHierarchy(buffer);
-      const rootIndex = nodes.findIndex((node) => node.parentTempId === null);
-      if (rootIndex !== -1) nodes[rootIndex] = { ...nodes[rootIndex], name };
+      const { assetId, nodes } = await prepareModelImport(file);
       addImportedModelHierarchy(assetId, nodes);
     } catch (error) {
       console.error("[Libre3D] Failed to import model:", error);

@@ -1,41 +1,34 @@
 import * as THREE from "three";
 import { saveModelAsset } from "./modelAssetStore";
+import { createId } from "./createId";
 import type { ImportNodeSpec } from "../store/useEditorStore";
 
-const createAssetId = (): string => {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-
-  return `asset-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
-
-const createTempId = (): string => {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-
-  return `node-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
-
-export async function importModelFile(file: File): Promise<{ assetId: string; name: string }> {
+// The single entry point for importing a .glb: validates, reads the file once,
+// stores the raw buffer, parses it once into a node hierarchy, and names the
+// import root after the file. Call sites just hand the result to
+// addImportedModelHierarchy.
+export async function prepareModelImport(file: File): Promise<{ assetId: string; nodes: ImportNodeSpec[] }> {
   if (!/\.glb$/i.test(file.name)) {
     window.alert("Only .glb files are supported for import.");
     throw new Error("Unsupported file type: only .glb files are supported for import.");
   }
 
   const buffer = await file.arrayBuffer();
-  const assetId = createAssetId();
+  const assetId = createId("asset");
   await saveModelAsset(assetId, buffer);
 
-  return { assetId, name: file.name.replace(/\.glb$/i, "") };
+  const nodes = await extractModelHierarchy(buffer);
+  const root = nodes.find((node) => node.parentTempId === null);
+  if (root) root.name = file.name.replace(/\.glb$/i, "");
+
+  return { assetId, nodes };
 }
 
 // Parses the .glb once and DFS-walks gltf.scene into a flat ImportNodeSpec list.
 // The root spec (parentTempId === null) is a synthetic wrapper for the whole
 // import — it has no corresponding glTF node — while every other spec maps to
 // one node, keyed by its nodePath (child-index path from gltf.scene).
-export async function extractModelHierarchy(buffer: ArrayBuffer): Promise<ImportNodeSpec[]> {
+async function extractModelHierarchy(buffer: ArrayBuffer): Promise<ImportNodeSpec[]> {
   const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
   const loader = new GLTFLoader();
 
@@ -43,7 +36,7 @@ export async function extractModelHierarchy(buffer: ArrayBuffer): Promise<Import
     loader.parse(buffer, "", resolve, reject);
   });
 
-  const rootTempId = createTempId();
+  const rootTempId = createId("node");
   const nodes: ImportNodeSpec[] = [
     {
       tempId: rootTempId,
@@ -58,7 +51,7 @@ export async function extractModelHierarchy(buffer: ArrayBuffer): Promise<Import
 
   const euler = new THREE.Euler();
   const walk = (object: THREE.Object3D, nodePath: number[], parentTempId: string) => {
-    const tempId = createTempId();
+    const tempId = createId("node");
     euler.setFromQuaternion(object.quaternion, "XYZ");
     nodes.push({
       tempId,

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
 import { getDescendantIds } from "./entityIndex";
+import { createId } from "../utils/createId";
 
 export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel";
 
@@ -348,13 +349,7 @@ export const DEFAULT_CAMERA_PROFILE: CameraProfile = {
   zoom: 1,
 };
 
-const createEntityId = (): string => {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-
-  return `entity-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-};
+const createEntityId = (): string => createId("entity");
 
 const createEntity = (type: EntityType): Entity => ({
   id: createEntityId(),
