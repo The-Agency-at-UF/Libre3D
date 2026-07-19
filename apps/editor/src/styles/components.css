@@ -105,6 +105,12 @@
   color: inherit;
 }
 
+/* Keyboard cursor / range anchor — visible even when the row is not selected
+   (e.g. after Ctrl+Click deselects it but arrows still navigate from it). */
+.editor-tree-item--active {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
 .editor-tree-select {
   display: flex;
   align-items: baseline;
