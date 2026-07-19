@@ -1,6 +1,29 @@
 import * as THREE from "three";
-import { type Entity } from "../store/useEditorStore";
+import { type Entity, type MaterialLayer, type ColorLayer, type LightingLayer } from "../store/useEditorStore";
 import { useEditorStore } from "../store/useEditorStore";
+
+type LayeredMaterial =
+  | THREE.MeshBasicMaterial
+  | THREE.MeshLambertMaterial
+  | THREE.MeshPhongMaterial
+  | THREE.MeshStandardMaterial
+  | THREE.MeshToonMaterial;
+
+const materialClassForModel = (model: LightingLayer["model"]) => {
+  switch (model) {
+    case "lambert":
+      return THREE.MeshLambertMaterial;
+    case "phong":
+      return THREE.MeshPhongMaterial;
+    case "toon":
+      return THREE.MeshToonMaterial;
+    case "physical":
+      return THREE.MeshStandardMaterial;
+    case "none":
+    default:
+      return THREE.MeshBasicMaterial;
+  }
+};
 
 export class ObjectManager {
   private scene: THREE.Scene;
@@ -23,19 +46,45 @@ export class ObjectManager {
     }
   }
 
-  private createMaterial(entity: Entity): THREE.MeshStandardMaterial {
-    return new THREE.MeshStandardMaterial({
-      color: entity.color,
-      emissive: new THREE.Color(0x000000),
-      roughness: 0.45,
-      metalness: 0.08,
+  private createMaterialFromLayers(layers: MaterialLayer[] | undefined): LayeredMaterial {
+    const colorLayer = layers?.find((layer): layer is ColorLayer => layer.type === "color");
+    const lightingLayer = layers?.find((layer): layer is LightingLayer => layer.type === "lighting");
+    const model = lightingLayer?.model ?? "physical";
+    const MaterialClass = materialClassForModel(model);
+
+    const material = new MaterialClass({
+      color: colorLayer?.color ?? "#ffffff",
+      opacity: colorLayer?.opacity ?? 1,
+      transparent: (colorLayer?.opacity ?? 1) < 1,
       wireframe: useEditorStore.getState().sceneSettings.wireframe,
     });
+
+    this.applyLightingProperties(material, lightingLayer, model);
+
+    return material;
+  }
+
+  private applyLightingProperties(
+    material: LayeredMaterial,
+    lightingLayer: LightingLayer | undefined,
+    model: LightingLayer["model"]
+  ): void {
+    if (model === "physical" && material instanceof THREE.MeshStandardMaterial) {
+      material.roughness = lightingLayer?.roughness ?? 0.45;
+      material.metalness = lightingLayer?.metalness ?? 0.08;
+    }
+    if (model === "phong" && material instanceof THREE.MeshPhongMaterial) {
+      material.shininess = lightingLayer?.shininess ?? 30;
+    }
+    if (model !== "none" && "emissive" in material) {
+      (material as THREE.MeshStandardMaterial).emissive.set(lightingLayer?.emissive ?? "#000000");
+      (material as THREE.MeshStandardMaterial).emissiveIntensity = lightingLayer?.emissiveIntensity ?? 1;
+    }
   }
 
   private createSceneObject(entity: Entity): THREE.Object3D {
     if (entity.type === "directionalLight") {
-      const light = new THREE.DirectionalLight(new THREE.Color(entity.color), 2.2);
+      const light = new THREE.DirectionalLight(new THREE.Color(entity.color ?? "#ffffff"), 2.2);
       light.position.set(...entity.position);
       light.rotation.set(...entity.rotation);
       light.scale.set(...entity.scale);
@@ -53,7 +102,7 @@ export class ObjectManager {
 
       return light;
     } else {
-      const mesh = new THREE.Mesh(this.createGeometry(entity), this.createMaterial(entity));
+      const mesh = new THREE.Mesh(this.createGeometry(entity), this.createMaterialFromLayers(entity.materialLayers));
       mesh.position.set(...entity.position);
       mesh.rotation.set(...entity.rotation);
       mesh.scale.set(...entity.scale);
@@ -91,11 +140,26 @@ export class ObjectManager {
     obj.userData.locked = entity.locked;
 
     if (obj instanceof THREE.Mesh) {
-      if (obj.material instanceof THREE.MeshStandardMaterial) {
-        obj.material.color.set(entity.color);
+      const colorLayer = entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
+      const lightingLayer = entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
+      const model = lightingLayer?.model ?? "physical";
+      const MaterialClass = materialClassForModel(model);
+
+      if (obj.material.constructor !== MaterialClass) {
+        const oldMaterial = obj.material as THREE.Material;
+        obj.material = this.createMaterialFromLayers(entity.materialLayers);
+        oldMaterial.dispose();
+      } else {
+        const material = obj.material as LayeredMaterial;
+        material.color.set(colorLayer?.color ?? "#ffffff");
+        const opacity = colorLayer?.opacity ?? 1;
+        material.opacity = opacity;
+        material.transparent = opacity < 1;
+        material.wireframe = useEditorStore.getState().sceneSettings.wireframe;
+        this.applyLightingProperties(material, lightingLayer, model);
       }
     } else if (obj instanceof THREE.DirectionalLight) {
-      obj.color.set(entity.color);
+      obj.color.set(entity.color ?? "#ffffff");
       if (obj.userData.helper) {
         obj.userData.helper.visible = entity.visible;
         obj.userData.helper.update();

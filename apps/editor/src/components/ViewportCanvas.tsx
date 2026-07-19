@@ -154,8 +154,8 @@ export function ViewportCanvas() {
 
     // Wireframe sync
     objectManager?.getMeshes().forEach((mesh) => {
-      if (mesh instanceof THREE.Mesh && mesh.material instanceof THREE.MeshStandardMaterial) {
-        mesh.material.wireframe = sceneSettings.wireframe;
+      if (mesh instanceof THREE.Mesh && "wireframe" in mesh.material) {
+        (mesh.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
       }
     });
   }, [sceneManager, sceneSettings, objectManager]);
@@ -184,13 +184,6 @@ export function ViewportCanvas() {
     const isDragging      = !!transformControlsRef.current?.dragging;
 
     objectManager.syncMeshes(entities, transformTarget, isDragging);
-
-    // Clean up previous emissive for all meshes first
-    objectManager.getMeshes().forEach(obj => {
-      if (obj instanceof THREE.Mesh && obj.material instanceof THREE.MeshStandardMaterial) {
-        obj.material.emissive.set(0x000000);
-      }
-    });
 
     const locked = selectedEntityIds.some(id => objectManager.getObject(id)?.userData.locked);
     if (locked || selectedEntityIds.length === 0) {
