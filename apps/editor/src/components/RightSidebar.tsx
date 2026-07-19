@@ -1,6 +1,7 @@
 import { useEditorStore } from "../store/useEditorStore";
 import { InspectorTopbar } from "./inspector/InspectorTopbar";
 import { TransformPanel } from "./inspector/TransformPanel";
+import { MaterialsPanel } from "./inspector/MaterialsPanel";
 import { ScenePanel } from "./inspector/ScenePanel";
 import { CameraPanel } from "./inspector/CameraPanel";
 import { FramePanel } from "./inspector/FramePanel";
@@ -37,6 +38,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
         {selectedEntities.length > 0 ? (
           <>
             <TransformPanel selectedEntities={selectedEntities} />
+            <MaterialsPanel selectedEntities={selectedEntities} />
           </>
         ) : (
           <CameraPanel />
