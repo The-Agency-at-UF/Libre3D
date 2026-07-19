@@ -148,10 +148,6 @@ function EditorApp() {
     });
   };
 
-  const triggerPlaceholder = (action: string) => {
-    window.alert(`${action} action triggered.`);
-  };
-
   // Global Hotkeys
   useHotkeys({
     onDuplicate: handleDuplicate,
@@ -255,7 +251,6 @@ function EditorApp() {
               onDuplicate={handleDuplicate}
               onResetCamera={handleResetCamera}
               onToggleTheme={handleToggleTheme}
-              onTriggerPlaceholder={triggerPlaceholder}
               showAxisGuides={showAxisGuides}
               onToggleAxisGuides={handleToggleAxisGuides}
             />

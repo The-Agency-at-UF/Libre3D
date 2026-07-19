@@ -1,11 +1,11 @@
 import { useState } from "react";
+import { useEditorStore } from "../store/useEditorStore";
 
 interface HamburgerMenuProps {
   onNewFile: () => void;
   onDuplicate: () => void;
   onResetCamera: () => void;
   onToggleTheme: () => void;
-  onTriggerPlaceholder: (action: string) => void;
   showAxisGuides: boolean;
   onToggleAxisGuides: () => void;
 }
@@ -20,7 +20,6 @@ export function HamburgerMenu({
   onDuplicate,
   onResetCamera,
   onToggleTheme,
-  onTriggerPlaceholder,
   showAxisGuides,
   onToggleAxisGuides,
 }: HamburgerMenuProps) {
@@ -83,7 +82,7 @@ export function HamburgerMenu({
             <button
               className="hamburger-dropdown-btn"
               type="button"
-              onClick={() => handleItemClick(() => onTriggerPlaceholder("Undo"))}
+              onClick={() => handleItemClick(() => useEditorStore.temporal.getState().undo())}
             >
               <span>
                 <i className="ti ti-arrow-back-up" style={{ marginRight: "6px" }}></i>
@@ -94,13 +93,13 @@ export function HamburgerMenu({
             <button
               className="hamburger-dropdown-btn"
               type="button"
-              onClick={() => handleItemClick(() => onTriggerPlaceholder("Redo"))}
+              onClick={() => handleItemClick(() => useEditorStore.temporal.getState().redo())}
             >
               <span>
                 <i className="ti ti-arrow-forward-up" style={{ marginRight: "6px" }}></i>
                 Redo
               </span>
-              <span className="hamburger-dropdown-shortcut">Ctrl+Y</span>
+              <span className="hamburger-dropdown-shortcut">Ctrl+Shift+Z</span>
             </button>
             <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
             <button
