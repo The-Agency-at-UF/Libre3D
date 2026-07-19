@@ -4,6 +4,32 @@ import { temporal } from "zundo";
 
 export type EntityType = "cube" | "sphere" | "torus" | "directionalLight";
 
+export type MaterialLayerType = "color" | "lighting";
+export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
+
+export interface ColorLayer {
+  id: string;
+  type: "color";
+  enabled: boolean;
+  opacity: number; // 0-1
+  color: string;
+}
+
+export interface LightingLayer {
+  id: string;
+  type: "lighting";
+  enabled: boolean;
+  opacity: number;
+  model: LightingModel;
+  roughness: number; // only meaningful when model === "physical"
+  metalness: number; // only meaningful when model === "physical"
+  shininess: number; // only meaningful when model === "phong"
+  emissive: string;
+  emissiveIntensity: number; // ignored when model === "none"
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer;
+
 export interface Entity {
   id: string;
   type: EntityType;
@@ -11,7 +37,8 @@ export interface Entity {
   position: [number, number, number];
   rotation: [number, number, number];
   scale: [number, number, number];
-  color: string;
+  color?: string;
+  materialLayers?: MaterialLayer[];
   visible: boolean;
   locked: boolean;
 }
@@ -229,10 +256,14 @@ export interface EditorState {
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode">>) => void;
+  addMaterialLayer: (entityId: string, layerType: MaterialLayerType) => void;
+  removeMaterialLayer: (entityId: string, layerId: string) => void;
+  updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
+  updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
 }
 
-const ENTITY_DEFAULTS: Record<EntityType, Pick<Entity, "name" | "color">> = {
+const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   cube: {
     name: "Cube",
     color: "#4f8cff",
@@ -250,6 +281,35 @@ const ENTITY_DEFAULTS: Record<EntityType, Pick<Entity, "name" | "color">> = {
     color: "#ffffff",
   },
 };
+
+const MANDATORY_LAYER_TYPES: MaterialLayerType[] = ["color", "lighting"];
+
+const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
+  id: createEntityId(),
+  type: "color",
+  enabled: true,
+  opacity,
+  color,
+});
+
+const createLightingLayer = (overrides: Partial<LightingLayer> = {}): LightingLayer => ({
+  id: createEntityId(),
+  type: "lighting",
+  enabled: true,
+  opacity: 1,
+  model: "physical",
+  roughness: 0.45,
+  metalness: 0.08,
+  shininess: 30,
+  emissive: "#000000",
+  emissiveIntensity: 1,
+  ...overrides,
+});
+
+const createDefaultMaterialLayers = (color: string): MaterialLayer[] => [
+  createColorLayer(color, 1),
+  createLightingLayer(),
+];
 
 const ZERO_VECTOR: [number, number, number] = [0, 0, 0];
 const UNIT_VECTOR: [number, number, number] = [1, 1, 1];
@@ -281,7 +341,9 @@ const createEntity = (type: EntityType): Entity => ({
   position: (type === "directionalLight" ? [5, 8, 4] : [...ZERO_VECTOR]) as [number, number, number],
   rotation: [...ZERO_VECTOR] as [number, number, number],
   scale: [...UNIT_VECTOR] as [number, number, number],
-  color: ENTITY_DEFAULTS[type].color,
+  ...(type === "directionalLight"
+    ? { color: ENTITY_DEFAULTS[type].color }
+    : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
   visible: true,
   locked: false,
 });
@@ -333,6 +395,7 @@ const cloneEntity = (entity: Entity): Entity => ({
   scale: cloneVector(entity.scale),
   visible: entity.visible ?? true,
   locked: entity.locked ?? false,
+  ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map((layer) => ({ ...layer })) } : null),
 });
 
 function deepMerge(target: any, source: any): any {
@@ -557,13 +620,99 @@ export const useEditorStore = create<EditorState>()(
             set((state) => ({
               frame: deepMerge(state.frame, updates),
             })),
+          addMaterialLayer: (entityId, layerType) =>
+            set((state) => ({
+              entities: state.entities.map((entity) => {
+                if (entity.id !== entityId || !entity.materialLayers) return entity;
+                if (entity.materialLayers.some((layer) => layer.type === layerType)) return entity;
+
+                const colorLayer = entity.materialLayers.find((layer): layer is ColorLayer => layer.type === "color");
+                const newLayer: MaterialLayer =
+                  layerType === "color"
+                    ? createColorLayer(colorLayer?.color ?? "#ffffff")
+                    : createLightingLayer();
+
+                return {
+                  ...entity,
+                  materialLayers: [...entity.materialLayers, newLayer],
+                };
+              }),
+            })),
+          removeMaterialLayer: (entityId, layerId) =>
+            set((state) => ({
+              entities: state.entities.map((entity) => {
+                if (entity.id !== entityId || !entity.materialLayers) return entity;
+                const layer = entity.materialLayers.find((l) => l.id === layerId);
+                if (!layer || MANDATORY_LAYER_TYPES.includes(layer.type)) return entity;
+
+                return {
+                  ...entity,
+                  materialLayers: entity.materialLayers.filter((l) => l.id !== layerId),
+                };
+              }),
+            })),
+          updateMaterialLayer: (entityId, layerId, updates) =>
+            set((state) => ({
+              entities: state.entities.map((entity) => {
+                if (entity.id !== entityId || !entity.materialLayers) return entity;
+                return {
+                  ...entity,
+                  materialLayers: entity.materialLayers.map((layer) =>
+                    layer.id === layerId ? ({ ...layer, ...updates } as MaterialLayer) : layer,
+                  ),
+                };
+              }),
+            })),
+          updateMultipleEntityMaterialLayers: (updatesMap) =>
+            set((state) => ({
+              entities: state.entities.map((entity) => {
+                const change = updatesMap[entity.id];
+                if (!change || !entity.materialLayers) return entity;
+                return {
+                  ...entity,
+                  materialLayers: entity.materialLayers.map((layer) =>
+                    layer.id === change.layerId ? ({ ...layer, ...change.updates } as MaterialLayer) : layer,
+                  ),
+                };
+              }),
+            })),
           setEditorState: (updates) => set((state) => ({ ...state, ...updates })),
         }),
         {
           name: "libre3d-scene-state",
-          version: 11,
+          version: 12,
           storage: createJSONStorage(() => localStorage),
           migrate: (persistedState: any, version: number) => {
+            if (version < 12) {
+              if (persistedState && Array.isArray(persistedState.entities)) {
+                persistedState.entities = persistedState.entities.map((entity: any) => {
+                  if (entity.type === "directionalLight") return entity;
+
+                  const color = entity.color ?? "#ffffff";
+                  const nextEntity = {
+                    ...entity,
+                    materialLayers: [
+                      { id: createEntityId(), type: "color", enabled: true, opacity: 1, color },
+                      {
+                        id: createEntityId(),
+                        type: "lighting",
+                        enabled: true,
+                        opacity: 1,
+                        model: "physical",
+                        roughness: 0.45,
+                        metalness: 0.08,
+                        shininess: 30,
+                        emissive: "#000000",
+                        emissiveIntensity: 1,
+                      },
+                    ],
+                  };
+                  delete nextEntity.color;
+                  return nextEntity;
+                });
+              }
+            }
+
             if (version < 11) {
               if (persistedState && persistedState.selectedEntityId !== undefined) {
                 persistedState.selectedEntityIds = persistedState.selectedEntityId ? [persistedState.selectedEntityId] : [];
