@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { type Entity, type MaterialLayer, type ColorLayer, type LightingLayer } from "../store/useEditorStore";
 import { useEditorStore } from "../store/useEditorStore";
+import { loadModelAsset } from "../utils/modelAssetStore";
 
 type LayeredMaterial =
   | THREE.MeshBasicMaterial
@@ -87,7 +88,7 @@ export class ObjectManager {
   // every frame, e.g. THREE.BoxHelper) means it inherits the mesh's full transform for
   // free — it stays a tight, correctly oriented box even when the object is rotated,
   // matching Spline's selection indicator instead of a looser world-axis-aligned box.
-  private createSelectionOutline(boundingBox: THREE.Box3): THREE.LineSegments {
+  private createSelectionOutline(boundingBox: THREE.Box3, color = 0xffffff): THREE.LineSegments {
     const size = new THREE.Vector3();
     boundingBox.getSize(size);
     const center = new THREE.Vector3();
@@ -99,7 +100,7 @@ export class ObjectManager {
     boxGeometry.dispose();
 
     const material = new THREE.LineBasicMaterial({
-      color: 0xffffff,
+      color,
       transparent: true,
       opacity: 0.9,
       depthTest: false, // always render on top, same convention TransformControls uses
@@ -115,7 +116,21 @@ export class ObjectManager {
   }
 
   private createSceneObject(entity: Entity): THREE.Object3D {
-    if (entity.type === "directionalLight") {
+    if (entity.type === "importedModel") {
+      const group = new THREE.Group();
+      group.position.set(...entity.position);
+      group.rotation.set(...entity.rotation);
+      group.scale.set(...entity.scale);
+      group.userData.assetId = entity.assetId;
+
+      if (entity.assetId) {
+        this.hydrateImportedModel(group, entity.assetId);
+      } else {
+        this.showImportedModelError(group);
+      }
+
+      return group;
+    } else if (entity.type === "directionalLight") {
       const light = new THREE.DirectionalLight(new THREE.Color(entity.color ?? "#ffffff"), 2.2);
       light.position.set(...entity.position);
       light.rotation.set(...entity.rotation);
@@ -149,6 +164,61 @@ export class ObjectManager {
     }
   }
 
+  // Recolors/rebuilds the group's outline as a red box so a failed import stays visible,
+  // selectable, and obviously broken instead of silently vanishing from the scene.
+  private showImportedModelError(group: THREE.Group): void {
+    const existingOutline = group.userData.selectionOutline as THREE.LineSegments | undefined;
+    if (existingOutline) {
+      group.remove(existingOutline);
+      existingOutline.geometry.dispose();
+      (existingOutline.material as THREE.Material).dispose();
+    }
+
+    const errorBox = new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
+    const outline = this.createSelectionOutline(errorBox, 0xff3b30);
+    group.add(outline);
+    group.userData.selectionOutline = outline;
+    group.userData.loadError = true;
+  }
+
+  private async hydrateImportedModel(group: THREE.Group, assetId: string): Promise<void> {
+    try {
+      const buffer = await loadModelAsset(assetId);
+      if (!buffer) {
+        console.error(`[Libre3D] Imported model asset "${assetId}" was not found in IndexedDB.`);
+        this.showImportedModelError(group);
+        return;
+      }
+
+      const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
+      const loader = new GLTFLoader();
+
+      loader.parse(
+        buffer,
+        "",
+        (gltf) => {
+          // Bounding box MUST be computed before the scene is parented to `group` —
+          // once parented, world and local space diverge and the box would reflect
+          // wherever `group` happens to already be positioned in the scene.
+          const boundingBox = new THREE.Box3().setFromObject(gltf.scene);
+
+          group.add(gltf.scene);
+
+          const outline = this.createSelectionOutline(boundingBox);
+          group.add(outline);
+          group.userData.selectionOutline = outline;
+        },
+        (error) => {
+          console.error(`[Libre3D] Failed to parse imported model asset "${assetId}":`, error);
+          this.showImportedModelError(group);
+        },
+      );
+    } catch (error) {
+      console.error(`[Libre3D] Failed to load imported model asset "${assetId}":`, error);
+      this.showImportedModelError(group);
+    }
+  }
+
   public disposeSceneObject(obj: THREE.Object3D): void {
     if (obj instanceof THREE.Mesh) {
       obj.geometry.dispose();
@@ -171,6 +241,33 @@ export class ObjectManager {
       if (obj.userData.target) {
         this.scene.remove(obj.userData.target);
       }
+    } else if (obj instanceof THREE.Group) {
+      const outline = obj.userData.selectionOutline as THREE.LineSegments | undefined;
+      if (outline) {
+        outline.geometry.dispose();
+        (outline.material as THREE.Material).dispose();
+      }
+
+      const textureSlots = [
+        "map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap",
+        "aoMap", "alphaMap", "bumpMap", "displacementMap", "envMap",
+        "lightMap", "clearcoatMap", "clearcoatNormalMap", "clearcoatRoughnessMap",
+        "sheenColorMap", "sheenRoughnessMap", "transmissionMap", "thicknessMap",
+      ] as const;
+
+      obj.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          const materials = Array.isArray(child.material) ? child.material : [child.material];
+          materials.forEach((material) => {
+            textureSlots.forEach((slot) => {
+              const texture = (material as any)[slot] as THREE.Texture | undefined;
+              if (texture) texture.dispose();
+            });
+            material.dispose();
+          });
+        }
+      });
     }
   }
 
