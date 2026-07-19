@@ -1082,6 +1082,69 @@
   cursor: default;
 }
 
+/* Batch rename dialog */
+.hierarchy-batch-rename {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 240px;
+  background: var(--bg-panel);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-sizing: border-box;
+}
+
+.hierarchy-batch-rename-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.hierarchy-batch-rename label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.hierarchy-batch-rename input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 11px;
+  font-family: var(--font);
+  padding: 4px 6px;
+  outline: none;
+}
+
+.hierarchy-batch-rename input:focus {
+  border-color: var(--accent);
+}
+
+.hierarchy-batch-rename-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.hierarchy-batch-rename-apply {
+  background: var(--accent);
+  color: var(--text-on-accent, #fff);
+}
+
 .hierarchy-context-menu .hamburger-dropdown-btn:disabled:hover {
   background: transparent;
 }

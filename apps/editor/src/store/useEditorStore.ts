@@ -263,6 +263,7 @@ export interface EditorState {
   toggleVisibility: (id: string) => void;
   toggleLock: (id: string) => void;
   renameEntity: (id: string, newName: string) => void;
+  renameEntities: (updates: Record<string, string>) => void;
 
   // Viewport / Projection
   activeTransformTool: "translate" | "rotate" | "scale";
@@ -854,6 +855,14 @@ export const useEditorStore = create<EditorState>()(
               entities: state.entities.map((entity) =>
                 entity.id === id ? { ...entity, name: newName } : entity,
               ),
+            })),
+          // Batch rename in one set() so the whole operation is one undo step.
+          renameEntities: (updates) =>
+            set((state) => ({
+              entities: state.entities.map((entity) => {
+                const newName = updates[entity.id]?.trim();
+                return newName ? { ...entity, name: newName } : entity;
+              }),
             })),
           // Viewport / Projection
           activeTransformTool: "translate",

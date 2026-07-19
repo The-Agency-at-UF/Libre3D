@@ -64,6 +64,12 @@ type DropTarget =
 const ROW_INDENT_BASE_REM = 0.85;
 const ROW_INDENT_STEP_REM = 0.85;
 
+// Above this many visible rows the tree windows its rendering: only rows in
+// (and near) the scroll viewport mount, with spacer divs standing in for the
+// rest. Below it, plain full rendering — simpler and plenty fast.
+const VIRTUALIZE_THRESHOLD = 200;
+const VIRTUALIZE_OVERSCAN = 12;
+
 // Tabler webfont classes (already loaded via CDN in index.html) — the
 // glanceable replacement for the removed text type badge.
 const iconClassForEntity = (entity: Entity): string => {
@@ -86,6 +92,71 @@ const iconClassForEntity = (entity: Entity): string => {
   }
 };
 
+// Blender's Ctrl+F2 equivalent: find/replace plus prefix/suffix across the
+// whole selection, applied through renameEntities in one undo step.
+function BatchRenameDialog({ onClose }: { onClose: () => void }) {
+  const [find, setFind] = useState("");
+  const [replace, setReplace] = useState("");
+  const [prefix, setPrefix] = useState("");
+  const [suffix, setSuffix] = useState("");
+  const selectedCount = useEditorStore((state) => state.selectedEntityIds.length);
+
+  const apply = () => {
+    const state = useEditorStore.getState();
+    const updates: Record<string, string> = {};
+    state.selectedEntityIds.forEach((id) => {
+      const entity = state.entities.find((e) => e.id === id);
+      if (!entity || entity.locked) return;
+      let name = entity.name;
+      if (find) name = name.split(find).join(replace);
+      name = `${prefix}${name}${suffix}`;
+      if (name.trim() && name !== entity.name) updates[id] = name;
+    });
+    if (Object.keys(updates).length > 0) state.renameEntities(updates);
+    onClose();
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter") apply();
+    if (event.key === "Escape") onClose();
+  };
+
+  return (
+    <>
+      <div className="hierarchy-context-overlay" onClick={onClose} />
+      <div className="hierarchy-batch-rename" onKeyDown={handleKeyDown}>
+        <div className="hierarchy-batch-rename-title">
+          Batch Rename ({selectedCount} selected)
+        </div>
+        <label>
+          Find
+          <input autoFocus type="text" value={find} onChange={(e) => setFind(e.target.value)} />
+        </label>
+        <label>
+          Replace with
+          <input type="text" value={replace} onChange={(e) => setReplace(e.target.value)} />
+        </label>
+        <label>
+          Prefix
+          <input type="text" value={prefix} onChange={(e) => setPrefix(e.target.value)} />
+        </label>
+        <label>
+          Suffix
+          <input type="text" value={suffix} onChange={(e) => setSuffix(e.target.value)} />
+        </label>
+        <div className="hierarchy-batch-rename-actions">
+          <button type="button" className="hamburger-dropdown-btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button type="button" className="hamburger-dropdown-btn hierarchy-batch-rename-apply" onClick={apply}>
+            Apply
+          </button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 // Right-click menu. Every action operates on the whole current selection
 // (Blender's convention); enablement mirrors the same store guards the
 // actions themselves enforce, so a disabled item is never a lie.
@@ -93,10 +164,12 @@ function HierarchyContextMenu({
   menu,
   onClose,
   onRename,
+  onBatchRename,
 }: {
   menu: ContextMenuState;
   onClose: () => void;
   onRename: (id: string) => void;
+  onBatchRename: () => void;
 }) {
   const entities = useEditorStore((state) => state.entities);
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
@@ -160,6 +233,14 @@ function HierarchyContextMenu({
         >
           <span>Rename</span>
           <span className="hamburger-dropdown-shortcut">F2</span>
+        </button>
+        <button
+          className="hamburger-dropdown-btn"
+          type="button"
+          disabled={selected.length < 2}
+          onClick={() => run(onBatchRename)}
+        >
+          <span>Batch Rename…</span>
         </button>
         <button
           className="hamburger-dropdown-btn"
@@ -427,6 +508,12 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const draggedIdsRef = useRef<string[]>([]);
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const dragExpandTimer = useRef<{ id: string; timer: number } | null>(null);
+  const [batchRenameOpen, setBatchRenameOpen] = useState(false);
+  // Virtualization: mounted row window (null = render everything).
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  const scrollParentRef = useRef<HTMLElement | null>(null);
+  const rowPitchRef = useRef(26);
+  const [rowWindow, setRowWindow] = useState<{ start: number; end: number } | null>(null);
 
   const toggleExpand = (id: string) => {
     setCollapsedIds((prev) => {
@@ -502,10 +589,70 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     return rows;
   }, [entities, visibleIds, collapsedIds, trimmedQuery]);
 
+  // Window the mounted rows to the scroll viewport once the tree is large.
+  useEffect(() => {
+    if (flatRows.length <= VIRTUALIZE_THRESHOLD) {
+      scrollParentRef.current = null;
+      setRowWindow(null);
+      return;
+    }
+    const treeEl = treeRef.current;
+    if (!treeEl) return;
+
+    let scroller: HTMLElement | null = treeEl.parentElement;
+    while (scroller && scroller !== document.body) {
+      const { overflowY } = getComputedStyle(scroller);
+      if (overflowY === "auto" || overflowY === "scroll") break;
+      scroller = scroller.parentElement;
+    }
+    if (scroller === document.body) scroller = null;
+    scrollParentRef.current = scroller;
+
+    const update = () => {
+      // Pitch (row height + tree gap) measured from two mounted neighbors.
+      const rows = treeEl.querySelectorAll("[data-entity-id]");
+      if (rows.length >= 2) {
+        const pitch = rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top;
+        if (pitch > 8) rowPitchRef.current = pitch;
+      }
+      const pitch = rowPitchRef.current;
+      const viewTop = scroller ? scroller.getBoundingClientRect().top : 0;
+      const viewHeight = scroller ? scroller.clientHeight : window.innerHeight;
+      const scrolledPast = viewTop - treeEl.getBoundingClientRect().top;
+      const start = Math.max(0, Math.floor(scrolledPast / pitch) - VIRTUALIZE_OVERSCAN);
+      const count = Math.ceil(viewHeight / pitch) + VIRTUALIZE_OVERSCAN * 2;
+      setRowWindow((prev) => {
+        const next = { start, end: Math.min(flatRows.length, start + count) };
+        return prev && prev.start === next.start && prev.end === next.end ? prev : next;
+      });
+    };
+
+    update();
+    const target: HTMLElement | Window = scroller ?? window;
+    target.addEventListener("scroll", update, { passive: true });
+    const resizeObserver = new ResizeObserver(update);
+    if (scroller) resizeObserver.observe(scroller);
+    return () => {
+      target.removeEventListener("scroll", update);
+      resizeObserver.disconnect();
+    };
+  }, [flatRows.length]);
+
   const scrollRowIntoView = (id: string) => {
-    containerRef.current
-      ?.querySelector(`[data-entity-id="${CSS.escape(id)}"]`)
-      ?.scrollIntoView({ block: "nearest" });
+    const el = containerRef.current?.querySelector(`[data-entity-id="${CSS.escape(id)}"]`);
+    if (el) {
+      el.scrollIntoView({ block: "nearest" });
+      return;
+    }
+    // Virtualized and not mounted: jump the scroll container to the row's
+    // computed offset; the window effect mounts it on the resulting scroll.
+    const rowIndex = flatRows.findIndex((row) => row.id === id);
+    const scroller = scrollParentRef.current;
+    const treeEl = treeRef.current;
+    if (rowIndex === -1 || !scroller || !treeEl) return;
+    const treeTopInScroller =
+      treeEl.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    scroller.scrollTop = treeTopInScroller + rowIndex * rowPitchRef.current - scroller.clientHeight / 2;
   };
 
   // Replace-select every visible row between the two ids (inclusive).
@@ -858,7 +1005,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
         if (!containerRef.current?.contains(e.relatedTarget as Node)) setDropTarget(null);
       }}
     >
-      <div className="editor-tree" aria-label="Scene hierarchy">
+      <div className="editor-tree" aria-label="Scene hierarchy" ref={treeRef}>
         {pendingImportCount > 0 && (
           <div className="hierarchy-status-note" role="status">
             <i className="ti ti-loader-2 hierarchy-status-spinner" aria-hidden="true" />
@@ -872,7 +1019,10 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
               : "Scene is empty. Add a shape with the + button, or drop a .glb file into the viewport."}
           </div>
         )}
-        {flatRows.map((row) => (
+        {rowWindow && rowWindow.start > 0 && (
+          <div style={{ height: rowWindow.start * rowPitchRef.current - 2, flexShrink: 0 }} aria-hidden="true" />
+        )}
+        {(rowWindow ? flatRows.slice(rowWindow.start, rowWindow.end) : flatRows).map((row) => (
           <HierarchyItem
             key={row.id}
             entityId={row.id}
@@ -903,6 +1053,12 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
             onFinishRename={() => setRenamingId(null)}
           />
         ))}
+        {rowWindow && rowWindow.end < flatRows.length && (
+          <div
+            style={{ height: (flatRows.length - rowWindow.end) * rowPitchRef.current - 2, flexShrink: 0 }}
+            aria-hidden="true"
+          />
+        )}
       </div>
 
       {contextMenu && (
@@ -913,8 +1069,10 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
             setRenamingId(id);
             setActiveId(id);
           }}
+          onBatchRename={() => setBatchRenameOpen(true)}
         />
       )}
+      {batchRenameOpen && <BatchRenameDialog onClose={() => setBatchRenameOpen(false)} />}
     </div>
   );
 }
