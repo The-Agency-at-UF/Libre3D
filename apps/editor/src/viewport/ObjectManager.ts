@@ -246,6 +246,17 @@ export class ObjectManager {
             object.userData.parentEntityId = object.parent?.userData?.entityId ?? rootEntityId;
           }
 
+          // The parsed objects carry the *file's* transforms, but the store is
+          // the source of truth — the user may have moved/hidden nodes in a
+          // past session (gizmo edits update the store, and syncMeshes skipped
+          // these entities while hydration was pending, never to re-run
+          // unprompted). Re-apply the stored local TRS and flags to every
+          // registered node so a reload doesn't silently revert edits.
+          for (const entity of nodeEntities) {
+            const object = this.meshMap.get(entity.id);
+            if (object) this.syncEntityToSceneObject(object, entity, false);
+          }
+
           // gltf.scene's internal node nesting is already correct — no manual
           // reparenting needed once every node object is tagged and registered.
           group.add(gltf.scene);
