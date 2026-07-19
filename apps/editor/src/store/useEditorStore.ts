@@ -240,7 +240,7 @@ export interface EditorState {
   deleteCameraProfile: (id: string) => void;
   updateProfileData: (id: string, updates: Partial<CameraProfile>) => void;
   addEntity: (type: EntityType) => string;
-  addImportedModelEntity: (assetId: string, name: string) => string;
+  addImportedModelHierarchy: (assetId: string, nodes: ImportNodeSpec[]) => string;
   duplicateEntity: (ids: string[]) => void;
   removeEntity: (ids: string[]) => void;
   updateEntityTransform: (id: string, updates: EntityTransformUpdates) => void;
@@ -277,7 +277,7 @@ export interface EditorState {
   removeMaterialLayer: (entityId: string, layerId: string) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelEntity" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -505,30 +505,40 @@ export const useEditorStore = create<EditorState>()(
             });
             return newId;
           },
-          addImportedModelEntity: (assetId, name) => {
-            let newId = "";
+          addImportedModelHierarchy: (assetId, nodes) => {
+            let rootRealId = "";
             set((state) => {
-              const entity: Entity = {
-                id: createEntityId(),
-                type: "importedModel",
-                name,
-                position: [...ZERO_VECTOR] as [number, number, number],
-                rotation: [...ZERO_VECTOR] as [number, number, number],
-                scale: [...UNIT_VECTOR] as [number, number, number],
-                assetId,
-                sourceFileName: name,
-                parentId: null,
-                visible: true,
-                locked: false,
-              };
-              newId = entity.id;
+              const rootNode = nodes.find((node) => node.parentTempId === null);
+              if (!rootNode) return state;
+
+              const tempToReal = new Map<string, string>();
+              nodes.forEach((node) => tempToReal.set(node.tempId, createEntityId()));
+              rootRealId = tempToReal.get(rootNode.tempId)!;
+
+              const newEntities: Entity[] = nodes.map((node) => {
+                const isRoot = node.tempId === rootNode.tempId;
+                return {
+                  id: tempToReal.get(node.tempId)!,
+                  type: "importedModel",
+                  name: node.name,
+                  position: cloneVector(node.position),
+                  rotation: cloneVector(node.rotation),
+                  scale: cloneVector(node.scale),
+                  parentId: node.parentTempId ? tempToReal.get(node.parentTempId) ?? null : null,
+                  nodePath: [...node.nodePath],
+                  rootEntityId: rootRealId,
+                  ...(isRoot ? { assetId, sourceFileName: node.name } : {}),
+                  visible: true,
+                  locked: false,
+                };
+              });
 
               return {
-                entities: [...state.entities, entity],
-                selectedEntityIds: [entity.id],
+                entities: [...state.entities, ...newEntities],
+                selectedEntityIds: [rootRealId],
               };
             });
-            return newId;
+            return rootRealId;
           },
           duplicateEntity: (ids) => {
             set((state) => {

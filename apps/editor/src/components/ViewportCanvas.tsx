@@ -7,7 +7,7 @@ import { ObjectManager } from "../viewport/ObjectManager";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
 import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
-import { importModelFile } from "../utils/importModel";
+import { importModelFile, extractModelHierarchy } from "../utils/importModel";
 
 export function ViewportCanvas() {
   const wrapperRef   = useRef<HTMLDivElement | null>(null);
@@ -370,8 +370,12 @@ export function ViewportCanvas() {
 
       Array.from(files).forEach((file) => {
         importModelFile(file)
-          .then(({ assetId, name }) => {
-            useEditorStore.getState().addImportedModelEntity(assetId, name);
+          .then(async ({ assetId, name }) => {
+            const buffer = await file.arrayBuffer();
+            const nodes = await extractModelHierarchy(buffer);
+            const rootIndex = nodes.findIndex((node) => node.parentTempId === null);
+            if (rootIndex !== -1) nodes[rootIndex] = { ...nodes[rootIndex], name };
+            useEditorStore.getState().addImportedModelHierarchy(assetId, nodes);
           })
           .catch((error) => {
             console.error("[Libre3D] Failed to import dropped model:", error);
