@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { saveModelAsset } from "./modelAssetStore";
 import { createId } from "./createId";
+import { walkGltfScene, nodePathKey } from "./gltfHierarchy";
 import type { ImportNodeSpec } from "../store/useEditorStore";
 
 // The single entry point for importing a .glb: validates, reads the file once,
@@ -49,9 +50,17 @@ async function extractModelHierarchy(buffer: ArrayBuffer): Promise<ImportNodeSpe
     },
   ];
 
+  // Parent lookup by path, so we don't have to re-thread parent ids through the
+  // shared walk. Pre-order DFS guarantees a parent is recorded before its
+  // children; the empty path maps to the synthetic import root.
+  const tempIdByPath = new Map<string, string>([["", rootTempId]]);
   const euler = new THREE.Euler();
-  const walk = (object: THREE.Object3D, nodePath: number[], parentTempId: string) => {
+
+  walkGltfScene(gltf.scene, (object, nodePath) => {
     const tempId = createId("node");
+    tempIdByPath.set(nodePathKey(nodePath), tempId);
+    const parentTempId = tempIdByPath.get(nodePathKey(nodePath.slice(0, -1))) ?? rootTempId;
+
     euler.setFromQuaternion(object.quaternion, "XYZ");
     nodes.push({
       tempId,
@@ -62,11 +71,7 @@ async function extractModelHierarchy(buffer: ArrayBuffer): Promise<ImportNodeSpe
       rotation: [euler.x, euler.y, euler.z],
       scale: [object.scale.x, object.scale.y, object.scale.z],
     });
-
-    object.children.forEach((child, index) => walk(child, [...nodePath, index], tempId));
-  };
-
-  gltf.scene.children.forEach((child: THREE.Object3D, index: number) => walk(child, [index], rootTempId));
+  });
 
   return nodes;
 }

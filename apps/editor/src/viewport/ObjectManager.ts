@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { type Entity, type MaterialLayer, type ColorLayer, type LightingLayer } from "../store/useEditorStore";
 import { useEditorStore } from "../store/useEditorStore";
 import { loadModelAsset } from "../utils/modelAssetStore";
+import { walkGltfScene, nodePathKey } from "../utils/gltfHierarchy";
 
 type LayeredMaterial =
   | THREE.MeshBasicMaterial
@@ -202,15 +203,14 @@ export class ObjectManager {
           // wherever `group` happens to already be positioned in the scene.
           const boundingBox = new THREE.Box3().setFromObject(gltf.scene);
 
-          // Map every glTF node to its nodePath (child-index path from gltf.scene)
-          // so the flat node entities created by extractModelHierarchy can be
-          // resolved back to the actual parsed Object3D without re-parsing.
+          // Map every glTF node to its nodePath so the flat node entities created
+          // by prepareModelImport can be resolved back to the actual parsed
+          // Object3D without re-parsing. walkGltfScene is the shared definition of
+          // that path convention — extraction and hydration must use the same one.
           const nodeByPath = new Map<string, THREE.Object3D>();
-          const indexNode = (object: THREE.Object3D, path: number[]) => {
-            nodeByPath.set(path.join(","), object);
-            object.children.forEach((child, index) => indexNode(child, [...path, index]));
-          };
-          gltf.scene.children.forEach((child, index) => indexNode(child, [index]));
+          walkGltfScene(gltf.scene, (object, nodePath) => {
+            nodeByPath.set(nodePathKey(nodePath), object);
+          });
 
           const nodeEntities = useEditorStore
             .getState()
@@ -218,7 +218,7 @@ export class ObjectManager {
 
           for (const entity of nodeEntities) {
             if (!entity.nodePath) continue;
-            const object = nodeByPath.get(entity.nodePath.join(","));
+            const object = nodeByPath.get(nodePathKey(entity.nodePath));
             if (!object) continue;
             object.userData.entityId = entity.id;
             object.userData.entityType = "importedModel";
