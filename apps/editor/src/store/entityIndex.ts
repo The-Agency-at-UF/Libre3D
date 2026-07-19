@@ -61,6 +61,56 @@ export function getDescendantIds(entities: Entity[], rootId: string): string[] {
   return result;
 }
 
+// Reduce a selection to its "move roots": drop any id whose ancestor is also
+// in the selection. Moving a parent already moves its whole subtree, so
+// including a descendant would double-move (and double-transform) it.
+export function filterMoveRoots(entities: Entity[], ids: string[]): string[] {
+  const { byId } = getEntityIndex(entities);
+  const idSet = new Set(ids);
+  const result: string[] = [];
+
+  for (const id of ids) {
+    if (!byId.has(id) || result.includes(id)) continue;
+    if (getAncestorIds(entities, id).some((ancestorId) => idSet.has(ancestorId))) continue;
+    result.push(id);
+  }
+  return result;
+}
+
+// Single source of truth for "is this reparent legal", shared by the store
+// action (hard guard) and the drag-and-drop UI (blocked cursor). Rules:
+// - target must exist (or be null = scene root) and not create a cycle;
+// - an *internal* imported-model node (rootEntityId set, and not the model's
+//   own synthetic root) must stay inside its model's subtree — its nodePath
+//   only resolves against the original glTF scene graph during hydration, so
+//   letting it leave the model would leave a dangling node after reload.
+//   The model root itself (rootEntityId === id) moves freely.
+export function canReparentEntities(entities: Entity[], ids: string[], newParentId: string | null): boolean {
+  const { byId } = getEntityIndex(entities);
+  const moveRoots = filterMoveRoots(entities, ids);
+  if (moveRoots.length === 0) return false;
+
+  const newParentChain = newParentId
+    ? [newParentId, ...getAncestorIds(entities, newParentId)]
+    : [];
+
+  for (const id of moveRoots) {
+    const entity = byId.get(id);
+    if (!entity) return false;
+
+    if (newParentId) {
+      if (!byId.has(newParentId)) return false;
+      if (newParentId === id || getDescendantIds(entities, id).includes(newParentId)) return false;
+    }
+
+    const isInternalImportedNode = !!entity.rootEntityId && entity.rootEntityId !== entity.id;
+    if (isInternalImportedNode && !newParentChain.includes(entity.rootEntityId!)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // Guarded against cycles from corrupted persisted state.
 export function getAncestorIds(entities: Entity[], id: string): string[] {
   const { byId } = getEntityIndex(entities);

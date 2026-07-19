@@ -1,10 +1,17 @@
 import { create } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
-import { getDescendantIds } from "./entityIndex";
+import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
 import { createId } from "../utils/createId";
+import {
+  getEntityWorldMatrix,
+  solveLocalFromWorld,
+  makeTranslationMatrix,
+  getWorldPosition,
+  type EntityTRS,
+} from "../utils/entityTransforms";
 
-export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel";
+export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel" | "group";
 
 export type MaterialLayerType = "color" | "lighting";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
@@ -245,6 +252,9 @@ export interface EditorState {
   addImportedModelHierarchy: (assetId: string, nodes: ImportNodeSpec[]) => string;
   duplicateEntity: (ids: string[]) => void;
   removeEntity: (ids: string[]) => void;
+  reparentEntities: (ids: string[], newParentId: string | null, index?: number) => void;
+  groupEntities: (ids: string[]) => string;
+  ungroupEntity: (id: string) => void;
   updateEntityTransform: (id: string, updates: EntityTransformUpdates) => void;
   updateMultipleEntityTransforms: (updates: Record<string, EntityTransformUpdates>) => void;
   selectEntity: (id: string | null, multi?: boolean) => void;
@@ -301,6 +311,10 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   },
   importedModel: {
     name: "Imported Model",
+    color: "#ffffff",
+  },
+  group: {
+    name: "Group",
     color: "#ffffff",
   },
 };
@@ -360,7 +374,9 @@ const createEntity = (type: EntityType): Entity => ({
   scale: [...UNIT_VECTOR] as [number, number, number],
   ...(type === "directionalLight"
     ? { color: ENTITY_DEFAULTS[type].color }
-    : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
+    : type === "group"
+      ? null // groups are pure transform pivots — no material, no color
+      : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
   visible: true,
   locked: false,
 });
@@ -599,6 +615,156 @@ export const useEditorStore = create<EditorState>()(
               return {
                 entities: state.entities.filter((entity) => !allIds.has(entity.id)),
                 selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
+              };
+            }),
+          // World-space placement is preserved: the new local TRS is solved from
+          // the stored parent chain so the object doesn't visually jump. One
+          // set() call = one zundo undo step for the whole move. `index` counts
+          // siblings under the new parent *after* the moved entities are removed
+          // (standard drop-index semantics); omitted/out-of-range appends last.
+          reparentEntities: (ids, newParentId, index) =>
+            set((state) => {
+              const moveRoots = filterMoveRoots(state.entities, ids);
+              if (moveRoots.length === 0 || !canReparentEntities(state.entities, moveRoots, newParentId)) {
+                return state;
+              }
+
+              const parentWorld = newParentId ? getEntityWorldMatrix(state.entities, newParentId) : null;
+              const solvedById = new Map<string, EntityTRS>();
+              for (const id of moveRoots) {
+                const entity = state.entities.find((e) => e.id === id)!;
+                // Same-parent moves are pure sibling reorders — keep the stored
+                // TRS bit-identical instead of a solve/decompose round-trip.
+                if ((entity.parentId ?? null) === (newParentId ?? null)) continue;
+                solvedById.set(id, solveLocalFromWorld(getEntityWorldMatrix(state.entities, id), parentWorld));
+              }
+
+              const movingSet = new Set(moveRoots);
+              const remaining = state.entities.filter((entity) => !movingSet.has(entity.id));
+              const moved: Entity[] = moveRoots.map((id) => {
+                const original = state.entities.find((e) => e.id === id)!;
+                const solved = solvedById.get(id);
+                return {
+                  ...original,
+                  parentId: newParentId,
+                  ...(solved
+                    ? {
+                      position: cloneVector(solved.position),
+                      rotation: cloneVector(solved.rotation),
+                      scale: cloneVector(solved.scale),
+                    }
+                    : null),
+                };
+              });
+
+              // Sibling order is array position among same-parent entities:
+              // insert before the array slot of the sibling currently at `index`.
+              let insertAt = remaining.length;
+              if (index !== undefined) {
+                const siblingArrayIndexes = remaining
+                  .map((entity, arrayIndex) => ({ entity, arrayIndex }))
+                  .filter(({ entity }) => (entity.parentId ?? null) === (newParentId ?? null))
+                  .map(({ arrayIndex }) => arrayIndex);
+                if (index < siblingArrayIndexes.length) insertAt = siblingArrayIndexes[index];
+              }
+
+              return {
+                entities: [...remaining.slice(0, insertAt), ...moved, ...remaining.slice(insertAt)],
+              };
+            }),
+          groupEntities: (ids) => {
+            let groupId = "";
+            set((state) => {
+              const moveRoots = filterMoveRoots(state.entities, ids);
+              if (moveRoots.length === 0) return state;
+
+              const parentIds = new Set(
+                moveRoots.map((id) => state.entities.find((e) => e.id === id)?.parentId ?? null),
+              );
+              const groupParentId = parentIds.size === 1 ? [...parentIds][0] : null;
+              // The members end up under the new group, whose own parent is
+              // groupParentId — legality (cycles, imported-model boundary) is
+              // identical to reparenting them straight onto groupParentId,
+              // since the group itself is a plain node.
+              if (!canReparentEntities(state.entities, moveRoots, groupParentId)) return state;
+
+              const memberWorlds = new Map(
+                moveRoots.map((id) => [id, getEntityWorldMatrix(state.entities, id)] as const),
+              );
+              const centroid: [number, number, number] = [0, 0, 0];
+              memberWorlds.forEach((world) => {
+                const [x, y, z] = getWorldPosition(world);
+                centroid[0] += x / moveRoots.length;
+                centroid[1] += y / moveRoots.length;
+                centroid[2] += z / moveRoots.length;
+              });
+
+              // The group pivots at the members' world centroid, with identity
+              // world rotation/scale (Blender's default for a new Empty parent).
+              const groupWorld = makeTranslationMatrix(centroid);
+              const groupParentWorld = groupParentId ? getEntityWorldMatrix(state.entities, groupParentId) : null;
+              const groupLocal = solveLocalFromWorld(groupWorld, groupParentWorld);
+
+              const group: Entity = {
+                id: createEntityId(),
+                type: "group",
+                name: "Group",
+                position: cloneVector(groupLocal.position),
+                rotation: cloneVector(groupLocal.rotation),
+                scale: cloneVector(groupLocal.scale),
+                visible: true,
+                locked: false,
+                parentId: groupParentId,
+              };
+              groupId = group.id;
+
+              const movingSet = new Set(moveRoots);
+              const firstMemberIndex = state.entities.findIndex((entity) => movingSet.has(entity.id));
+              const entitiesNext = state.entities.map((entity) => {
+                if (!movingSet.has(entity.id)) return entity;
+                const solved = solveLocalFromWorld(memberWorlds.get(entity.id)!, groupWorld);
+                return {
+                  ...entity,
+                  parentId: group.id,
+                  position: cloneVector(solved.position),
+                  rotation: cloneVector(solved.rotation),
+                  scale: cloneVector(solved.scale),
+                };
+              });
+              entitiesNext.splice(Math.max(firstMemberIndex, 0), 0, group);
+
+              return { entities: entitiesNext, selectedEntityIds: [group.id] };
+            });
+            return groupId;
+          },
+          ungroupEntity: (id) =>
+            set((state) => {
+              const group = state.entities.find((entity) => entity.id === id);
+              if (!group || group.type !== "group") return state;
+
+              const childIds = getChildren(state.entities, id).map((child) => child.id);
+              const parentWorld = group.parentId ? getEntityWorldMatrix(state.entities, group.parentId) : null;
+              const childSet = new Set(childIds);
+
+              const entitiesNext = state.entities
+                .filter((entity) => entity.id !== id)
+                .map((entity) => {
+                  if (!childSet.has(entity.id)) return entity;
+                  const solved = solveLocalFromWorld(getEntityWorldMatrix(state.entities, entity.id), parentWorld);
+                  return {
+                    ...entity,
+                    parentId: group.parentId ?? null,
+                    position: cloneVector(solved.position),
+                    rotation: cloneVector(solved.rotation),
+                    scale: cloneVector(solved.scale),
+                  };
+                });
+
+              return {
+                entities: entitiesNext,
+                selectedEntityIds: childIds.length > 0
+                  ? childIds
+                  : state.selectedEntityIds.filter((selId) => selId !== id),
               };
             }),
           updateEntityTransform: (id, updates) =>

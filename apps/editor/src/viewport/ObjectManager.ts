@@ -131,6 +131,15 @@ export class ObjectManager {
       }
 
       return group;
+    } else if (entity.type === "group") {
+      // Pure transform pivot (Blender Empty / Spline Group) — no geometry, no
+      // outline. It's selectable from the hierarchy and via its children, and
+      // the transform gizmo attaches to it like any other object.
+      const group = new THREE.Group();
+      group.position.set(...entity.position);
+      group.rotation.set(...entity.rotation);
+      group.scale.set(...entity.scale);
+      return group;
     } else if (entity.type === "directionalLight") {
       const light = new THREE.DirectionalLight(new THREE.Color(entity.color ?? "#ffffff"), 2.2);
       light.position.set(...entity.position);
@@ -216,6 +225,7 @@ export class ObjectManager {
             .getState()
             .entities.filter((entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId);
 
+          const resolvedObjects: Array<{ entityId: string; object: THREE.Object3D }> = [];
           for (const entity of nodeEntities) {
             if (!entity.nodePath) continue;
             const object = nodeByPath.get(nodePathKey(entity.nodePath));
@@ -223,6 +233,17 @@ export class ObjectManager {
             object.userData.entityId = entity.id;
             object.userData.entityType = "importedModel";
             this.meshMap.set(entity.id, object);
+            resolvedObjects.push({ entityId: entity.id, object });
+          }
+
+          // Record each node's *structural* (file-order) parent entity as its
+          // tracked parent — in a second pass, so every object already carries
+          // its entityId regardless of entity array order. applyParenting then
+          // reattaches exactly the nodes whose store parentId diverges from the
+          // file structure (i.e. nodes the user reparented in a past session).
+          // Direct children of gltf.scene structurally belong to the root group.
+          for (const { object } of resolvedObjects) {
+            object.userData.parentEntityId = object.parent?.userData?.entityId ?? rootEntityId;
           }
 
           // gltf.scene's internal node nesting is already correct — no manual
@@ -232,6 +253,11 @@ export class ObjectManager {
           const outline = this.createSelectionOutline(boundingBox);
           group.add(outline);
           group.userData.selectionOutline = outline;
+
+          // Now that the nodes exist, apply any store-level hierarchy that
+          // diverges from the file structure, and attach any entities that were
+          // waiting for one of these nodes as their parent.
+          this.applyParenting(useEditorStore.getState().entities);
         },
         (error) => {
           console.error(`[Libre3D] Failed to parse imported model asset "${assetId}":`, error);
@@ -363,6 +389,10 @@ export class ObjectManager {
         obj.userData.entityId = entity.id;
         obj.userData.entityType = entity.type;
         obj.userData.locked = entity.locked;
+        // Created flat on the scene; the applyParenting pass below moves it
+        // under its store parent once every sibling object exists (parents can
+        // appear later in the entities array than their children).
+        obj.userData.parentEntityId = null;
         obj.visible = entity.visible;
         this.scene.add(obj);
         this.meshMap.set(entity.id, obj);
@@ -393,7 +423,37 @@ export class ObjectManager {
       }
     }
 
+    this.applyParenting(entities);
+
     return staleIds;
+  }
+
+  // Makes the THREE graph agree with store-level parentId. Each object tracks
+  // the parent entity it is currently attached under (userData.parentEntityId);
+  // only a diff triggers a reattach, so glTF-internal nesting (gltf.scene
+  // wrappers, file-order parents) is left untouched for entities the user never
+  // reparented. Local TRS is re-applied from the store after a reattach — the
+  // store already solved it against the new parent, so no .attach() world-math
+  // is needed here. A missing parent object (async glTF hydration still in
+  // flight) is skipped; hydrateImportedModel re-runs this pass when it finishes.
+  private applyParenting(entities: Entity[]): void {
+    for (const entity of entities) {
+      const obj = this.meshMap.get(entity.id);
+      if (!obj) continue;
+
+      const desiredParentId = entity.parentId ?? null;
+      const trackedParentId = (obj.userData.parentEntityId ?? null) as string | null;
+      if (desiredParentId === trackedParentId) continue;
+
+      const parentObj = desiredParentId ? this.meshMap.get(desiredParentId) : this.scene;
+      if (!parentObj) continue;
+
+      parentObj.add(obj);
+      obj.userData.parentEntityId = desiredParentId;
+      obj.position.set(...entity.position);
+      obj.rotation.set(...entity.rotation);
+      obj.scale.set(...entity.scale);
+    }
   }
 
   public getObject(id: string): THREE.Object3D | undefined {
