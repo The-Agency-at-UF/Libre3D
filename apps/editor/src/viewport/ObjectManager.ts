@@ -4,6 +4,7 @@ import { useEditorStore } from "../store/useEditorStore";
 import { loadModelAsset } from "../utils/modelAssetStore";
 import { walkGltfScene, nodePathKey } from "../utils/gltfHierarchy";
 import { takeParsedModel } from "../utils/importModel";
+import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 type LayeredMaterial =
@@ -213,8 +214,7 @@ export class ObjectManager {
         return;
       }
 
-      const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-      const loader = new GLTFLoader();
+      const loader = await createConfiguredGltfLoader();
 
       loader.parse(
         buffer,

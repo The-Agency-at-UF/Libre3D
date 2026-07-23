@@ -27,6 +27,12 @@ export function useViewportRenderer(
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
+    // Expose the live renderer the same way ViewportCanvas exposes the live
+    // scene (window.__libre3dScene) — KTX2Loader.detectSupport() needs a real
+    // renderer to probe GPU compressed-texture support, and .glb imports run
+    // from non-component code (importModel.ts) that can't reach it otherwise.
+    (window as unknown as { __libre3dRenderer?: THREE.WebGLRenderer | null }).__libre3dRenderer = renderer;
+
     const stats = new Stats();
     stats.dom.style.position = "absolute";
     stats.dom.style.top  = "10px";
@@ -48,6 +54,10 @@ export function useViewportRenderer(
 
     return () => {
       window.cancelAnimationFrame(animationFrameId);
+      const rendererWindow = window as unknown as { __libre3dRenderer?: THREE.WebGLRenderer | null };
+      if (rendererWindow.__libre3dRenderer === renderer) {
+        delete rendererWindow.__libre3dRenderer;
+      }
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();

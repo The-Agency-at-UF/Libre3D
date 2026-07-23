@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { saveModelAsset } from "./modelAssetStore";
 import { createId } from "./createId";
 import { walkGltfScene, nodePathKey } from "./gltfHierarchy";
+import { createConfiguredGltfLoader } from "./createGltfLoader";
 import type { ImportNodeSpec } from "../store/useEditorStore";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
@@ -70,8 +71,7 @@ export async function prepareModelImport(file: File): Promise<{ assetId: string;
 // one node, keyed by its nodePath (child-index path from gltf.scene).
 // The parsed result is also cached under assetId for the imminent hydrate.
 async function extractModelHierarchy(buffer: ArrayBuffer, assetId: string): Promise<ImportNodeSpec[]> {
-  const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-  const loader = new GLTFLoader();
+  const loader = await createConfiguredGltfLoader();
 
   const gltf = await new Promise<GLTF>((resolve, reject) => {
     loader.parse(buffer, "", resolve, reject);
