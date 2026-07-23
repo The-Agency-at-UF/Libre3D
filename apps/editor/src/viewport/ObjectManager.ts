@@ -198,7 +198,7 @@ export class ObjectManager {
     try {
       // A fresh import parsed this exact buffer moments ago and left the result
       // behind for us (see importModel.ts) — claim it instead of reading the
-      // same bytes back out of IndexedDB and parsing them again. On reload
+      // same bytes back out of storage and parsing them again. On reload
       // there is no cached parse, so we take the buffer path below, which is
       // the only path that ever runs for persisted models.
       const cachedGltf = takeParsedModel(assetId);
@@ -209,7 +209,7 @@ export class ObjectManager {
 
       const buffer = await loadModelAsset(assetId);
       if (!buffer) {
-        console.error(`[Libre3D] Imported model asset "${assetId}" was not found in IndexedDB.`);
+        console.error(`[Libre3D] Imported model asset "${assetId}" was not found in storage.`);
         this.showImportedModelError(group);
         return;
       }

@@ -8,7 +8,7 @@ import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 // Hands the freshly parsed glTF off to the very first hydrate of the same
 // asset (ObjectManager.hydrateImportedModel), which would otherwise re-fetch
-// the identical buffer from IndexedDB and parse it a second time. Entries are
+// the identical buffer from storage and parse it a second time. Entries are
 // one-shot: takeParsedModel deletes on read, so a reload — where nothing was
 // parsed this session — falls through to the buffer as before.
 const parsedModelCache = new Map<string, GLTF>();
