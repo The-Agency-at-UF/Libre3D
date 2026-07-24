@@ -2,12 +2,13 @@ import * as THREE from "three";
 import { saveModelAsset } from "./modelAssetStore";
 import { createId } from "./createId";
 import { walkGltfScene, nodePathKey } from "./gltfHierarchy";
+import { createConfiguredGltfLoader } from "./createGltfLoader";
 import type { ImportNodeSpec } from "../store/useEditorStore";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 // Hands the freshly parsed glTF off to the very first hydrate of the same
 // asset (ObjectManager.hydrateImportedModel), which would otherwise re-fetch
-// the identical buffer from IndexedDB and parse it a second time. Entries are
+// the identical buffer from storage and parse it a second time. Entries are
 // one-shot: takeParsedModel deletes on read, so a reload — where nothing was
 // parsed this session — falls through to the buffer as before.
 const parsedModelCache = new Map<string, GLTF>();
@@ -70,8 +71,7 @@ export async function prepareModelImport(file: File): Promise<{ assetId: string;
 // one node, keyed by its nodePath (child-index path from gltf.scene).
 // The parsed result is also cached under assetId for the imminent hydrate.
 async function extractModelHierarchy(buffer: ArrayBuffer, assetId: string): Promise<ImportNodeSpec[]> {
-  const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-  const loader = new GLTFLoader();
+  const loader = await createConfiguredGltfLoader();
 
   const gltf = await new Promise<GLTF>((resolve, reject) => {
     loader.parse(buffer, "", resolve, reject);

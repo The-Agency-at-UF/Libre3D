@@ -4,6 +4,7 @@ import { useEditorStore } from "../store/useEditorStore";
 import { loadModelAsset } from "../utils/modelAssetStore";
 import { walkGltfScene, nodePathKey } from "../utils/gltfHierarchy";
 import { takeParsedModel } from "../utils/importModel";
+import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 type LayeredMaterial =
@@ -197,7 +198,7 @@ export class ObjectManager {
     try {
       // A fresh import parsed this exact buffer moments ago and left the result
       // behind for us (see importModel.ts) — claim it instead of reading the
-      // same bytes back out of IndexedDB and parsing them again. On reload
+      // same bytes back out of storage and parsing them again. On reload
       // there is no cached parse, so we take the buffer path below, which is
       // the only path that ever runs for persisted models.
       const cachedGltf = takeParsedModel(assetId);
@@ -208,13 +209,12 @@ export class ObjectManager {
 
       const buffer = await loadModelAsset(assetId);
       if (!buffer) {
-        console.error(`[Libre3D] Imported model asset "${assetId}" was not found in IndexedDB.`);
+        console.error(`[Libre3D] Imported model asset "${assetId}" was not found in storage.`);
         this.showImportedModelError(group);
         return;
       }
 
-      const { GLTFLoader } = await import("three/examples/jsm/loaders/GLTFLoader.js");
-      const loader = new GLTFLoader();
+      const loader = await createConfiguredGltfLoader();
 
       loader.parse(
         buffer,

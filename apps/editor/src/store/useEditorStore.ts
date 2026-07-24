@@ -3,6 +3,7 @@ import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middl
 import { temporal } from "zundo";
 import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
 import { createId } from "../utils/createId";
+import { deleteModelAsset } from "../utils/modelAssetStore";
 import {
   getEntityWorldMatrix,
   solveLocalFromWorld,
@@ -457,7 +458,7 @@ export const useEditorStore = create<EditorState>()(
   subscribeWithSelector(
     temporal(
       persist(
-        (set) => ({
+        (set, get) => ({
           entities: initialEntities.map(cloneEntity),
           selectedEntityIds: [],
           currentPublishId: null,
@@ -612,18 +613,31 @@ export const useEditorStore = create<EditorState>()(
               };
             });
           },
-          removeEntity: (ids) =>
-            set((state) => {
-              const allIds = new Set(ids);
-              ids.forEach((id) => {
-                getDescendantIds(state.entities, id).forEach((descId) => allIds.add(descId));
-              });
+          removeEntity: (ids) => {
+            const { entities } = get();
+            const allIds = new Set(ids);
+            ids.forEach((id) => {
+              getDescendantIds(entities, id).forEach((descId) => allIds.add(descId));
+            });
 
-              return {
-                entities: state.entities.filter((entity) => !allIds.has(entity.id)),
-                selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
-              };
-            }),
+            // Free each removed imported-model root's stored buffer so it doesn't
+            // leak in OPFS forever. Only the import root carries an assetId (the
+            // other nodes resolve against it via rootEntityId), so this deletes
+            // exactly one buffer per import, never per node. Fire-and-forget: the
+            // store update below shouldn't wait on a filesystem write.
+            for (const entity of entities) {
+              if (allIds.has(entity.id) && entity.type === "importedModel" && entity.assetId) {
+                void deleteModelAsset(entity.assetId).catch((error) => {
+                  console.error(`[Libre3D] Failed to delete stored model asset "${entity.assetId}":`, error);
+                });
+              }
+            }
+
+            set((state) => ({
+              entities: state.entities.filter((entity) => !allIds.has(entity.id)),
+              selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
+            }));
+          },
           // World-space placement is preserved: the new local TRS is solved from
           // the stored parent chain so the object doesn't visually jump. One
           // set() call = one zundo undo step for the whole move. `index` counts
