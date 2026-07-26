@@ -51,6 +51,11 @@ export class ObjectManager {
   private textureCache = new Map<string, THREE.Texture>();
   private loadingTextures = new Set<string>();
 
+  // Root entity ids currently mid-hydrateImportedModel. Guards the forced
+  // re-hydrate below from tearing down a root whose async parse hasn't
+  // resolved yet.
+  private hydratingRootIds = new Set<string>();
+
   constructor(scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>) {
     this.scene = scene;
     this.meshMap = meshMap;
@@ -358,6 +363,7 @@ export class ObjectManager {
   }
 
   private async hydrateImportedModel(group: THREE.Group, assetId: string, rootEntityId: string): Promise<void> {
+    this.hydratingRootIds.add(rootEntityId);
     try {
       // A fresh import parsed this exact buffer moments ago and left the result
       // behind for us (see importModel.ts) — claim it instead of reading the
@@ -374,6 +380,7 @@ export class ObjectManager {
       if (!buffer) {
         console.error(`[Libre3D] Imported model asset "${assetId}" was not found in storage.`);
         this.showImportedModelError(group);
+        this.hydratingRootIds.delete(rootEntityId);
         return;
       }
 
@@ -388,11 +395,13 @@ export class ObjectManager {
         (error) => {
           console.error(`[Libre3D] Failed to parse imported model asset "${assetId}":`, error);
           this.showImportedModelError(group);
+          this.hydratingRootIds.delete(rootEntityId);
         },
       );
     } catch (error) {
       console.error(`[Libre3D] Failed to load imported model asset "${assetId}":`, error);
       this.showImportedModelError(group);
+      this.hydratingRootIds.delete(rootEntityId);
     }
   }
 
@@ -467,6 +476,7 @@ export class ObjectManager {
     // Writing them back re-triggers a sync, which reconciles the material — the
     // parsed glTF material and its textures stay untouched on that pass.
     void this.backfillMaterialLayers(resolvedObjects);
+    this.hydratingRootIds.delete(rootEntityId);
   }
 
   public disposeSceneObject(obj: THREE.Object3D): void {
@@ -578,6 +588,43 @@ export class ObjectManager {
   public syncMeshes(entities: Entity[], transformTarget: THREE.Object3D | null, isDragging: boolean): Set<string> {
     const nextIds = new Set(entities.map((entity) => entity.id));
     const processedIds = new Set<string>();
+
+    // An imported-model *node* (non-root: no assetId) only gets its Object3D back
+    // via its root's hydrateImportedModel -> attachHydratedModel pass, which only
+    // runs when the root's own Object3D is (re)created. If a single node was
+    // deleted and disposed on its own (root untouched -- e.g. undo restoring just
+    // that one node) there's otherwise no path back into the scene for it. Detect
+    // that and force the whole import's root through the recreate branch below,
+    // so attachHydratedModel re-derives the entire subtree from a fresh parse --
+    // the same path that already works correctly on a full reload. Skip roots
+    // already mid-hydrate (hydratingRootIds) so this doesn't tear down an
+    // in-flight parse out from under itself.
+    const rootsNeedingRehydrate = new Set<string>();
+    for (const entity of entities) {
+      if (entity.type !== "importedModel" || entity.assetId || !entity.rootEntityId) continue;
+      if (
+        !this.meshMap.has(entity.id) &&
+        this.meshMap.has(entity.rootEntityId) &&
+        !this.hydratingRootIds.has(entity.rootEntityId)
+      ) {
+        rootsNeedingRehydrate.add(entity.rootEntityId);
+      }
+    }
+
+    for (const rootId of rootsNeedingRehydrate) {
+      const rootObj = this.meshMap.get(rootId);
+      if (!rootObj) continue;
+      (rootObj.parent ?? this.scene).remove(rootObj);
+      this.disposeSceneObject(rootObj);
+      // Every node under this root is about to be rebuilt by the forced
+      // re-hydrate -- drop their meshMap entries too, since disposeSceneObject
+      // just freed their geometry/material as part of the root group's
+      // subtree, even for surviving siblings this pass isn't otherwise touching.
+      for (const entity of entities) {
+        if (entity.rootEntityId === rootId) this.meshMap.delete(entity.id);
+      }
+      this.meshMap.delete(rootId);
+    }
 
     for (const entity of entities) {
       processedIds.add(entity.id);
