@@ -6,10 +6,100 @@ import {
   type LightingLayer,
   type LightingModel,
   type MaterialLayer,
+  type ImageLayer,
+  type ImageSlot,
 } from "../../store/useEditorStore";
+import { loadTextureAsset } from "../../utils/textureAssetStore";
 import { PanelSection } from "../ui/PanelSection";
 import { Slider } from "../ui/Slider";
 import { Select } from "../ui/Select";
+
+// Labelled "Base Color" (not "Color") so an image row reads distinctly from the
+// Color layer above it in the stack.
+const IMAGE_SLOT_LABELS: Record<ImageSlot, string> = {
+  color: "Base Color",
+  normal: "Normal",
+  metallicRoughness: "Metallic / Roughness",
+  emissive: "Emissive",
+  ao: "Ambient Occlusion",
+};
+
+const getImageLayers = (entity: Entity): ImageLayer[] =>
+  entity.materialLayers?.filter((layer): layer is ImageLayer => layer.type === "image") ?? [];
+
+// One row per imported texture map. The thumbnail is loaded lazily from the OPFS
+// texture store (the pixels never live in the store), so an object URL is created
+// on mount and revoked on unmount. MVP surfacing of what import derived — enabled
+// toggle + opacity slider, no from-scratch authoring or projection modes yet.
+function ImageLayerRow({
+  layer,
+  onToggle,
+  onOpacity,
+}: {
+  layer: ImageLayer;
+  onToggle: (enabled: boolean) => void;
+  onOpacity: (opacity: number) => void;
+}) {
+  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+    loadTextureAsset(layer.textureAssetId)
+      .then((blob) => {
+        if (cancelled || !blob) return;
+        objectUrl = URL.createObjectURL(blob);
+        setThumbUrl(objectUrl);
+      })
+      .catch(() => {
+        /* thumbnail is best-effort; a missing asset just shows the placeholder */
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [layer.textureAssetId]);
+
+  return (
+    <details className="nested">
+      <summary className="nested-header">
+        <div className="nested-label">
+          <i className="ti ti-chevron-right chevron"></i>
+          <div
+            className="inspector-color-swatch"
+            style={{
+              width: 20,
+              height: 20,
+              backgroundImage: thumbUrl ? `url(${thumbUrl})` : undefined,
+              backgroundColor: thumbUrl ? undefined : "var(--bg-inset)",
+              backgroundSize: "cover",
+              backgroundPosition: "center",
+            }}
+          />
+          <span>{IMAGE_SLOT_LABELS[layer.slot]}</span>
+        </div>
+        <input
+          type="checkbox"
+          checked={layer.enabled}
+          onChange={(e) => onToggle(e.target.checked)}
+          onClick={(e) => e.stopPropagation()}
+          title={layer.enabled ? "Hide this map" : "Show this map"}
+          aria-label={`${IMAGE_SLOT_LABELS[layer.slot]} map enabled`}
+        />
+      </summary>
+      <div className="nested-body">
+        <Slider
+          label="Opacity"
+          min={0}
+          max={100}
+          step={1}
+          value={Math.round(layer.opacity * 100)}
+          onChange={(val) => onOpacity(val / 100)}
+        />
+      </div>
+    </details>
+  );
+}
 
 interface MaterialsPanelProps {
   selectedEntities: Entity[];
@@ -91,9 +181,17 @@ function ColorSwatchField({
 
 export function MaterialsPanel({ selectedEntities: allSelectedEntities }: MaterialsPanelProps) {
   const updateMultipleEntityMaterialLayers = useEditorStore((state) => state.updateMultipleEntityMaterialLayers);
+  const updateMaterialLayer = useEditorStore((state) => state.updateMaterialLayer);
 
-  const selectedEntities = allSelectedEntities.filter((e) => e.type !== "directionalLight" && e.type !== "importedModel" && e.materialLayers);
+  // Imported meshes now carry derived materialLayers, so they belong here too —
+  // only the layer stack existing matters, not the entity type. Directional lights
+  // (no material) and import nodes still awaiting their backfill are excluded.
+  const selectedEntities = allSelectedEntities.filter((e) => e.type !== "directionalLight" && e.materialLayers);
   if (selectedEntities.length === 0) return null;
+
+  // Image layers are surfaced only on a single selection — one texture stack per
+  // mesh, no meaningful "mixed" merge across a multi-select the way Color/Lighting has.
+  const imageLayers = selectedEntities.length === 1 ? getImageLayers(selectedEntities[0]) : [];
 
   const colorLayers = selectedEntities.map((e) => ({ entity: e, layer: getColorLayer(e) })).filter((x) => x.layer);
   const lightingLayers = selectedEntities.map((e) => ({ entity: e, layer: getLightingLayer(e) })).filter((x) => x.layer);
@@ -253,6 +351,16 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
             )}
           </div>
         </details>
+
+        {/* Image Layers — one per texture map derived from an imported material */}
+        {imageLayers.map((layer) => (
+          <ImageLayerRow
+            key={layer.id}
+            layer={layer}
+            onToggle={(enabled) => updateMaterialLayer(selectedEntities[0].id, layer.id, { enabled })}
+            onOpacity={(opacity) => updateMaterialLayer(selectedEntities[0].id, layer.id, { opacity })}
+          />
+        ))}
 
         {/* Add Layer affordance (scaffolding for future layer types) */}
         <div className="section-footer">

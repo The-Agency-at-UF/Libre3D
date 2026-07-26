@@ -3,7 +3,7 @@ import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middl
 import { temporal } from "zundo";
 import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
 import { createId } from "../utils/createId";
-import { deleteModelAsset } from "../utils/modelAssetStore";
+import { reconcileAssetStorage } from "../utils/assetReconciliation";
 import {
   getEntityWorldMatrix,
   solveLocalFromWorld,
@@ -14,8 +14,14 @@ import {
 
 export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel" | "group";
 
-export type MaterialLayerType = "color" | "lighting";
+export type MaterialLayerType = "color" | "lighting" | "image";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
+
+// Which glTF texture channel an ImageLayer feeds. "metallicRoughness" is a
+// single packed map (green = roughness, blue = metalness) that Three assigns to
+// both material.roughnessMap and material.metalnessMap — one layer covers both,
+// never split into two.
+export type ImageSlot = "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
 
 export interface ColorLayer {
   id: string;
@@ -38,7 +44,22 @@ export interface LightingLayer {
   emissiveIntensity: number; // ignored when model === "none"
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer;
+// A texture map layer, derived from an imported glTF material's maps. The pixel
+// data is never stored here (materialLayers is persisted to localStorage) — it
+// lives in the OPFS texture asset store, referenced by textureAssetId. wrapS/wrapT
+// are the THREE wrap constants copied straight off the source texture.
+export interface ImageLayer {
+  id: string;
+  type: "image";
+  enabled: boolean;
+  opacity: number;
+  textureAssetId: string;
+  slot: ImageSlot;
+  wrapS: number;
+  wrapT: number;
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer;
 
 export interface Entity {
   id: string;
@@ -297,7 +318,8 @@ export interface EditorState {
   removeMaterialLayer: (entityId: string, layerId: string) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
+  setEntityMaterialLayers: (entityId: string, layers: MaterialLayer[]) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -620,19 +642,12 @@ export const useEditorStore = create<EditorState>()(
               getDescendantIds(entities, id).forEach((descId) => allIds.add(descId));
             });
 
-            // Free each removed imported-model root's stored buffer so it doesn't
-            // leak in OPFS forever. Only the import root carries an assetId (the
-            // other nodes resolve against it via rootEntityId), so this deletes
-            // exactly one buffer per import, never per node. Fire-and-forget: the
-            // store update below shouldn't wait on a filesystem write.
-            for (const entity of entities) {
-              if (allIds.has(entity.id) && entity.type === "importedModel" && entity.assetId) {
-                void deleteModelAsset(entity.assetId).catch((error) => {
-                  console.error(`[Libre3D] Failed to delete stored model asset "${entity.assetId}":`, error);
-                });
-              }
-            }
-
+            // Note: this intentionally does NOT free the removed entities' OPFS
+            // model/texture assets. Deletion is deferred to the app-load
+            // reconciliation sweep (see reconcileAssetStorage) so undo works:
+            // zundo's history is in-memory and session-scoped, so nothing is
+            // freed until the next reload, by which point the persisted store
+            // already reflects whether the delete was undone.
             set((state) => ({
               entities: state.entities.filter((entity) => !allIds.has(entity.id)),
               selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
@@ -968,13 +983,48 @@ export const useEditorStore = create<EditorState>()(
                 };
               }),
             })),
+          // Replaces an entity's whole layer stack. Used by hydrate-time backfill
+          // (ObjectManager) to write the layers derived from an imported mesh's
+          // parsed glTF material — the one place layers can be built, since it
+          // needs parsed texture/material data unavailable at migrate() time.
+          setEntityMaterialLayers: (entityId, layers) =>
+            set((state) => ({
+              entities: state.entities.map((entity) =>
+                entity.id === entityId
+                  ? { ...entity, materialLayers: layers.map((layer) => ({ ...layer })) }
+                  : entity,
+              ),
+            })),
           setEditorState: (updates) => set((state) => ({ ...state, ...updates })),
         }),
         {
           name: "libre3d-scene-state",
-          version: 14,
+          version: 15,
           storage: createJSONStorage(() => localStorage),
+          // Once per app load, after persisted state is available, free OPFS
+          // model/texture assets no surviving entity references. This is the
+          // "next reload" point where deferred deletion is finally safe — the
+          // persisted store already reflects any undone deletes by now.
+          // Runs once per app load, right after rehydration. The rehydrated state
+          // isn't threaded into this callback's argument through zundo's temporal
+          // wrapper (it arrives undefined), so read the freshly rehydrated entities
+          // straight off the store on the next microtask — by then create() has
+          // assigned useEditorStore and the persisted state is in place. This is
+          // the "next reload" point where freeing deferred-deleted assets is safe.
+          onRehydrateStorage: () => () => {
+            queueMicrotask(() => {
+              void reconcileAssetStorage(useEditorStore.getState().entities);
+            });
+          },
           migrate: (persistedState: any, version: number) => {
+            // v15: MaterialLayer gained an "image" variant so imported meshes
+            // become editable. Existing color/lighting layers stay structurally
+            // valid, so nothing is rewritten here — imported entities with
+            // materialLayers: undefined are backfilled dynamically the first time
+            // ObjectManager.hydrateImportedModel resolves them (setEntityMaterialLayers),
+            // since deriving layers needs parsed glTF data unavailable at migrate() time.
+            // The bump follows this store's convention of versioning any shape-relevant change.
+
             if (version < 14) {
               if (persistedState && Array.isArray(persistedState.entities)) {
                 persistedState.entities = persistedState.entities.map((entity: any) => ({

@@ -1,7 +1,16 @@
 import * as THREE from "three";
-import { type Entity, type MaterialLayer, type ColorLayer, type LightingLayer } from "../store/useEditorStore";
+import {
+  type Entity,
+  type MaterialLayer,
+  type ColorLayer,
+  type LightingLayer,
+  type ImageLayer,
+  type ImageSlot,
+} from "../store/useEditorStore";
 import { useEditorStore } from "../store/useEditorStore";
 import { loadModelAsset } from "../utils/modelAssetStore";
+import { loadTextureAsset } from "../utils/textureAssetStore";
+import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
 import { walkGltfScene, nodePathKey } from "../utils/gltfHierarchy";
 import { takeParsedModel } from "../utils/importModel";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
@@ -34,6 +43,19 @@ export class ObjectManager {
   private scene: THREE.Scene;
   private meshMap: Map<string, THREE.Object3D>;
 
+  // Session cache of textures rebuilt from the OPFS texture store, keyed by
+  // ImageLayer.textureAssetId. Loaded lazily (and once) the first time an empty
+  // material slot actually needs one — a rebuild after a lighting-model change,
+  // or an Image layer re-enabled — never re-decoded per sync. loadingTextures
+  // guards against firing a second load for an id already in flight.
+  private textureCache = new Map<string, THREE.Texture>();
+  private loadingTextures = new Set<string>();
+
+  // Root entity ids currently mid-hydrateImportedModel. Guards the forced
+  // re-hydrate below from tearing down a root whose async parse hasn't
+  // resolved yet.
+  private hydratingRootIds = new Set<string>();
+
   constructor(scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>) {
     this.scene = scene;
     this.meshMap = meshMap;
@@ -65,8 +87,154 @@ export class ObjectManager {
     });
 
     this.applyLightingProperties(material, lightingLayer, model);
+    this.applyImageLayers(material, layers);
 
     return material;
+  }
+
+  // The material property (or properties) each ImageLayer slot feeds. The glTF
+  // metallic-roughness map is one packed texture Three assigns to both
+  // roughnessMap and metalnessMap, so that slot returns two properties.
+  private static readonly SLOT_PROPS: Record<ImageSlot, Array<keyof THREE.MeshStandardMaterial>> = {
+    color: ["map"],
+    normal: ["normalMap"],
+    metallicRoughness: ["roughnessMap", "metalnessMap"],
+    emissive: ["emissiveMap"],
+    ao: ["aoMap"],
+  };
+
+  // True when the material actually has this slot's property (materials differ —
+  // MeshPhongMaterial has no roughnessMap) and it's currently unset. Used to skip
+  // loading/assigning a texture when the slot is already filled (e.g. the parsed
+  // glTF material still carries its original map on the common reload path), which
+  // both avoids needless work and leaves the untouched parsed textures in place.
+  private slotNeedsTexture(material: THREE.Material, slot: ImageSlot): boolean {
+    const mat = material as unknown as Record<string, unknown>;
+    return ObjectManager.SLOT_PROPS[slot].some((prop) => prop in material && !mat[prop as string]);
+  }
+
+  // Assigns the texture to every empty property of the slot the material has,
+  // never overwriting a map that's already present. Returns whether anything changed.
+  private assignTextureToSlot(material: THREE.Material, slot: ImageSlot, texture: THREE.Texture): boolean {
+    const mat = material as unknown as Record<string, unknown>;
+    let changed = false;
+    for (const prop of ObjectManager.SLOT_PROPS[slot]) {
+      if (prop in material && !mat[prop as string]) {
+        mat[prop as string] = texture;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  private clearTextureSlot(material: THREE.Material, slot: ImageSlot): boolean {
+    const mat = material as unknown as Record<string, unknown>;
+    let changed = false;
+    for (const prop of ObjectManager.SLOT_PROPS[slot]) {
+      if (prop in material && mat[prop as string]) {
+        mat[prop as string] = null;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  // Returns the cached texture for a layer, or null while kicking off a one-shot
+  // async load. When the load lands, assignLoadedTextureToMeshes fills the slot on
+  // every mesh using that id; the continuous RAF loop renders it the next frame.
+  private getTextureForLayer(layer: ImageLayer): THREE.Texture | null {
+    const cached = this.textureCache.get(layer.textureAssetId);
+    if (cached) return cached;
+
+    const id = layer.textureAssetId;
+    if (!this.loadingTextures.has(id)) {
+      this.loadingTextures.add(id);
+      loadTextureAsset(id)
+        .then(async (blob) => {
+          if (!blob) return;
+          const texture = await buildTextureFromLayer(blob, layer);
+          this.textureCache.set(id, texture);
+          this.assignLoadedTextureToMeshes(id);
+        })
+        .catch((error) => console.error(`[Libre3D] Failed to load texture asset "${id}":`, error))
+        .finally(() => this.loadingTextures.delete(id));
+    }
+    return null;
+  }
+
+  // After a texture finishes loading, fill it into any mesh whose entity has an
+  // enabled Image layer pointing at this id and an empty slot for it.
+  private assignLoadedTextureToMeshes(textureAssetId: string): void {
+    const texture = this.textureCache.get(textureAssetId);
+    if (!texture) return;
+    const entities = useEditorStore.getState().entities;
+    for (const [entityId, obj] of this.meshMap) {
+      if (!(obj instanceof THREE.Mesh)) continue;
+      const layers = entities.find((entity) => entity.id === entityId)?.materialLayers;
+      if (!layers) continue;
+      const material = obj.material as THREE.Material;
+      let changed = false;
+      for (const layer of layers) {
+        if (layer.type === "image" && layer.enabled && layer.textureAssetId === textureAssetId) {
+          if (this.assignTextureToSlot(material, layer.slot, texture)) changed = true;
+        }
+      }
+      if (changed) material.needsUpdate = true;
+    }
+  }
+
+  // Reconciles a material's texture slots with the entity's Image layers: fills
+  // empty slots for enabled layers (loading the texture on demand) and clears
+  // slots for disabled ones. Deliberately does NOT replace a map that's already
+  // present, so imported meshes keep their untouched parsed glTF textures on the
+  // common path and only the rebuild/re-enable cases pull from the OPFS store.
+  private applyImageLayers(material: THREE.Material, layers: MaterialLayer[] | undefined): void {
+    if (!layers) return;
+    let changed = false;
+    for (const layer of layers) {
+      if (layer.type !== "image") continue;
+      if (layer.enabled) {
+        if (!this.slotNeedsTexture(material, layer.slot)) continue;
+        const texture = this.getTextureForLayer(layer);
+        if (texture && this.assignTextureToSlot(material, layer.slot, texture)) changed = true;
+      } else if (this.clearTextureSlot(material, layer.slot)) {
+        changed = true;
+      }
+    }
+    if (changed) material.needsUpdate = true;
+  }
+
+  // Derives editable Color/Lighting/Image layers from the parsed glTF material of
+  // any resolved import mesh that has none yet, and writes them back to the store.
+  // This is where both fresh imports (nodes created without materialLayers) and
+  // pre-upgrade imports (materialLayers: undefined in old persisted state) get a
+  // real layer stack — it can't happen at migrate() time, which has no parsed glTF.
+  private async backfillMaterialLayers(
+    resolved: Array<{ entityId: string; object: THREE.Object3D }>,
+  ): Promise<void> {
+    const entities = useEditorStore.getState().entities;
+    const pending = resolved.filter(({ entityId, object }) => {
+      if (!(object instanceof THREE.Mesh)) return false;
+      return !entities.find((entity) => entity.id === entityId)?.materialLayers;
+    });
+    if (pending.length === 0) return;
+
+    // One cache across the whole import so images reused between meshes (a shared
+    // packed metallic-roughness map, say) are extracted and stored exactly once.
+    const cache = createTextureDedupCache();
+    for (const { entityId, object } of pending) {
+      const mesh = object as THREE.Mesh;
+      const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+      if (!material) continue;
+      try {
+        const layers = await deriveMaterialLayers(material, cache);
+        // Re-read the store: this runs async, after the hydrate's initial set(),
+        // and setEntityMaterialLayers no-ops if the entity was removed meanwhile.
+        useEditorStore.getState().setEntityMaterialLayers(entityId, layers);
+      } catch (error) {
+        console.error(`[Libre3D] Failed to derive material layers for imported node "${entityId}":`, error);
+      }
+    }
   }
 
   private applyLightingProperties(
@@ -113,9 +281,9 @@ export class ObjectManager {
     const outline = new THREE.LineSegments(edges, material);
     outline.visible = false;
     outline.renderOrder = 999;
-    outline.raycast = () => {}; // never an independent click/box-select target —
-                                 // Raycaster doesn't check .visible, so this guards
-                                 // against it being hit while hidden (see gizmo picker fix)
+    outline.raycast = () => { }; // never an independent click/box-select target —
+    // Raycaster doesn't check .visible, so this guards
+    // against it being hit while hidden (see gizmo picker fix)
     return outline;
   }
 
@@ -195,6 +363,7 @@ export class ObjectManager {
   }
 
   private async hydrateImportedModel(group: THREE.Group, assetId: string, rootEntityId: string): Promise<void> {
+    this.hydratingRootIds.add(rootEntityId);
     try {
       // A fresh import parsed this exact buffer moments ago and left the result
       // behind for us (see importModel.ts) — claim it instead of reading the
@@ -211,6 +380,7 @@ export class ObjectManager {
       if (!buffer) {
         console.error(`[Libre3D] Imported model asset "${assetId}" was not found in storage.`);
         this.showImportedModelError(group);
+        this.hydratingRootIds.delete(rootEntityId);
         return;
       }
 
@@ -225,11 +395,13 @@ export class ObjectManager {
         (error) => {
           console.error(`[Libre3D] Failed to parse imported model asset "${assetId}":`, error);
           this.showImportedModelError(group);
+          this.hydratingRootIds.delete(rootEntityId);
         },
       );
     } catch (error) {
       console.error(`[Libre3D] Failed to load imported model asset "${assetId}":`, error);
       this.showImportedModelError(group);
+      this.hydratingRootIds.delete(rootEntityId);
     }
   }
 
@@ -298,6 +470,13 @@ export class ObjectManager {
     // diverges from the file structure, and attach any entities that were
     // waiting for one of these nodes as their parent.
     this.applyParenting(useEditorStore.getState().entities);
+
+    // Fire-and-forget: derive editable material layers for any resolved mesh
+    // that doesn't have them yet (fresh imports and pre-upgrade imports alike).
+    // Writing them back re-triggers a sync, which reconciles the material — the
+    // parsed glTF material and its textures stay untouched on that pass.
+    void this.backfillMaterialLayers(resolvedObjects);
+    this.hydratingRootIds.delete(rootEntityId);
   }
 
   public disposeSceneObject(obj: THREE.Object3D): void {
@@ -343,7 +522,10 @@ export class ObjectManager {
           materials.forEach((material) => {
             textureSlots.forEach((slot) => {
               const texture = (material as any)[slot] as THREE.Texture | undefined;
-              if (texture) texture.dispose();
+              // Skip textures owned by the ObjectManager session cache — they're
+              // shared across meshes by textureAssetId, so freeing one here would
+              // break every other mesh still using it. The cache outlives the mesh.
+              if (texture && !texture.userData?.libre3dManaged) texture.dispose();
             });
             material.dispose();
           });
@@ -361,16 +543,26 @@ export class ObjectManager {
     obj.visible = entity.visible;
     obj.userData.locked = entity.locked;
 
-    // Imported model nodes are THREE.Mesh instances too but carry no materialLayers
-    // (see MaterialsPanel's importedModel filter) — skip the layered-material sync
-    // so their original glTF materials aren't overwritten with the layer defaults.
+    // Imported meshes are THREE.Mesh instances too, and now carry derived
+    // materialLayers (see backfillMaterialLayers) — so this drives their material
+    // the same as a primitive. Meshes still awaiting their backfill (materialLayers
+    // undefined) skip this and keep their parsed glTF material untouched.
     if (obj instanceof THREE.Mesh && entity.materialLayers) {
       const colorLayer = entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
       const lightingLayer = entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
       const model = lightingLayer?.model ?? "physical";
       const MaterialClass = materialClassForModel(model);
 
-      if (obj.material.constructor !== MaterialClass) {
+      // A parsed glTF PBR material is often MeshPhysicalMaterial (a subclass of
+      // MeshStandardMaterial). Treat that as already matching "physical" so we take
+      // the in-place branch and keep its textures/advanced features, rather than
+      // rebuilding it into a plain textureless MeshStandardMaterial on first sync.
+      const materialMatches =
+        model === "physical"
+          ? obj.material instanceof THREE.MeshStandardMaterial
+          : obj.material.constructor === MaterialClass;
+
+      if (!materialMatches) {
         const oldMaterial = obj.material as THREE.Material;
         obj.material = this.createMaterialFromLayers(entity.materialLayers);
         oldMaterial.dispose();
@@ -382,6 +574,7 @@ export class ObjectManager {
         material.transparent = opacity < 1;
         material.wireframe = useEditorStore.getState().sceneSettings.wireframe;
         this.applyLightingProperties(material, lightingLayer, model);
+        this.applyImageLayers(material, entity.materialLayers);
       }
     } else if (obj instanceof THREE.DirectionalLight) {
       obj.color.set(entity.color ?? "#ffffff");
@@ -395,6 +588,34 @@ export class ObjectManager {
   public syncMeshes(entities: Entity[], transformTarget: THREE.Object3D | null, isDragging: boolean): Set<string> {
     const nextIds = new Set(entities.map((entity) => entity.id));
     const processedIds = new Set<string>();
+
+    // An imported-model *node* (non-root: no assetId) only gets its Object3D back
+    // via its root's hydrateImportedModel -> attachHydratedModel pass, which only
+    // runs when the root's own Object3D is (re)created. If a node was deleted and
+    // disposed on its own (root untouched -- e.g. undo restoring just that node)
+    // there's otherwise no path back into the scene for it. Group any such
+    // missing nodes by root and patch each root's subtree in place (see
+    // reattachMissingImportNodes) rather than tearing the whole import down --
+    // this only rebuilds the node(s) that actually need it, leaves every
+    // surviving sibling untouched, and gives the reattached node a brief fade-in
+    // instead of a hard pop back into place. Skip roots already mid-patch
+    // (hydratingRootIds) so overlapping delete/undo cycles can't race.
+    const missingByRoot = new Map<string, string[]>();
+    for (const entity of entities) {
+      if (entity.type !== "importedModel" || entity.assetId || !entity.rootEntityId) continue;
+      if (
+        !this.meshMap.has(entity.id) &&
+        this.meshMap.has(entity.rootEntityId) &&
+        !this.hydratingRootIds.has(entity.rootEntityId)
+      ) {
+        const list = missingByRoot.get(entity.rootEntityId) ?? [];
+        list.push(entity.id);
+        missingByRoot.set(entity.rootEntityId, list);
+      }
+    }
+    for (const [rootId, missingIds] of missingByRoot) {
+      void this.reattachMissingImportNodes(rootId, missingIds);
+    }
 
     for (const entity of entities) {
       processedIds.add(entity.id);
@@ -456,6 +677,166 @@ export class ObjectManager {
     this.applyParenting(entities);
 
     return staleIds;
+  }
+
+  // Patches a resolved import's subtree in place to bring back node(s) whose
+  // Object3D was disposed independently of the root (see syncMeshes) — reparses
+  // the import's buffer (there's no partial-parse API), but only splices the
+  // missing node(s) back into the *existing* live scene graph rather than
+  // rebuilding the whole import, so every untouched sibling keeps its original
+  // Object3D. Falls back to forceFullRehydrate if a missing node's parent can't
+  // be cleanly resolved, so correctness never depends on this optimization.
+  private async reattachMissingImportNodes(rootEntityId: string, missingIds: string[]): Promise<void> {
+    this.hydratingRootIds.add(rootEntityId);
+    try {
+      const entities = useEditorStore.getState().entities;
+      const rootEntity = entities.find((entity) => entity.id === rootEntityId);
+      const rootObj = this.meshMap.get(rootEntityId);
+      if (!rootEntity?.assetId || !rootObj) return;
+
+      let gltf: GLTF | null | undefined = takeParsedModel(rootEntity.assetId);
+      if (!gltf) {
+        const buffer = await loadModelAsset(rootEntity.assetId);
+        if (!buffer) {
+          console.error(`[Libre3D] Imported model asset "${rootEntity.assetId}" was not found in storage.`);
+          return;
+        }
+        const loader = await createConfiguredGltfLoader();
+        gltf = await new Promise<GLTF | null>((resolve) => {
+          loader.parse(
+            buffer,
+            "",
+            (result) => resolve(result),
+            (error) => {
+              console.error(`[Libre3D] Failed to parse imported model asset "${rootEntity.assetId}":`, error);
+              resolve(null);
+            },
+          );
+        });
+      }
+      if (!gltf) {
+        this.forceFullRehydrate(rootEntityId);
+        return;
+      }
+
+      const nodeByPath = new Map<string, THREE.Object3D>();
+      walkGltfScene(gltf.scene, (object, nodePath) => {
+        nodeByPath.set(nodePathKey(nodePath), object);
+      });
+
+      // Shallow-to-deep order guarantees a missing parent is spliced in (and
+      // registered in meshMap) before any of its missing children are processed,
+      // so a whole missing subtree — not just a single leaf — resolves correctly.
+      const pending = missingIds
+        .map((id) => entities.find((entity) => entity.id === id))
+        .filter((entity): entity is Entity => !!entity?.nodePath)
+        .sort((a, b) => a.nodePath!.length - b.nodePath!.length);
+
+      const resolvedObjects: Array<{ entityId: string; object: THREE.Object3D }> = [];
+
+      for (const entity of pending) {
+        const freshObject = nodeByPath.get(nodePathKey(entity.nodePath!));
+        if (!freshObject) continue;
+
+        // A node's structural parent is just its own nodePath minus the last
+        // index (the same convention walkGltfScene/nodePathKey define); an
+        // empty parent path means it's a direct child of gltf.scene, i.e. the
+        // root itself.
+        const parentPath = entity.nodePath!.slice(0, -1);
+        const parentEntityId =
+          parentPath.length === 0
+            ? rootEntityId
+            : entities.find(
+              (candidate) =>
+                candidate.rootEntityId === rootEntityId &&
+                nodePathKey(candidate.nodePath ?? []) === nodePathKey(parentPath),
+            )?.id;
+        const parentObj = parentEntityId ? this.meshMap.get(parentEntityId) : undefined;
+        if (!parentObj) continue;
+
+        parentObj.add(freshObject);
+        freshObject.userData.entityId = entity.id;
+        freshObject.userData.entityType = "importedModel";
+        freshObject.userData.parentEntityId = parentEntityId;
+        this.meshMap.set(entity.id, freshObject);
+        resolvedObjects.push({ entityId: entity.id, object: freshObject });
+      }
+
+      if (resolvedObjects.length !== pending.length) {
+        // Something didn't resolve cleanly (an unresolvable parent) — don't
+        // leave the scene half-patched, fall back to the known-correct
+        // full-recreate path for this root instead.
+        this.forceFullRehydrate(rootEntityId);
+        return;
+      }
+
+      for (const { entityId, object } of resolvedObjects) {
+        const entity = entities.find((candidate) => candidate.id === entityId)!;
+        this.syncEntityToSceneObject(object, entity, false);
+        if (object instanceof THREE.Mesh) {
+          const material = Array.isArray(object.material) ? object.material[0] : object.material;
+          if (material) this.fadeInMesh(object, material.opacity);
+        }
+      }
+
+      this.applyParenting(useEditorStore.getState().entities);
+      void this.backfillMaterialLayers(resolvedObjects);
+    } finally {
+      this.hydratingRootIds.delete(rootEntityId);
+    }
+  }
+
+  // Tears down and rebuilds an entire import's subtree from a fresh parse.
+  // This was syncMeshes' original (pre-fade) fix for a node coming back with no
+  // live object — kept now as reattachMissingImportNodes' fallback for the rare
+  // case it can't cleanly resolve a missing node's parent on its own. Leaves
+  // rootEntityId out of meshMap so the next syncMeshes pass's normal
+  // !existingObj branch recreates it via createSceneObject/hydrateImportedModel.
+  private forceFullRehydrate(rootEntityId: string): void {
+    const rootObj = this.meshMap.get(rootEntityId);
+    if (!rootObj) return;
+    (rootObj.parent ?? this.scene).remove(rootObj);
+    this.disposeSceneObject(rootObj);
+    const entities = useEditorStore.getState().entities;
+    for (const entity of entities) {
+      if (entity.rootEntityId === rootEntityId) this.meshMap.delete(entity.id);
+    }
+    this.meshMap.delete(rootEntityId);
+  }
+
+  // Fades a freshly reattached node's material in from transparent to its real
+  // opacity over a short duration, mirroring Spline's brief fade-in when a
+  // deleted node is undone, instead of a hard pop back into place. Runs its own
+  // rAF chain independent of the main render loop — useViewportRenderer already
+  // renders every frame unconditionally, so mutating opacity here is picked up
+  // automatically with no signal back to React needed.
+  private fadeInMesh(mesh: THREE.Mesh, targetOpacity: number, durationMs = 300): void {
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const wasTransparent = materials.map((material) => material.transparent);
+    materials.forEach((material) => {
+      material.transparent = true;
+      material.opacity = 0;
+      material.needsUpdate = true;
+    });
+
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      materials.forEach((material) => {
+        material.opacity = eased * targetOpacity;
+      });
+      if (t < 1) {
+        requestAnimationFrame(step);
+      } else {
+        materials.forEach((material, index) => {
+          material.opacity = targetOpacity;
+          material.transparent = targetOpacity < 1 ? true : wasTransparent[index];
+          material.needsUpdate = true;
+        });
+      }
+    };
+    requestAnimationFrame(step);
   }
 
   // Makes the THREE graph agree with store-level parentId. Each object tracks
