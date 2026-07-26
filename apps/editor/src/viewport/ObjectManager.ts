@@ -1,7 +1,16 @@
 import * as THREE from "three";
-import { type Entity, type MaterialLayer, type ColorLayer, type LightingLayer } from "../store/useEditorStore";
+import {
+  type Entity,
+  type MaterialLayer,
+  type ColorLayer,
+  type LightingLayer,
+  type ImageLayer,
+  type ImageSlot,
+} from "../store/useEditorStore";
 import { useEditorStore } from "../store/useEditorStore";
 import { loadModelAsset } from "../utils/modelAssetStore";
+import { loadTextureAsset } from "../utils/textureAssetStore";
+import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
 import { walkGltfScene, nodePathKey } from "../utils/gltfHierarchy";
 import { takeParsedModel } from "../utils/importModel";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
@@ -34,6 +43,14 @@ export class ObjectManager {
   private scene: THREE.Scene;
   private meshMap: Map<string, THREE.Object3D>;
 
+  // Session cache of textures rebuilt from the OPFS texture store, keyed by
+  // ImageLayer.textureAssetId. Loaded lazily (and once) the first time an empty
+  // material slot actually needs one — a rebuild after a lighting-model change,
+  // or an Image layer re-enabled — never re-decoded per sync. loadingTextures
+  // guards against firing a second load for an id already in flight.
+  private textureCache = new Map<string, THREE.Texture>();
+  private loadingTextures = new Set<string>();
+
   constructor(scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>) {
     this.scene = scene;
     this.meshMap = meshMap;
@@ -65,8 +82,154 @@ export class ObjectManager {
     });
 
     this.applyLightingProperties(material, lightingLayer, model);
+    this.applyImageLayers(material, layers);
 
     return material;
+  }
+
+  // The material property (or properties) each ImageLayer slot feeds. The glTF
+  // metallic-roughness map is one packed texture Three assigns to both
+  // roughnessMap and metalnessMap, so that slot returns two properties.
+  private static readonly SLOT_PROPS: Record<ImageSlot, Array<keyof THREE.MeshStandardMaterial>> = {
+    color: ["map"],
+    normal: ["normalMap"],
+    metallicRoughness: ["roughnessMap", "metalnessMap"],
+    emissive: ["emissiveMap"],
+    ao: ["aoMap"],
+  };
+
+  // True when the material actually has this slot's property (materials differ —
+  // MeshPhongMaterial has no roughnessMap) and it's currently unset. Used to skip
+  // loading/assigning a texture when the slot is already filled (e.g. the parsed
+  // glTF material still carries its original map on the common reload path), which
+  // both avoids needless work and leaves the untouched parsed textures in place.
+  private slotNeedsTexture(material: THREE.Material, slot: ImageSlot): boolean {
+    const mat = material as unknown as Record<string, unknown>;
+    return ObjectManager.SLOT_PROPS[slot].some((prop) => prop in material && !mat[prop as string]);
+  }
+
+  // Assigns the texture to every empty property of the slot the material has,
+  // never overwriting a map that's already present. Returns whether anything changed.
+  private assignTextureToSlot(material: THREE.Material, slot: ImageSlot, texture: THREE.Texture): boolean {
+    const mat = material as unknown as Record<string, unknown>;
+    let changed = false;
+    for (const prop of ObjectManager.SLOT_PROPS[slot]) {
+      if (prop in material && !mat[prop as string]) {
+        mat[prop as string] = texture;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  private clearTextureSlot(material: THREE.Material, slot: ImageSlot): boolean {
+    const mat = material as unknown as Record<string, unknown>;
+    let changed = false;
+    for (const prop of ObjectManager.SLOT_PROPS[slot]) {
+      if (prop in material && mat[prop as string]) {
+        mat[prop as string] = null;
+        changed = true;
+      }
+    }
+    return changed;
+  }
+
+  // Returns the cached texture for a layer, or null while kicking off a one-shot
+  // async load. When the load lands, assignLoadedTextureToMeshes fills the slot on
+  // every mesh using that id; the continuous RAF loop renders it the next frame.
+  private getTextureForLayer(layer: ImageLayer): THREE.Texture | null {
+    const cached = this.textureCache.get(layer.textureAssetId);
+    if (cached) return cached;
+
+    const id = layer.textureAssetId;
+    if (!this.loadingTextures.has(id)) {
+      this.loadingTextures.add(id);
+      loadTextureAsset(id)
+        .then(async (blob) => {
+          if (!blob) return;
+          const texture = await buildTextureFromLayer(blob, layer);
+          this.textureCache.set(id, texture);
+          this.assignLoadedTextureToMeshes(id);
+        })
+        .catch((error) => console.error(`[Libre3D] Failed to load texture asset "${id}":`, error))
+        .finally(() => this.loadingTextures.delete(id));
+    }
+    return null;
+  }
+
+  // After a texture finishes loading, fill it into any mesh whose entity has an
+  // enabled Image layer pointing at this id and an empty slot for it.
+  private assignLoadedTextureToMeshes(textureAssetId: string): void {
+    const texture = this.textureCache.get(textureAssetId);
+    if (!texture) return;
+    const entities = useEditorStore.getState().entities;
+    for (const [entityId, obj] of this.meshMap) {
+      if (!(obj instanceof THREE.Mesh)) continue;
+      const layers = entities.find((entity) => entity.id === entityId)?.materialLayers;
+      if (!layers) continue;
+      const material = obj.material as THREE.Material;
+      let changed = false;
+      for (const layer of layers) {
+        if (layer.type === "image" && layer.enabled && layer.textureAssetId === textureAssetId) {
+          if (this.assignTextureToSlot(material, layer.slot, texture)) changed = true;
+        }
+      }
+      if (changed) material.needsUpdate = true;
+    }
+  }
+
+  // Reconciles a material's texture slots with the entity's Image layers: fills
+  // empty slots for enabled layers (loading the texture on demand) and clears
+  // slots for disabled ones. Deliberately does NOT replace a map that's already
+  // present, so imported meshes keep their untouched parsed glTF textures on the
+  // common path and only the rebuild/re-enable cases pull from the OPFS store.
+  private applyImageLayers(material: THREE.Material, layers: MaterialLayer[] | undefined): void {
+    if (!layers) return;
+    let changed = false;
+    for (const layer of layers) {
+      if (layer.type !== "image") continue;
+      if (layer.enabled) {
+        if (!this.slotNeedsTexture(material, layer.slot)) continue;
+        const texture = this.getTextureForLayer(layer);
+        if (texture && this.assignTextureToSlot(material, layer.slot, texture)) changed = true;
+      } else if (this.clearTextureSlot(material, layer.slot)) {
+        changed = true;
+      }
+    }
+    if (changed) material.needsUpdate = true;
+  }
+
+  // Derives editable Color/Lighting/Image layers from the parsed glTF material of
+  // any resolved import mesh that has none yet, and writes them back to the store.
+  // This is where both fresh imports (nodes created without materialLayers) and
+  // pre-upgrade imports (materialLayers: undefined in old persisted state) get a
+  // real layer stack — it can't happen at migrate() time, which has no parsed glTF.
+  private async backfillMaterialLayers(
+    resolved: Array<{ entityId: string; object: THREE.Object3D }>,
+  ): Promise<void> {
+    const entities = useEditorStore.getState().entities;
+    const pending = resolved.filter(({ entityId, object }) => {
+      if (!(object instanceof THREE.Mesh)) return false;
+      return !entities.find((entity) => entity.id === entityId)?.materialLayers;
+    });
+    if (pending.length === 0) return;
+
+    // One cache across the whole import so images reused between meshes (a shared
+    // packed metallic-roughness map, say) are extracted and stored exactly once.
+    const cache = createTextureDedupCache();
+    for (const { entityId, object } of pending) {
+      const mesh = object as THREE.Mesh;
+      const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+      if (!material) continue;
+      try {
+        const layers = await deriveMaterialLayers(material, cache);
+        // Re-read the store: this runs async, after the hydrate's initial set(),
+        // and setEntityMaterialLayers no-ops if the entity was removed meanwhile.
+        useEditorStore.getState().setEntityMaterialLayers(entityId, layers);
+      } catch (error) {
+        console.error(`[Libre3D] Failed to derive material layers for imported node "${entityId}":`, error);
+      }
+    }
   }
 
   private applyLightingProperties(
@@ -298,6 +461,12 @@ export class ObjectManager {
     // diverges from the file structure, and attach any entities that were
     // waiting for one of these nodes as their parent.
     this.applyParenting(useEditorStore.getState().entities);
+
+    // Fire-and-forget: derive editable material layers for any resolved mesh
+    // that doesn't have them yet (fresh imports and pre-upgrade imports alike).
+    // Writing them back re-triggers a sync, which reconciles the material — the
+    // parsed glTF material and its textures stay untouched on that pass.
+    void this.backfillMaterialLayers(resolvedObjects);
   }
 
   public disposeSceneObject(obj: THREE.Object3D): void {
@@ -343,7 +512,10 @@ export class ObjectManager {
           materials.forEach((material) => {
             textureSlots.forEach((slot) => {
               const texture = (material as any)[slot] as THREE.Texture | undefined;
-              if (texture) texture.dispose();
+              // Skip textures owned by the ObjectManager session cache — they're
+              // shared across meshes by textureAssetId, so freeing one here would
+              // break every other mesh still using it. The cache outlives the mesh.
+              if (texture && !texture.userData?.libre3dManaged) texture.dispose();
             });
             material.dispose();
           });
@@ -361,16 +533,26 @@ export class ObjectManager {
     obj.visible = entity.visible;
     obj.userData.locked = entity.locked;
 
-    // Imported model nodes are THREE.Mesh instances too but carry no materialLayers
-    // (see MaterialsPanel's importedModel filter) — skip the layered-material sync
-    // so their original glTF materials aren't overwritten with the layer defaults.
+    // Imported meshes are THREE.Mesh instances too, and now carry derived
+    // materialLayers (see backfillMaterialLayers) — so this drives their material
+    // the same as a primitive. Meshes still awaiting their backfill (materialLayers
+    // undefined) skip this and keep their parsed glTF material untouched.
     if (obj instanceof THREE.Mesh && entity.materialLayers) {
       const colorLayer = entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
       const lightingLayer = entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
       const model = lightingLayer?.model ?? "physical";
       const MaterialClass = materialClassForModel(model);
 
-      if (obj.material.constructor !== MaterialClass) {
+      // A parsed glTF PBR material is often MeshPhysicalMaterial (a subclass of
+      // MeshStandardMaterial). Treat that as already matching "physical" so we take
+      // the in-place branch and keep its textures/advanced features, rather than
+      // rebuilding it into a plain textureless MeshStandardMaterial on first sync.
+      const materialMatches =
+        model === "physical"
+          ? obj.material instanceof THREE.MeshStandardMaterial
+          : obj.material.constructor === MaterialClass;
+
+      if (!materialMatches) {
         const oldMaterial = obj.material as THREE.Material;
         obj.material = this.createMaterialFromLayers(entity.materialLayers);
         oldMaterial.dispose();
@@ -382,6 +564,7 @@ export class ObjectManager {
         material.transparent = opacity < 1;
         material.wireframe = useEditorStore.getState().sceneSettings.wireframe;
         this.applyLightingProperties(material, lightingLayer, model);
+        this.applyImageLayers(material, entity.materialLayers);
       }
     } else if (obj instanceof THREE.DirectionalLight) {
       obj.color.set(entity.color ?? "#ffffff");
