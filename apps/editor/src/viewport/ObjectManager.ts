@@ -281,9 +281,9 @@ export class ObjectManager {
     const outline = new THREE.LineSegments(edges, material);
     outline.visible = false;
     outline.renderOrder = 999;
-    outline.raycast = () => {}; // never an independent click/box-select target —
-                                 // Raycaster doesn't check .visible, so this guards
-                                 // against it being hit while hidden (see gizmo picker fix)
+    outline.raycast = () => { }; // never an independent click/box-select target —
+    // Raycaster doesn't check .visible, so this guards
+    // against it being hit while hidden (see gizmo picker fix)
     return outline;
   }
 
@@ -591,15 +591,16 @@ export class ObjectManager {
 
     // An imported-model *node* (non-root: no assetId) only gets its Object3D back
     // via its root's hydrateImportedModel -> attachHydratedModel pass, which only
-    // runs when the root's own Object3D is (re)created. If a single node was
-    // deleted and disposed on its own (root untouched -- e.g. undo restoring just
-    // that one node) there's otherwise no path back into the scene for it. Detect
-    // that and force the whole import's root through the recreate branch below,
-    // so attachHydratedModel re-derives the entire subtree from a fresh parse --
-    // the same path that already works correctly on a full reload. Skip roots
-    // already mid-hydrate (hydratingRootIds) so this doesn't tear down an
-    // in-flight parse out from under itself.
-    const rootsNeedingRehydrate = new Set<string>();
+    // runs when the root's own Object3D is (re)created. If a node was deleted and
+    // disposed on its own (root untouched -- e.g. undo restoring just that node)
+    // there's otherwise no path back into the scene for it. Group any such
+    // missing nodes by root and patch each root's subtree in place (see
+    // reattachMissingImportNodes) rather than tearing the whole import down --
+    // this only rebuilds the node(s) that actually need it, leaves every
+    // surviving sibling untouched, and gives the reattached node a brief fade-in
+    // instead of a hard pop back into place. Skip roots already mid-patch
+    // (hydratingRootIds) so overlapping delete/undo cycles can't race.
+    const missingByRoot = new Map<string, string[]>();
     for (const entity of entities) {
       if (entity.type !== "importedModel" || entity.assetId || !entity.rootEntityId) continue;
       if (
@@ -607,23 +608,13 @@ export class ObjectManager {
         this.meshMap.has(entity.rootEntityId) &&
         !this.hydratingRootIds.has(entity.rootEntityId)
       ) {
-        rootsNeedingRehydrate.add(entity.rootEntityId);
+        const list = missingByRoot.get(entity.rootEntityId) ?? [];
+        list.push(entity.id);
+        missingByRoot.set(entity.rootEntityId, list);
       }
     }
-
-    for (const rootId of rootsNeedingRehydrate) {
-      const rootObj = this.meshMap.get(rootId);
-      if (!rootObj) continue;
-      (rootObj.parent ?? this.scene).remove(rootObj);
-      this.disposeSceneObject(rootObj);
-      // Every node under this root is about to be rebuilt by the forced
-      // re-hydrate -- drop their meshMap entries too, since disposeSceneObject
-      // just freed their geometry/material as part of the root group's
-      // subtree, even for surviving siblings this pass isn't otherwise touching.
-      for (const entity of entities) {
-        if (entity.rootEntityId === rootId) this.meshMap.delete(entity.id);
-      }
-      this.meshMap.delete(rootId);
+    for (const [rootId, missingIds] of missingByRoot) {
+      void this.reattachMissingImportNodes(rootId, missingIds);
     }
 
     for (const entity of entities) {
@@ -686,6 +677,166 @@ export class ObjectManager {
     this.applyParenting(entities);
 
     return staleIds;
+  }
+
+  // Patches a resolved import's subtree in place to bring back node(s) whose
+  // Object3D was disposed independently of the root (see syncMeshes) — reparses
+  // the import's buffer (there's no partial-parse API), but only splices the
+  // missing node(s) back into the *existing* live scene graph rather than
+  // rebuilding the whole import, so every untouched sibling keeps its original
+  // Object3D. Falls back to forceFullRehydrate if a missing node's parent can't
+  // be cleanly resolved, so correctness never depends on this optimization.
+  private async reattachMissingImportNodes(rootEntityId: string, missingIds: string[]): Promise<void> {
+    this.hydratingRootIds.add(rootEntityId);
+    try {
+      const entities = useEditorStore.getState().entities;
+      const rootEntity = entities.find((entity) => entity.id === rootEntityId);
+      const rootObj = this.meshMap.get(rootEntityId);
+      if (!rootEntity?.assetId || !rootObj) return;
+
+      let gltf: GLTF | null | undefined = takeParsedModel(rootEntity.assetId);
+      if (!gltf) {
+        const buffer = await loadModelAsset(rootEntity.assetId);
+        if (!buffer) {
+          console.error(`[Libre3D] Imported model asset "${rootEntity.assetId}" was not found in storage.`);
+          return;
+        }
+        const loader = await createConfiguredGltfLoader();
+        gltf = await new Promise<GLTF | null>((resolve) => {
+          loader.parse(
+            buffer,
+            "",
+            (result) => resolve(result),
+            (error) => {
+              console.error(`[Libre3D] Failed to parse imported model asset "${rootEntity.assetId}":`, error);
+              resolve(null);
+            },
+          );
+        });
+      }
+      if (!gltf) {
+        this.forceFullRehydrate(rootEntityId);
+        return;
+      }
+
+      const nodeByPath = new Map<string, THREE.Object3D>();
+      walkGltfScene(gltf.scene, (object, nodePath) => {
+        nodeByPath.set(nodePathKey(nodePath), object);
+      });
+
+      // Shallow-to-deep order guarantees a missing parent is spliced in (and
+      // registered in meshMap) before any of its missing children are processed,
+      // so a whole missing subtree — not just a single leaf — resolves correctly.
+      const pending = missingIds
+        .map((id) => entities.find((entity) => entity.id === id))
+        .filter((entity): entity is Entity => !!entity?.nodePath)
+        .sort((a, b) => a.nodePath!.length - b.nodePath!.length);
+
+      const resolvedObjects: Array<{ entityId: string; object: THREE.Object3D }> = [];
+
+      for (const entity of pending) {
+        const freshObject = nodeByPath.get(nodePathKey(entity.nodePath!));
+        if (!freshObject) continue;
+
+        // A node's structural parent is just its own nodePath minus the last
+        // index (the same convention walkGltfScene/nodePathKey define); an
+        // empty parent path means it's a direct child of gltf.scene, i.e. the
+        // root itself.
+        const parentPath = entity.nodePath!.slice(0, -1);
+        const parentEntityId =
+          parentPath.length === 0
+            ? rootEntityId
+            : entities.find(
+              (candidate) =>
+                candidate.rootEntityId === rootEntityId &&
+                nodePathKey(candidate.nodePath ?? []) === nodePathKey(parentPath),
+            )?.id;
+        const parentObj = parentEntityId ? this.meshMap.get(parentEntityId) : undefined;
+        if (!parentObj) continue;
+
+        parentObj.add(freshObject);
+        freshObject.userData.entityId = entity.id;
+        freshObject.userData.entityType = "importedModel";
+        freshObject.userData.parentEntityId = parentEntityId;
+        this.meshMap.set(entity.id, freshObject);
+        resolvedObjects.push({ entityId: entity.id, object: freshObject });
+      }
+
+      if (resolvedObjects.length !== pending.length) {
+        // Something didn't resolve cleanly (an unresolvable parent) — don't
+        // leave the scene half-patched, fall back to the known-correct
+        // full-recreate path for this root instead.
+        this.forceFullRehydrate(rootEntityId);
+        return;
+      }
+
+      for (const { entityId, object } of resolvedObjects) {
+        const entity = entities.find((candidate) => candidate.id === entityId)!;
+        this.syncEntityToSceneObject(object, entity, false);
+        if (object instanceof THREE.Mesh) {
+          const material = Array.isArray(object.material) ? object.material[0] : object.material;
+          if (material) this.fadeInMesh(object, material.opacity);
+        }
+      }
+
+      this.applyParenting(useEditorStore.getState().entities);
+      void this.backfillMaterialLayers(resolvedObjects);
+    } finally {
+      this.hydratingRootIds.delete(rootEntityId);
+    }
+  }
+
+  // Tears down and rebuilds an entire import's subtree from a fresh parse.
+  // This was syncMeshes' original (pre-fade) fix for a node coming back with no
+  // live object — kept now as reattachMissingImportNodes' fallback for the rare
+  // case it can't cleanly resolve a missing node's parent on its own. Leaves
+  // rootEntityId out of meshMap so the next syncMeshes pass's normal
+  // !existingObj branch recreates it via createSceneObject/hydrateImportedModel.
+  private forceFullRehydrate(rootEntityId: string): void {
+    const rootObj = this.meshMap.get(rootEntityId);
+    if (!rootObj) return;
+    (rootObj.parent ?? this.scene).remove(rootObj);
+    this.disposeSceneObject(rootObj);
+    const entities = useEditorStore.getState().entities;
+    for (const entity of entities) {
+      if (entity.rootEntityId === rootEntityId) this.meshMap.delete(entity.id);
+    }
+    this.meshMap.delete(rootEntityId);
+  }
+
+  // Fades a freshly reattached node's material in from transparent to its real
+  // opacity over a short duration, mirroring Spline's brief fade-in when a
+  // deleted node is undone, instead of a hard pop back into place. Runs its own
+  // rAF chain independent of the main render loop — useViewportRenderer already
+  // renders every frame unconditionally, so mutating opacity here is picked up
+  // automatically with no signal back to React needed.
+  private fadeInMesh(mesh: THREE.Mesh, targetOpacity: number, durationMs = 300): void {
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    const wasTransparent = materials.map((material) => material.transparent);
+    materials.forEach((material) => {
+      material.transparent = true;
+      material.opacity = 0;
+      material.needsUpdate = true;
+    });
+
+    const start = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - start) / durationMs);
+      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
+      materials.forEach((material) => {
+        material.opacity = eased * targetOpacity;
+      });
+      if (t < 1) {
+        requestAnimationFrame(step);
+      } else {
+        materials.forEach((material, index) => {
+          material.opacity = targetOpacity;
+          material.transparent = targetOpacity < 1 ? true : wasTransparent[index];
+          material.needsUpdate = true;
+        });
+      }
+    };
+    requestAnimationFrame(step);
   }
 
   // Makes the THREE graph agree with store-level parentId. Each object tracks
