@@ -3,7 +3,7 @@ import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middl
 import { temporal } from "zundo";
 import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
 import { createId } from "../utils/createId";
-import { deleteModelAsset } from "../utils/modelAssetStore";
+import { reconcileAssetStorage } from "../utils/assetReconciliation";
 import {
   getEntityWorldMatrix,
   solveLocalFromWorld,
@@ -642,19 +642,12 @@ export const useEditorStore = create<EditorState>()(
               getDescendantIds(entities, id).forEach((descId) => allIds.add(descId));
             });
 
-            // Free each removed imported-model root's stored buffer so it doesn't
-            // leak in OPFS forever. Only the import root carries an assetId (the
-            // other nodes resolve against it via rootEntityId), so this deletes
-            // exactly one buffer per import, never per node. Fire-and-forget: the
-            // store update below shouldn't wait on a filesystem write.
-            for (const entity of entities) {
-              if (allIds.has(entity.id) && entity.type === "importedModel" && entity.assetId) {
-                void deleteModelAsset(entity.assetId).catch((error) => {
-                  console.error(`[Libre3D] Failed to delete stored model asset "${entity.assetId}":`, error);
-                });
-              }
-            }
-
+            // Note: this intentionally does NOT free the removed entities' OPFS
+            // model/texture assets. Deletion is deferred to the app-load
+            // reconciliation sweep (see reconcileAssetStorage) so undo works:
+            // zundo's history is in-memory and session-scoped, so nothing is
+            // freed until the next reload, by which point the persisted store
+            // already reflects whether the delete was undone.
             set((state) => ({
               entities: state.entities.filter((entity) => !allIds.has(entity.id)),
               selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
@@ -1008,6 +1001,21 @@ export const useEditorStore = create<EditorState>()(
           name: "libre3d-scene-state",
           version: 15,
           storage: createJSONStorage(() => localStorage),
+          // Once per app load, after persisted state is available, free OPFS
+          // model/texture assets no surviving entity references. This is the
+          // "next reload" point where deferred deletion is finally safe — the
+          // persisted store already reflects any undone deletes by now.
+          // Runs once per app load, right after rehydration. The rehydrated state
+          // isn't threaded into this callback's argument through zundo's temporal
+          // wrapper (it arrives undefined), so read the freshly rehydrated entities
+          // straight off the store on the next microtask — by then create() has
+          // assigned useEditorStore and the persisted state is in place. This is
+          // the "next reload" point where freeing deferred-deleted assets is safe.
+          onRehydrateStorage: () => () => {
+            queueMicrotask(() => {
+              void reconcileAssetStorage(useEditorStore.getState().entities);
+            });
+          },
           migrate: (persistedState: any, version: number) => {
             // v15: MaterialLayer gained an "image" variant so imported meshes
             // become editable. Existing color/lighting layers stay structurally

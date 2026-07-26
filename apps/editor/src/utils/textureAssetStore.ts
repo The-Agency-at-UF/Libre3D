@@ -54,3 +54,22 @@ export async function deleteTextureAsset(textureAssetId: string): Promise<void> 
     throw error;
   }
 }
+
+// Every stored texture blob's id. Used by the app-load reconciliation sweep to
+// diff against entity-referenced ids and free orphans. A missing directory means
+// nothing has been stored yet, so it's an empty list, not an error.
+export async function listTextureAssetIds(): Promise<string[]> {
+  try {
+    // keys() is part of the OPFS spec and shipped in every OPFS-capable browser,
+    // but the installed TS DOM lib doesn't declare it yet — cast to reach it.
+    const dir = (await getTexturesDir(false)) as FileSystemDirectoryHandle & {
+      keys(): AsyncIterableIterator<string>;
+    };
+    const ids: string[] = [];
+    for await (const name of dir.keys()) ids.push(name);
+    return ids;
+  } catch (error) {
+    if (isNotFound(error)) return [];
+    throw error;
+  }
+}
