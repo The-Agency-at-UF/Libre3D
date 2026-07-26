@@ -14,8 +14,14 @@ import {
 
 export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel" | "group";
 
-export type MaterialLayerType = "color" | "lighting";
+export type MaterialLayerType = "color" | "lighting" | "image";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
+
+// Which glTF texture channel an ImageLayer feeds. "metallicRoughness" is a
+// single packed map (green = roughness, blue = metalness) that Three assigns to
+// both material.roughnessMap and material.metalnessMap — one layer covers both,
+// never split into two.
+export type ImageSlot = "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
 
 export interface ColorLayer {
   id: string;
@@ -38,7 +44,22 @@ export interface LightingLayer {
   emissiveIntensity: number; // ignored when model === "none"
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer;
+// A texture map layer, derived from an imported glTF material's maps. The pixel
+// data is never stored here (materialLayers is persisted to localStorage) — it
+// lives in the OPFS texture asset store, referenced by textureAssetId. wrapS/wrapT
+// are the THREE wrap constants copied straight off the source texture.
+export interface ImageLayer {
+  id: string;
+  type: "image";
+  enabled: boolean;
+  opacity: number;
+  textureAssetId: string;
+  slot: ImageSlot;
+  wrapS: number;
+  wrapT: number;
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer;
 
 export interface Entity {
   id: string;
@@ -297,7 +318,8 @@ export interface EditorState {
   removeMaterialLayer: (entityId: string, layerId: string) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers">>) => void;
+  setEntityMaterialLayers: (entityId: string, layers: MaterialLayer[]) => void;
+  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -968,13 +990,33 @@ export const useEditorStore = create<EditorState>()(
                 };
               }),
             })),
+          // Replaces an entity's whole layer stack. Used by hydrate-time backfill
+          // (ObjectManager) to write the layers derived from an imported mesh's
+          // parsed glTF material — the one place layers can be built, since it
+          // needs parsed texture/material data unavailable at migrate() time.
+          setEntityMaterialLayers: (entityId, layers) =>
+            set((state) => ({
+              entities: state.entities.map((entity) =>
+                entity.id === entityId
+                  ? { ...entity, materialLayers: layers.map((layer) => ({ ...layer })) }
+                  : entity,
+              ),
+            })),
           setEditorState: (updates) => set((state) => ({ ...state, ...updates })),
         }),
         {
           name: "libre3d-scene-state",
-          version: 14,
+          version: 15,
           storage: createJSONStorage(() => localStorage),
           migrate: (persistedState: any, version: number) => {
+            // v15: MaterialLayer gained an "image" variant so imported meshes
+            // become editable. Existing color/lighting layers stay structurally
+            // valid, so nothing is rewritten here — imported entities with
+            // materialLayers: undefined are backfilled dynamically the first time
+            // ObjectManager.hydrateImportedModel resolves them (setEntityMaterialLayers),
+            // since deriving layers needs parsed glTF data unavailable at migrate() time.
+            // The bump follows this store's convention of versioning any shape-relevant change.
+
             if (version < 14) {
               if (persistedState && Array.isArray(persistedState.entities)) {
                 persistedState.entities = persistedState.entities.map((entity: any) => ({
