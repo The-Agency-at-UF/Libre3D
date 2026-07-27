@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { saveModelAsset } from "./modelAssetStore";
 import { createId } from "./createId";
-import { walkGltfScene, nodePathKey } from "./gltfHierarchy";
+import { walkGltfScene, nodePathKey, collectSkinnedBones } from "./gltfHierarchy";
+import { pruneImportNodes, type PrunableNode } from "./pruneImportHierarchy";
 import { createConfiguredGltfLoader } from "./createGltfLoader";
 import type { ImportNodeSpec } from "../store/useEditorStore";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -78,6 +79,8 @@ async function extractModelHierarchy(buffer: ArrayBuffer, assetId: string): Prom
   });
   cacheParsedModel(assetId, gltf);
 
+  const boneSet = collectSkinnedBones(gltf.scene);
+
   const rootTempId = createId("node");
   const nodes: ImportNodeSpec[] = [
     {
@@ -90,6 +93,12 @@ async function extractModelHierarchy(buffer: ArrayBuffer, assetId: string): Prom
       scale: [1, 1, 1],
     },
   ];
+
+  // hasMesh/isProtected are only needed transiently to decide what to prune
+  // below -- not part of the persisted ImportNodeSpec shape -- so they're
+  // tracked in a side map keyed by tempId instead of widening that type.
+  const hasMeshByTempId = new Map<string, boolean>([[rootTempId, false]]);
+  const isProtectedByTempId = new Map<string, boolean>([[rootTempId, true]]); // root is never prunable
 
   // Parent lookup by path, so we don't have to re-thread parent ids through the
   // shared walk. Pre-order DFS guarantees a parent is recorded before its
@@ -116,7 +125,39 @@ async function extractModelHierarchy(buffer: ArrayBuffer, assetId: string): Prom
       rotation: [euler.x, euler.y, euler.z],
       scale: [object.scale.x, object.scale.y, object.scale.z],
     });
+    hasMeshByTempId.set(tempId, object instanceof THREE.Mesh);
+    isProtectedByTempId.set(tempId, boneSet.has(object));
   });
 
-  return nodes;
+  return pruneExtractedNodes(nodes, hasMeshByTempId, isProtectedByTempId);
+}
+
+// Collapses pass-through wrappers and drops dead leaves from a freshly
+// extracted node list via the shared pruneImportNodes algorithm -- reused
+// as-is by ObjectManager's backfill pass for pre-existing imports, so both
+// call sites share one implementation of the actual graph/matrix logic.
+function pruneExtractedNodes(
+  nodes: ImportNodeSpec[],
+  hasMeshById: Map<string, boolean>,
+  isProtectedById: Map<string, boolean>,
+): ImportNodeSpec[] {
+  const prunable: PrunableNode[] = nodes.map((node) => ({
+    id: node.tempId,
+    parentId: node.parentTempId,
+    hasMesh: hasMeshById.get(node.tempId) ?? false,
+    isProtected: isProtectedById.get(node.tempId) ?? false,
+    position: node.position,
+    rotation: node.rotation,
+    scale: node.scale,
+  }));
+
+  const { keptById, removedIds } = pruneImportNodes(prunable);
+  if (removedIds.size === 0) return nodes;
+
+  return nodes
+    .filter((node) => keptById.has(node.tempId))
+    .map((node) => {
+      const kept = keptById.get(node.tempId)!;
+      return { ...node, parentTempId: kept.parentId, position: kept.position, rotation: kept.rotation, scale: kept.scale };
+    });
 }

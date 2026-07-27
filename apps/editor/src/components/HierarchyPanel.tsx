@@ -199,7 +199,9 @@ function HierarchyContextMenu({
   const groupParentId = parentIds.size === 1 ? [...parentIds][0] : null;
   const canGroup = moveRoots.length > 0 && canReparentEntities(entities, moveRoots, groupParentId);
 
-  const selectedGroups = selected.filter((entity) => entity.type === "group");
+  const selectedGroups = selected.filter(
+    (entity) => entity.type === "group" || (entity.type === "importedModel" && entity.id !== entity.rootEntityId),
+  );
   const deletableIds = selected.filter((entity) => !entity.locked).map((entity) => entity.id);
   const hasSelection = selected.length > 0;
 

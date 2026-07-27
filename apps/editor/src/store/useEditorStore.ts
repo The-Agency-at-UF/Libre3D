@@ -288,6 +288,10 @@ export interface EditorState {
   reparentEntities: (ids: string[], newParentId: string | null, index?: number) => void;
   groupEntities: (ids: string[]) => string;
   ungroupEntity: (id: string) => void;
+  applyHierarchyPrune: (
+    removedIds: Set<string>,
+    updates: Map<string, { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number]; parentId: string | null }>,
+  ) => void;
   updateEntityTransform: (id: string, updates: EntityTransformUpdates) => void;
   updateMultipleEntityTransforms: (updates: Record<string, EntityTransformUpdates>) => void;
   selectEntity: (id: string | null, multi?: boolean) => void;
@@ -784,10 +788,28 @@ export const useEditorStore = create<EditorState>()(
             });
             return groupId;
           },
+          applyHierarchyPrune: (removedIds, updates) =>
+            set((state) => ({
+              entities: state.entities
+                .filter((entity) => !removedIds.has(entity.id))
+                .map((entity) => {
+                  const update = updates.get(entity.id);
+                  if (!update) return entity;
+                  return {
+                    ...entity,
+                    parentId: update.parentId,
+                    position: cloneVector(update.position),
+                    rotation: cloneVector(update.rotation),
+                    scale: cloneVector(update.scale),
+                  };
+                }),
+            })),
           ungroupEntity: (id) =>
             set((state) => {
               const group = state.entities.find((entity) => entity.id === id);
-              if (!group || group.type !== "group") return state;
+              const canUngroup =
+                group && (group.type === "group" || (group.type === "importedModel" && group.id !== group.rootEntityId));
+              if (!canUngroup) return state;
 
               const childIds = getChildren(state.entities, id).map((child) => child.id);
               const parentWorld = group.parentId ? getEntityWorldMatrix(state.entities, group.parentId) : null;
