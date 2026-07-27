@@ -73,16 +73,39 @@ export class ObjectManager {
     }
   }
 
+  // Derives the actual transparent/alphaTest/depthWrite a material needs from
+  // the layer's captured alphaMode -- not scalar opacity alone. BLEND relies on
+  // per-pixel texture alpha (opacity commonly stays 1) and disables depthWrite,
+  // the standard convention for correct sorting against other transparent/opaque
+  // geometry. MASK is a binary cutout via alphaTest, not blending, though a
+  // manually-reduced opacity on top of it still enables blending. OPAQUE (and
+  // legacy layers with no alphaMode recorded -- primitives, or layers derived
+  // before this shipped) fall back to the original opacity-only heuristic.
+  private computeAlphaBlendState(
+    colorLayer: ColorLayer | undefined,
+    opacity: number,
+  ): { transparent: boolean; alphaTest: number; depthWrite: boolean } {
+    const alphaMode = colorLayer?.alphaMode ?? "OPAQUE";
+    if (alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: false };
+    if (alphaMode === "MASK") return { transparent: opacity < 1, alphaTest: colorLayer?.alphaCutoff ?? 0.5, depthWrite: true };
+    return { transparent: opacity < 1, alphaTest: 0, depthWrite: true };
+  }
+
   private createMaterialFromLayers(layers: MaterialLayer[] | undefined): LayeredMaterial {
     const colorLayer = layers?.find((layer): layer is ColorLayer => layer.type === "color");
     const lightingLayer = layers?.find((layer): layer is LightingLayer => layer.type === "lighting");
     const model = lightingLayer?.model ?? "physical";
     const MaterialClass = materialClassForModel(model);
+    const opacity = colorLayer?.opacity ?? 1;
+    const alphaState = this.computeAlphaBlendState(colorLayer, opacity);
 
     const material = new MaterialClass({
       color: colorLayer?.color ?? "#ffffff",
-      opacity: colorLayer?.opacity ?? 1,
-      transparent: (colorLayer?.opacity ?? 1) < 1,
+      opacity,
+      transparent: alphaState.transparent,
+      alphaTest: alphaState.alphaTest,
+      depthWrite: alphaState.depthWrite,
+      side: colorLayer?.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
       wireframe: useEditorStore.getState().sceneSettings.wireframe,
     });
 
@@ -570,9 +593,14 @@ export class ObjectManager {
         const material = obj.material as LayeredMaterial;
         material.color.set(colorLayer?.color ?? "#ffffff");
         const opacity = colorLayer?.opacity ?? 1;
+        const alphaState = this.computeAlphaBlendState(colorLayer, opacity);
         material.opacity = opacity;
-        material.transparent = opacity < 1;
+        material.transparent = alphaState.transparent;
+        material.alphaTest = alphaState.alphaTest;
+        material.depthWrite = alphaState.depthWrite;
+        material.side = colorLayer?.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
         material.wireframe = useEditorStore.getState().sceneSettings.wireframe;
+        material.needsUpdate = true; // alphaTest/transparent changes need a shader recompile
         this.applyLightingProperties(material, lightingLayer, model);
         this.applyImageLayers(material, entity.materialLayers);
       }

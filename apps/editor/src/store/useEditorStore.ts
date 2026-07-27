@@ -29,6 +29,17 @@ export interface ColorLayer {
   enabled: boolean;
   opacity: number; // 0-1
   color: string;
+  // glTF alpha-blending mode, captured from the source material at derivation
+  // time so imported meshes preserve texture-alpha-driven transparency (BLEND)
+  // and cutout masking (MASK) instead of only reacting to the scalar opacity
+  // above. Undefined for layers on primitives (cube/sphere/torus), which have
+  // no glTF material to inherit this from -- treated as "OPAQUE".
+  alphaMode?: "OPAQUE" | "MASK" | "BLEND";
+  alphaCutoff?: number; // only meaningful when alphaMode === "MASK"
+  // glTF doubleSided, captured the same way -- an imported mesh authored as
+  // double-sided (thin geometry like hair/foliage/fabric) must stay that way
+  // even if its material ever needs a full rebuild (see createMaterialFromLayers).
+  doubleSided?: boolean;
 }
 
 export interface LightingLayer {
@@ -999,7 +1010,7 @@ export const useEditorStore = create<EditorState>()(
         }),
         {
           name: "libre3d-scene-state",
-          version: 15,
+          version: 16,
           storage: createJSONStorage(() => localStorage),
           // Once per app load, after persisted state is available, free OPFS
           // model/texture assets no surviving entity references. This is the
@@ -1017,6 +1028,26 @@ export const useEditorStore = create<EditorState>()(
             });
           },
           migrate: (persistedState: any, version: number) => {
+            // v16: ColorLayer gained alphaMode/alphaCutoff/doubleSided so imported
+            // materials preserve glTF alpha-blend/mask/doubleSided behavior instead of
+            // only reacting to scalar opacity (see materialLayers.ts/ObjectManager.ts).
+            // Existing imported entities already have a materialLayers array derived
+            // under the old, lossy logic -- clearing it back to undefined makes them
+            // eligible for backfillMaterialLayers again, so the next time each import
+            // hydrates it re-derives layers straight from the still-available parsed
+            // glTF material, this time capturing alphaMode/doubleSided correctly. Can't
+            // happen here at migrate() time itself (no parsed glTF data available),
+            // same reason v15's image-layer backfill is deferred.
+            if (version < 16) {
+              if (persistedState && Array.isArray(persistedState.entities)) {
+                persistedState.entities = persistedState.entities.map((entity: any) =>
+                  entity.type === "importedModel" && entity.materialLayers
+                    ? { ...entity, materialLayers: undefined }
+                    : entity,
+                );
+              }
+            }
+
             // v15: MaterialLayer gained an "image" variant so imported meshes
             // become editable. Existing color/lighting layers stay structurally
             // valid, so nothing is rewritten here — imported entities with
