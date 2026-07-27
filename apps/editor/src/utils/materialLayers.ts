@@ -48,12 +48,26 @@ function colorLayerFromMaterial(material: THREE.Material): ColorLayer {
   const color = "color" in material && (material as THREE.MeshStandardMaterial).color instanceof THREE.Color
     ? (material as THREE.MeshStandardMaterial).color.getHexString()
     : "ffffff";
+
+  // GLTFLoader already resolves alphaMode into these two THREE properties
+  // correctly at parse time (transparent=true for BLEND, alphaTest>0 for
+  // MASK) -- reconstruct the effective alphaMode from them rather than
+  // needing the raw glTF JSON here.
+  const alphaMode: NonNullable<ColorLayer["alphaMode"]> = material.transparent
+    ? "BLEND"
+    : material.alphaTest > 0
+      ? "MASK"
+      : "OPAQUE";
+
   return {
     id: createLayerId(),
     type: "color",
     enabled: true,
     opacity: typeof material.opacity === "number" ? material.opacity : 1,
     color: `#${color}`,
+    alphaMode,
+    ...(alphaMode === "MASK" ? { alphaCutoff: material.alphaTest } : {}),
+    doubleSided: material.side === THREE.DoubleSide,
   };
 }
 
