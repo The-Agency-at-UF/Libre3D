@@ -26,6 +26,8 @@ export function useViewportControls(
     orbitControls.maxZoom = 5;
     orbitControls.enableRotate = false;
     orbitControls.enablePan = false;
+    // Middle mouse drag pans (default is DOLLY); enablePan is toggled per-gesture below.
+    orbitControls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
     orbitControlsRef.current = orbitControls;
 
     const transformControls = new TransformControls(camera, rendererRef.current.domElement);
@@ -130,10 +132,11 @@ export function useViewportControls(
     let hasPausedForDrag = false;
     let isAltPressed = false;
     let isSpacePressed = false;
+    let isMiddlePanning = false;
 
     const updateOrbitControls = () => {
       orbitControls.enableRotate = isAltPressed && !isSpacePressed;
-      orbitControls.enablePan = isAltPressed || isSpacePressed;
+      orbitControls.enablePan = isAltPressed || isSpacePressed || isMiddlePanning;
       orbitControls.enabled = !isDragging;
 
       if (isSpacePressed) {
@@ -176,22 +179,32 @@ export function useViewportControls(
     const handleBlur = () => {
       isAltPressed = false;
       isSpacePressed = false;
+      isMiddlePanning = false;
       updateOrbitControls();
     };
 
-    const handlePointerDown = () => {
-      if (isSpacePressed && rendererRef.current) {
+    // Capture phase so enablePan is set before OrbitControls' own pointerdown reads it.
+    const handlePointerDown = (e: PointerEvent) => {
+      if (e.button === 1) {
+        isMiddlePanning = true;
+        updateOrbitControls();
+        if (rendererRef.current) rendererRef.current.domElement.style.cursor = "grabbing";
+      } else if (isSpacePressed && rendererRef.current) {
         rendererRef.current.domElement.style.cursor = "grabbing";
       }
     };
 
-    const handlePointerUp = () => {
-      if (isSpacePressed && rendererRef.current) {
+    const handlePointerUp = (e: PointerEvent) => {
+      if (e.button === 1 && isMiddlePanning) {
+        isMiddlePanning = false;
+        // updateOrbitControls resets the cursor based on the current modifier state.
+        updateOrbitControls();
+      } else if (isSpacePressed && rendererRef.current) {
         rendererRef.current.domElement.style.cursor = "grab";
       }
     };
 
-    rendererRef.current.domElement.addEventListener("pointerdown", handlePointerDown);
+    rendererRef.current.domElement.addEventListener("pointerdown", handlePointerDown, true);
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
@@ -289,7 +302,7 @@ export function useViewportControls(
     );
 
     return () => {
-      rendererRef.current?.domElement.removeEventListener("pointerdown", handlePointerDown);
+      rendererRef.current?.domElement.removeEventListener("pointerdown", handlePointerDown, true);
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);

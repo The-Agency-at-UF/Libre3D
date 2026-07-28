@@ -108,6 +108,8 @@ export function useViewportRaycaster(
 
     const onPointerDown = (event: PointerEvent) => {
       if (useEditorStore.getState().isPreviewMode) return;
+      // Left button only — middle-drag pans and right-click shouldn't box-select or pick.
+      if (event.button !== 0) return;
       pointerDownTime = Date.now();
       pointerDownPos.set(event.clientX, event.clientY);
       clickedGizmo = transformControlsRef.current?.axis !== null;
@@ -129,6 +131,8 @@ export function useViewportRaycaster(
     };
 
     const onPointerUp = (event: PointerEvent) => {
+      // Only the left button drives box-select / click-pick (see onPointerDown).
+      if (event.button !== 0) return;
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
 
       if (isDragSelecting) {
