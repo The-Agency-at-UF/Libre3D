@@ -576,6 +576,27 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     });
   }, [entities]);
 
+  // Default every newly-appearing entity to collapsed. Runs after mount too,
+  // but the mount-time seed already covers the initial entities, so on mount
+  // there are no fresh ids and this is a no-op (no expanded-then-collapsed
+  // flash for a persisted import).
+  useEffect(() => {
+    const seeded = seededCollapseIdsRef.current;
+    const freshIds: string[] = [];
+    for (const entity of entities) {
+      if (!seeded.has(entity.id)) {
+        seeded.add(entity.id);
+        freshIds.push(entity.id);
+      }
+    }
+    if (freshIds.length === 0) return;
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      freshIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [entities]);
+
   const trimmedQuery = searchQuery.trim().toLowerCase();
 
   // null means "no filter, show everything". When searching, a node is visible

@@ -75,10 +75,15 @@ export class ObjectManager {
   }
 
   // Derives the actual transparent/alphaTest/depthWrite a material needs from
-  // the layer's captured alphaMode -- not scalar opacity alone. BLEND relies on
-  // per-pixel texture alpha (opacity commonly stays 1) and disables depthWrite,
-  // the standard convention for correct sorting against other transparent/opaque
-  // geometry. MASK is a binary cutout via alphaTest, not blending, though a
+  // the layer's captured alphaMode -- not scalar opacity alone. BLEND keeps
+  // transparent:true so per-pixel texture alpha still blends, but only disables
+  // depthWrite when the material is actually translucent (opacity < 1) -- the
+  // standard depthWrite:false convention lets multiple see-through objects sort
+  // against each other, but on a fully-opaque BLEND mesh (a solid model whose
+  // exporter, e.g. Blender, flags it BLEND spuriously) it destroys the mesh's
+  // OWN depth sorting, so a large double-sided mesh renders with chunks missing.
+  // Writing depth when opacity is 1 restores that self-occlusion without losing
+  // edge alpha. MASK is a binary cutout via alphaTest, not blending, though a
   // manually-reduced opacity on top of it still enables blending. OPAQUE (and
   // legacy layers with no alphaMode recorded -- primitives, or layers derived
   // before this shipped) fall back to the original opacity-only heuristic.
@@ -87,7 +92,7 @@ export class ObjectManager {
     opacity: number,
   ): { transparent: boolean; alphaTest: number; depthWrite: boolean } {
     const alphaMode = colorLayer?.alphaMode ?? "OPAQUE";
-    if (alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: false };
+    if (alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: opacity >= 1 };
     if (alphaMode === "MASK") return { transparent: opacity < 1, alphaTest: colorLayer?.alphaCutoff ?? 0.5, depthWrite: true };
     return { transparent: opacity < 1, alphaTest: 0, depthWrite: true };
   }
