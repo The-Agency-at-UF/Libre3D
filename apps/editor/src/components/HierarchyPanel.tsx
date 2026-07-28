@@ -492,10 +492,11 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const selectEntity = useEditorStore((state) => state.selectEntity);
   const selectEntities = useEditorStore((state) => state.selectEntities);
   const reparentEntities = useEditorStore((state) => state.reparentEntities);
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
-  // Keyboard cursor + range anchor. `activeId` follows every click and arrow
-  // move; `anchorId` only follows non-shift clicks, so successive Shift+Clicks
-  // extend from the same origin (standard file-browser / Blender behavior).
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set(entities.map((entity) => entity.id)));
+  const seededCollapseIdsRef = useRef<Set<string>>(undefined as unknown as Set<string>);
+  if (seededCollapseIdsRef.current === undefined) {
+    seededCollapseIdsRef.current = new Set(entities.map((entity) => entity.id));
+  }
   const [activeId, setActiveId] = useState<string | null>(null);
   const [anchorId, setAnchorId] = useState<string | null>(null);
   const pendingImportCount = useEditorStore((state) => state.pendingImportCount);
@@ -541,6 +542,27 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       return next;
     });
   };
+
+  // Default every newly-appearing entity to collapsed. Runs after mount too,
+  // but the mount-time seed already covers the initial entities, so on mount
+  // there are no fresh ids and this is a no-op (no expanded-then-collapsed
+  // flash for a persisted import).
+  useEffect(() => {
+    const seeded = seededCollapseIdsRef.current;
+    const freshIds: string[] = [];
+    for (const entity of entities) {
+      if (!seeded.has(entity.id)) {
+        seeded.add(entity.id);
+        freshIds.push(entity.id);
+      }
+    }
+    if (freshIds.length === 0) return;
+    setCollapsedIds((prev) => {
+      const next = new Set(prev);
+      freshIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [entities]);
 
   const trimmedQuery = searchQuery.trim().toLowerCase();
 
