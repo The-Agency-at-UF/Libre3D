@@ -13,6 +13,7 @@ import { loadTextureAsset } from "../../utils/textureAssetStore";
 import { PanelSection } from "../ui/PanelSection";
 import { Slider } from "../ui/Slider";
 import { Select } from "../ui/Select";
+import { Switch } from "../ui/Switch";
 
 // Labelled "Base Color" (not "Color") so an image row reads distinctly from the
 // Color layer above it in the stack.
@@ -113,6 +114,19 @@ const LIGHTING_MODEL_OPTIONS: { label: string; value: LightingModel }[] = [
   { label: "Toon", value: "toon" },
 ];
 
+type AlphaMode = NonNullable<ColorLayer["alphaMode"]>;
+
+// Mirrors glTF's alphaMode. Opaque ignores alpha; Mask is a hard alpha-tested
+// cutout (writes depth, so it sorts correctly); Blend is true translucency
+// (disables depth-write). Exporters frequently mis-flag a hard-edged cutout as
+// Blend, which then clips against opaque geometry behind it -- switching such a
+// material to Mask is the fix.
+const ALPHA_MODE_OPTIONS: { label: string; value: AlphaMode }[] = [
+  { label: "Opaque", value: "OPAQUE" },
+  { label: "Mask", value: "MASK" },
+  { label: "Blend", value: "BLEND" },
+];
+
 const getColorLayer = (entity: Entity): ColorLayer | undefined =>
   entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
 
@@ -203,6 +217,13 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
   const colorOpacityMixed = colorLayers.some(({ layer }) => (layer as ColorLayer).opacity !== firstColor?.opacity);
   const modelMixed = lightingLayers.some(({ layer }) => (layer as LightingLayer).model !== firstLighting?.model);
 
+  // alphaMode/doubleSided are optional (primitives predate them) -- fall back to
+  // the glTF defaults (OPAQUE / single-sided) so the controls always show a value.
+  const firstAlphaMode: AlphaMode = firstColor?.alphaMode ?? "OPAQUE";
+  const firstDoubleSided = firstColor?.doubleSided ?? false;
+  const alphaModeMixed = colorLayers.some(({ layer }) => ((layer as ColorLayer).alphaMode ?? "OPAQUE") !== firstAlphaMode);
+  const doubleSidedMixed = colorLayers.some(({ layer }) => ((layer as ColorLayer).doubleSided ?? false) !== firstDoubleSided);
+
   const applyColorUpdate = (updates: Partial<ColorLayer>) => {
     const updatesMap: Record<string, { layerId: string; updates: Partial<MaterialLayer> }> = {};
     colorLayers.forEach(({ entity, layer }) => {
@@ -260,6 +281,36 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
               step={1}
               value={Math.round((colorOpacityMixed ? 1 : firstColor?.opacity ?? 1) * 100)}
               onChange={(val) => applyColorUpdate({ opacity: val / 100 })}
+            />
+            <Select
+              label="Alpha Mode"
+              options={alphaModeMixed ? [{ label: "Mixed", value: "" }, ...ALPHA_MODE_OPTIONS] : ALPHA_MODE_OPTIONS}
+              value={alphaModeMixed ? "" : firstAlphaMode}
+              onChange={(val) => {
+                if (!val) return;
+                // Seed a sensible cutoff when entering Mask so an alpha-tested
+                // cutout has something to test against immediately.
+                const updates: Partial<ColorLayer> =
+                  val === "MASK"
+                    ? { alphaMode: "MASK", alphaCutoff: firstColor?.alphaCutoff ?? 0.5 }
+                    : { alphaMode: val as AlphaMode };
+                applyColorUpdate(updates);
+              }}
+            />
+            {!alphaModeMixed && firstAlphaMode === "MASK" && (
+              <Slider
+                label="Alpha Cutoff"
+                min={0}
+                max={1}
+                step={0.01}
+                value={firstColor?.alphaCutoff ?? 0.5}
+                onChange={(val) => applyColorUpdate({ alphaCutoff: val })}
+              />
+            )}
+            <Switch
+              label="Double Sided"
+              checked={doubleSidedMixed ? false : firstDoubleSided}
+              onChange={(val) => applyColorUpdate({ doubleSided: val })}
             />
           </div>
         </details>

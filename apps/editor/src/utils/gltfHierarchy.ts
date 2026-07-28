@@ -23,3 +23,17 @@ export function walkGltfScene(
 export function nodePathKey(nodePath: number[]): string {
   return nodePath.join(",");
 }
+
+// Collects every Bone referenced by any SkinnedMesh's skeleton in the scene.
+// Used to protect bones from the empty/pass-through pruning pass (see
+// pruneImportHierarchy.ts) -- a bone often has no mesh and nothing else
+// marking it as significant, but removing one breaks skinning.
+export function collectSkinnedBones(scene: THREE.Object3D): Set<THREE.Object3D> {
+  const bones = new Set<THREE.Object3D>();
+  scene.traverse((object) => {
+    if ((object as THREE.SkinnedMesh).isSkinnedMesh) {
+      (object as THREE.SkinnedMesh).skeleton?.bones.forEach((bone) => bones.add(bone));
+    }
+  });
+  return bones;
+}

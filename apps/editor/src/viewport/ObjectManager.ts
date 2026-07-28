@@ -11,7 +11,8 @@ import { useEditorStore } from "../store/useEditorStore";
 import { loadModelAsset } from "../utils/modelAssetStore";
 import { loadTextureAsset } from "../utils/textureAssetStore";
 import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
-import { walkGltfScene, nodePathKey } from "../utils/gltfHierarchy";
+import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";
+import { pruneImportNodes, type PrunableNode } from "../utils/pruneImportHierarchy";
 import { takeParsedModel } from "../utils/importModel";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -74,10 +75,15 @@ export class ObjectManager {
   }
 
   // Derives the actual transparent/alphaTest/depthWrite a material needs from
-  // the layer's captured alphaMode -- not scalar opacity alone. BLEND relies on
-  // per-pixel texture alpha (opacity commonly stays 1) and disables depthWrite,
-  // the standard convention for correct sorting against other transparent/opaque
-  // geometry. MASK is a binary cutout via alphaTest, not blending, though a
+  // the layer's captured alphaMode -- not scalar opacity alone. BLEND keeps
+  // transparent:true so per-pixel texture alpha still blends, but only disables
+  // depthWrite when the material is actually translucent (opacity < 1) -- the
+  // standard depthWrite:false convention lets multiple see-through objects sort
+  // against each other, but on a fully-opaque BLEND mesh (a solid model whose
+  // exporter, e.g. Blender, flags it BLEND spuriously) it destroys the mesh's
+  // OWN depth sorting, so a large double-sided mesh renders with chunks missing.
+  // Writing depth when opacity is 1 restores that self-occlusion without losing
+  // edge alpha. MASK is a binary cutout via alphaTest, not blending, though a
   // manually-reduced opacity on top of it still enables blending. OPAQUE (and
   // legacy layers with no alphaMode recorded -- primitives, or layers derived
   // before this shipped) fall back to the original opacity-only heuristic.
@@ -86,7 +92,7 @@ export class ObjectManager {
     opacity: number,
   ): { transparent: boolean; alphaTest: number; depthWrite: boolean } {
     const alphaMode = colorLayer?.alphaMode ?? "OPAQUE";
-    if (alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: false };
+    if (alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: opacity >= 1 };
     if (alphaMode === "MASK") return { transparent: opacity < 1, alphaTest: colorLayer?.alphaCutoff ?? 0.5, depthWrite: true };
     return { transparent: opacity < 1, alphaTest: 0, depthWrite: true };
   }
@@ -257,6 +263,90 @@ export class ObjectManager {
       } catch (error) {
         console.error(`[Libre3D] Failed to derive material layers for imported node "${entityId}":`, error);
       }
+    }
+  }
+
+  // Retroactively collapses/drops any prunable node still present on an import
+  // created before this shipped. Reuses the exact pruneImportNodes algorithm
+  // extraction runs on new imports, fed from entities already in the store
+  // instead of a fresh ImportNodeSpec[] -- hasMesh/isProtected are derived from
+  // the same parsed gltf every hydrate already has in hand, no extra parse
+  // needed. A no-op (removedIds empty) for any import already pruned, whether
+  // at extraction time or a previous hydrate's backfill.
+  private backfillPruneHierarchy(gltf: GLTF, rootEntityId: string): void {
+    const entities = useEditorStore.getState().entities;
+    const rootEntity = entities.find((entity) => entity.id === rootEntityId);
+    if (!rootEntity) return;
+
+    const boneSet = collectSkinnedBones(gltf.scene);
+    const nodeByPath = new Map<string, THREE.Object3D>();
+    walkGltfScene(gltf.scene, (object, nodePath) => {
+      nodeByPath.set(nodePathKey(nodePath), object);
+    });
+
+    const nodeEntities = entities.filter(
+      (entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId,
+    );
+
+    const prunable: PrunableNode[] = [
+      {
+        id: rootEntityId,
+        parentId: null,
+        hasMesh: false,
+        isProtected: true,
+        position: rootEntity.position,
+        rotation: rootEntity.rotation,
+        scale: rootEntity.scale,
+      },
+      ...nodeEntities.map((entity) => {
+        const object = entity.nodePath ? nodeByPath.get(nodePathKey(entity.nodePath)) : undefined;
+        return {
+          id: entity.id,
+          parentId: entity.parentId ?? rootEntityId,
+          hasMesh: object instanceof THREE.Mesh,
+          // A node whose object can't be found (shouldn't happen) is protected
+          // defensively rather than risking an incorrect prune.
+          isProtected: object ? boneSet.has(object) : true,
+          position: entity.position,
+          rotation: entity.rotation,
+          scale: entity.scale,
+        };
+      }),
+    ];
+
+    const { keptById, removedIds } = pruneImportNodes(prunable);
+    if (removedIds.size === 0) return;
+
+    const updates = new Map<
+      string,
+      { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number]; parentId: string | null }
+    >();
+    for (const [id, node] of keptById) {
+      if (id === rootEntityId) continue;
+      updates.set(id, { position: node.position, rotation: node.rotation, scale: node.scale, parentId: node.parentId });
+    }
+
+    useEditorStore.getState().applyHierarchyPrune(removedIds, updates);
+  }
+
+  // Resets every parsed Object3D that has no surviving store entity (i.e. was
+  // pruned) to an identity local transform. Its transform was already baked
+  // into its kept child by pruneImportNodes, so the physical node must now
+  // contribute nothing; see the call site in attachHydratedModel for why.
+  private neutralizePrunedObjects(
+    nodeByPath: Map<string, THREE.Object3D>,
+    nodeEntities: Entity[],
+  ): void {
+    const keptPaths = new Set(
+      nodeEntities
+        .filter((entity) => entity.nodePath)
+        .map((entity) => nodePathKey(entity.nodePath!)),
+    );
+    for (const [pathKey, object] of nodeByPath) {
+      if (keptPaths.has(pathKey)) continue;
+      object.position.set(0, 0, 0);
+      object.quaternion.identity();
+      object.scale.set(1, 1, 1);
     }
   }
 
@@ -436,6 +526,12 @@ export class ObjectManager {
     // wherever `group` happens to already be positioned in the scene.
     const boundingBox = new THREE.Box3().setFromObject(gltf.scene);
 
+    // Retroactively prune any already-persisted import created before this
+    // shipped -- a no-op for anything extracted after (already pruned at
+    // extraction time), real work only for pre-upgrade imports, mirroring how
+    // backfillMaterialLayers below backfills materialLayers.
+    this.backfillPruneHierarchy(gltf, rootEntityId);
+
     // Map every glTF node to its nodePath so the flat node entities created
     // by prepareModelImport can be resolved back to the actual parsed
     // Object3D without re-parsing. walkGltfScene is the shared definition of
@@ -459,6 +555,17 @@ export class ObjectManager {
       this.meshMap.set(entity.id, object);
       resolvedObjects.push({ entityId: entity.id, object });
     }
+
+    // Neutralize the transforms of pruned wrapper/leaf objects. Pruning removed
+    // their *store* entities and baked each wrapper's transform into its
+    // surviving child, but the actual Object3Ds are still physically nested in
+    // gltf.scene between kept nodes. Left as-is they'd re-apply their original
+    // transform on top of the already-baked child transform (a double-apply,
+    // e.g. a child of a scale-2 wrapper rendering at scale 4). Zeroing them to
+    // identity makes them inert pass-throughs so the baked child transform is
+    // the only one that counts. Bones and meshes are never pruned, so this only
+    // ever touches genuine empties.
+    this.neutralizePrunedObjects(nodeByPath, nodeEntities);
 
     // Record each node's *structural* (file-order) parent entity as its
     // tracked parent — in a second pass, so every object already carries
