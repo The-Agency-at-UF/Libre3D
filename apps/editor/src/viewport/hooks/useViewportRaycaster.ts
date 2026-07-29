@@ -148,48 +148,75 @@ export function useViewportRaycaster(
       if (duration < 500 && dist < 10) {
         if (clickedGizmo) return;
 
-        const rect = renderer.domElement.getBoundingClientRect();
-        mouse.x =  ((event.clientX - rect.left) / rect.width)  * 2 - 1;
-        mouse.y = -((event.clientY - rect.top)  / rect.height) * 2 + 1;
-
-        // Always ray-cast with the current active camera.
-        raycaster.setFromCamera(mouse, cameraRef.current);
-
-        const targets: THREE.Object3D[] = [];
-        meshMap.forEach((obj) => {
-          if (obj.visible && !obj.userData.locked) {
-            targets.push(obj);
-            if (obj.userData.helper) {
-              targets.push(obj.userData.helper);
-            }
-          }
-        });
-
-        const intersects = raycaster.intersectObjects(targets, true);
-
-        if (intersects.length > 0) {
-          let hitObject: THREE.Object3D | null = intersects[0].object;
-          while (hitObject && !hitObject.userData.entityId) {
-            hitObject = hitObject.parent;
-          }
-          if (hitObject && hitObject.userData.entityId) {
-            useEditorStore.getState().selectEntity(hitObject.userData.entityId, event.shiftKey);
-            return;
-          }
+        const hitEntityId = pickEntityIdAt(event.clientX, event.clientY);
+        if (hitEntityId) {
+          // Viewport clicks select the whole imported model (its root), not the
+          // deepest child under the cursor — a specific child is reached by
+          // double-clicking (see onDoubleClick) or via the hierarchy panel.
+          const state = useEditorStore.getState();
+          const hitEntity = state.entities.find((e) => e.id === hitEntityId);
+          const targetId = hitEntity?.rootEntityId ?? hitEntityId;
+          state.selectEntity(targetId, event.shiftKey);
+          return;
         }
 
         useEditorStore.getState().selectEntity(null, event.shiftKey);
       }
     };
 
+    // Resolves the entity id of the deepest tagged object under the cursor, or
+    // null on a miss. Shared by click (which bubbles to the import root) and
+    // double-click (which keeps the exact child).
+    const pickEntityIdAt = (clientX: number, clientY: number): string | null => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x =  ((clientX - rect.left) / rect.width)  * 2 - 1;
+      mouse.y = -((clientY - rect.top)  / rect.height) * 2 + 1;
+
+      // Always ray-cast with the current active camera.
+      raycaster.setFromCamera(mouse, cameraRef.current);
+
+      const targets: THREE.Object3D[] = [];
+      meshMap.forEach((obj) => {
+        if (obj.visible && !obj.userData.locked) {
+          targets.push(obj);
+          if (obj.userData.helper) {
+            targets.push(obj.userData.helper);
+          }
+        }
+      });
+
+      const intersects = raycaster.intersectObjects(targets, true);
+      if (intersects.length === 0) return null;
+
+      let hitObject: THREE.Object3D | null = intersects[0].object;
+      while (hitObject && !hitObject.userData.entityId) {
+        hitObject = hitObject.parent;
+      }
+      return hitObject?.userData.entityId ?? null;
+    };
+
+    // Double-click drills into the exact child under the cursor (the deepest
+    // tagged node), bypassing the click handler's bubble-to-root. A no-op on a
+    // miss so an empty double-click doesn't clear the current selection.
+    const onDoubleClick = (event: MouseEvent) => {
+      if (useEditorStore.getState().isPreviewMode) return;
+      if (transformControlsRef.current?.axis) return;
+      const hitEntityId = pickEntityIdAt(event.clientX, event.clientY);
+      if (hitEntityId) {
+        useEditorStore.getState().selectEntity(hitEntityId, event.shiftKey);
+      }
+    };
+
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
     renderer.domElement.addEventListener("pointerup",   onPointerUp);
+    renderer.domElement.addEventListener("dblclick",    onDoubleClick);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
 
     return () => {
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointerup",   onPointerUp);
+      renderer.domElement.removeEventListener("dblclick",    onDoubleClick);
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);

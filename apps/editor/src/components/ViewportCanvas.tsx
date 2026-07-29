@@ -133,8 +133,19 @@ export function ViewportCanvas() {
         const proxyMat = proxy.matrixWorld;
         useEditorStore.getState().selectedEntityIds.forEach(id => {
           const localMat = initialOffsetsRef.current.get(id);
-          if (localMat) {
+          const obj = objectManager.getObject(id);
+          if (localMat && obj) {
             const newWorldMat = proxyMat.clone().multiply(localMat);
+            // entity.position/rotation/scale are LOCAL to the object's parent —
+            // solve the local matrix against the live parent's world matrix
+            // before storing, otherwise parented entities (imported child nodes,
+            // grouped children) get world values written into local fields and
+            // jump on the next sync.
+            const parent = obj.parent;
+            if (parent) {
+              parent.updateMatrixWorld(true);
+              newWorldMat.premultiply(parent.matrixWorld.clone().invert());
+            }
             const pos = new THREE.Vector3();
             const quat = new THREE.Quaternion();
             const scale = new THREE.Vector3();
@@ -204,27 +215,39 @@ export function ViewportCanvas() {
 
     objectManager.syncMeshes(entities, transformTarget, isDragging);
 
+    const tc = transformControlsRef.current;
     const locked = selectedEntityIds.some(id => objectManager.getObject(id)?.userData.locked);
     if (locked || selectedEntityIds.length === 0) {
-      transformControlsRef.current?.detach();
+      tc?.detach();
     } else if (selectedEntityIds.length === 1) {
       const selectedObj = objectManager.getObject(selectedEntityIds[0]);
-      if (selectedObj) transformControlsRef.current?.attach(selectedObj);
+      // Re-attaching every render (this effect re-runs on every entities change,
+      // i.e. every frame of a gizmo drag since we write the transform back to the
+      // store) resets the gizmo and makes the drag jitter. Only (re)attach when
+      // the target actually changed.
+      if (selectedObj && tc && tc.object !== selectedObj) tc.attach(selectedObj);
     } else {
       const proxy = selectionProxyRef.current;
-      const box = new THREE.Box3();
-      selectedEntityIds.forEach(id => {
-        const obj = objectManager.getObject(id);
-        if (obj) box.expandByObject(obj);
-      });
-      const center = new THREE.Vector3();
-      box.getCenter(center);
-      proxy.position.copy(center);
-      proxy.rotation.set(0, 0, 0);
-      proxy.scale.set(1, 1, 1);
-      proxy.updateMatrixWorld();
-      
-      transformControlsRef.current?.attach(proxy);
+      // While a multi-select drag is in progress, don't recompute the proxy's
+      // center and re-attach — that would move the proxy out from under the
+      // active gizmo drag each frame and fight the gesture. Only rebuild the
+      // proxy when the selection is settled (not mid-drag).
+      const draggingProxy = isDragging && tc?.object === proxy;
+      if (!draggingProxy) {
+        const box = new THREE.Box3();
+        selectedEntityIds.forEach(id => {
+          const obj = objectManager.getObject(id);
+          if (obj) box.expandByObject(obj);
+        });
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+        proxy.position.copy(center);
+        proxy.rotation.set(0, 0, 0);
+        proxy.scale.set(1, 1, 1);
+        proxy.updateMatrixWorld();
+
+        if (tc && tc.object !== proxy) tc.attach(proxy);
+      }
     }
 
     // Helper visibility

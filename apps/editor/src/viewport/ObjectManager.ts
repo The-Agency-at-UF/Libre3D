@@ -701,13 +701,24 @@ export class ObjectManager {
         material.color.set(colorLayer?.color ?? "#ffffff");
         const opacity = colorLayer?.opacity ?? 1;
         const alphaState = this.computeAlphaBlendState(colorLayer, opacity);
+        const newSide = colorLayer?.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+        // Only transparent/alphaTest/side changes force a shader recompile; color,
+        // opacity, roughness, etc. do not. This syncMeshes path re-runs for every
+        // entity on every store change — including every frame of a gizmo drag —
+        // so unconditionally setting needsUpdate recompiled every imported child
+        // mesh's shader each frame, which is what made dragging a hydrated model
+        // jitter. Set it only when a program-affecting value actually changed.
+        const needsRecompile =
+          material.transparent !== alphaState.transparent ||
+          material.alphaTest !== alphaState.alphaTest ||
+          material.side !== newSide;
         material.opacity = opacity;
         material.transparent = alphaState.transparent;
         material.alphaTest = alphaState.alphaTest;
         material.depthWrite = alphaState.depthWrite;
-        material.side = colorLayer?.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+        material.side = newSide;
         material.wireframe = useEditorStore.getState().sceneSettings.wireframe;
-        material.needsUpdate = true; // alphaTest/transparent changes need a shader recompile
+        if (needsRecompile) material.needsUpdate = true;
         this.applyLightingProperties(material, lightingLayer, model);
         this.applyImageLayers(material, entity.materialLayers);
       }
