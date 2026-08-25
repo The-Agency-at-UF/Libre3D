@@ -127,3 +127,30 @@ export function getAncestorIds(entities: Entity[], id: string): string[] {
 
   return result;
 }
+
+// Resolves the entity a viewport click should actually select: the outermost
+// container the hit entity belongs to, rather than the deepest node under the
+// cursor. Imported-model internals resolve to their model's synthetic root, and
+// anything sitting inside one or more groups resolves to the outermost enclosing
+// group — so a group built from primitives behaves exactly like an imported
+// model. A specific child is still reached by double-clicking (drill-in) or via
+// the hierarchy panel. Guarded against cycles from corrupted persisted state.
+export function getSelectionRootId(entities: Entity[], id: string): string {
+  const { byId } = getEntityIndex(entities);
+  let current = byId.get(id);
+  if (!current) return id;
+
+  if (current.rootEntityId && current.rootEntityId !== current.id) {
+    current = byId.get(current.rootEntityId) ?? current;
+  }
+
+  const visited = new Set<string>([current.id]);
+  while (current.parentId && !visited.has(current.parentId)) {
+    const parent = byId.get(current.parentId);
+    if (!parent || parent.type !== "group") break;
+    visited.add(parent.id);
+    current = parent;
+  }
+
+  return current.id;
+}

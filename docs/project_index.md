@@ -61,7 +61,7 @@ A complete file-by-file map of the Libre3D repository. Generated to help orient 
 
 ## `apps/editor/src/hooks/` — app-level React hooks
 
-- **`useHotkeys.ts`** — Global `keydown` listener implementing keyboard shortcuts (ignoring text-input focus): Ctrl/Cmd+D duplicate, Ctrl/Cmd+N new file, Ctrl/Cmd+Z/Shift+Z undo/redo, Ctrl/Cmd +/- zoom, and unmodified W/E/R (transform tool), Delete/Backspace (remove selection), F (center/orient on selection).
+- **`useHotkeys.ts`** — Global `keydown` listener implementing keyboard shortcuts (ignoring text-input focus): Ctrl/Cmd+D duplicate, Ctrl/Cmd+N new file, Ctrl/Cmd+Z/Shift+Z undo/redo, Ctrl/Cmd+G group selection (2+ entities), Ctrl/Cmd +/- zoom, and unmodified W/E/R (transform tool), Delete/Backspace (remove selection), F (center/orient on selection).
 - **`useRightSidebarState.ts`** — Centralizes local (non-persisted) right-sidebar/editor-shell UI state: export/publish in-flight flags, modal open/tab state, copy-link feedback, share URL, active left-sidebar tab, search query, shape-dropdown open state, and collapsible-section states.
 
 ## `apps/editor/src/viewport/` — imperative Three.js layer

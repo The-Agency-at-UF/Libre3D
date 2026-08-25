@@ -40,6 +40,18 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
           return;
         }
 
+        // Group the selection into a new group node. Two or more entities only —
+        // the store action itself still rejects illegal groupings (cycles, the
+        // imported-model boundary). Shift is left free for a future Ungroup.
+        if (key === "g" && !event.shiftKey) {
+          event.preventDefault();
+          const selectedIds = useEditorStore.getState().selectedEntityIds;
+          if (selectedIds.length > 1) {
+            useEditorStore.getState().groupEntities(selectedIds);
+          }
+          return;
+        }
+
         if (key === "z") {
           event.preventDefault();
           if (event.shiftKey) {

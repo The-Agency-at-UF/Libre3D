@@ -261,6 +261,7 @@ function HierarchyContextMenu({
           onClick={() => run(() => groupEntities(useEditorStore.getState().selectedEntityIds))}
         >
           <span>Group Selection</span>
+          <span className="hamburger-dropdown-shortcut">Ctrl+G</span>
         </button>
         <button
           className="hamburger-dropdown-btn"

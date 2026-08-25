@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
+import { getSelectionRootId } from "../../store/entityIndex";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 
 // Matches the existing click-tolerance below (`dist < 10`) so a genuine click with a
@@ -150,13 +151,12 @@ export function useViewportRaycaster(
 
         const hitEntityId = pickEntityIdAt(event.clientX, event.clientY);
         if (hitEntityId) {
-          // Viewport clicks select the whole imported model (its root), not the
-          // deepest child under the cursor — a specific child is reached by
+          // Viewport clicks select the outermost container the hit entity belongs
+          // to — the whole imported model, or the outermost enclosing group — not
+          // the deepest child under the cursor. A specific child is reached by
           // double-clicking (see onDoubleClick) or via the hierarchy panel.
           const state = useEditorStore.getState();
-          const hitEntity = state.entities.find((e) => e.id === hitEntityId);
-          const targetId = hitEntity?.rootEntityId ?? hitEntityId;
-          state.selectEntity(targetId, event.shiftKey);
+          state.selectEntity(getSelectionRootId(state.entities, hitEntityId), event.shiftKey);
           return;
         }
 
