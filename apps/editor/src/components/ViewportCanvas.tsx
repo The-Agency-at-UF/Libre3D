@@ -57,6 +57,7 @@ export function ViewportCanvas() {
 
   useEffect(() => {
     const proxy = selectionProxyRef.current;
+    proxy.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
     scene.add(proxy);
     return () => { scene.remove(proxy); };
   }, [scene]);
@@ -217,7 +218,10 @@ export function ViewportCanvas() {
 
     const tc = transformControlsRef.current;
     const locked = selectedEntityIds.some(id => objectManager.getObject(id)?.userData.locked);
-    if (locked || selectedEntityIds.length === 0) {
+    // Preview hides the editor viewport behind the overlay but keeps the canvas
+    // hit-testable for camera control, so detach the gizmo — otherwise it stays
+    // draggable while completely invisible.
+    if (isPreviewMode || locked || selectedEntityIds.length === 0) {
       tc?.detach();
     } else if (selectedEntityIds.length === 1) {
       const selectedObj = objectManager.getObject(selectedEntityIds[0]);
@@ -270,7 +274,7 @@ export function ViewportCanvas() {
         }
       }
     });
-  }, [entities, selectedEntityIds, objectManager, sceneManager, transformControlsRef]);
+  }, [entities, selectedEntityIds, objectManager, sceneManager, transformControlsRef, isPreviewMode]);
 
   // -- Resize Logic --
   useEffect(() => {
@@ -431,7 +435,13 @@ export function ViewportCanvas() {
       ref={wrapperRef}
       className="viewport-sandbox-wrapper"
       style={{
-        display:         isPreviewMode ? "none" : "flex",
+        // Never display:none, even while previewing: the preview overlay sits on
+        // top with pointer-events:none so orbit/pan/zoom keep landing on this
+        // canvas, and OrbitControls drives the preview camera. The overlay is
+        // opaque, so nothing from the editor viewport shows through. (display:none
+        // here is what broke camera control in preview — a hidden element gets no
+        // pointer events at all.)
+        display:         "flex",
         width:           frame.mode === "fixed" ? frame.width  : "100%",
         height:          frame.mode === "fixed" ? frame.height : "100%",
         transform:       frame.mode === "fixed" ? `scale(${autoScaleFactor})` : "scale(1)",

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { type EditorState } from "../store/useEditorStore";
+import { getSafeColor } from "../utils/sceneColor";
 
 export class SceneManager {
   public scene: THREE.Scene;
@@ -8,11 +9,6 @@ export class SceneManager {
 
   constructor(initialSettings: EditorState["sceneSettings"]) {
     this.scene = new THREE.Scene();
-
-    const getSafeColor = (c: string) => {
-      const colorStr = c || "#0b1020";
-      return colorStr.startsWith("#") ? colorStr : "#" + colorStr;
-    };
 
     const initialBgColor = new THREE.Color(getSafeColor(initialSettings.bgColor));
     this.scene.background = initialBgColor;
@@ -26,6 +22,7 @@ export class SceneManager {
 
     // XZ-plane grid only. Grid lines are visible slate-blue; axes are red (X) and blue (Z).
     this.gridHelper = new THREE.GridHelper(20, 20, 0xffffff, 0xffffff);
+    this.gridHelper.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
     this.gridHelper.visible = initialSettings.showGrid !== false;
     this.colorAxes();
     this.scene.add(this.gridHelper);
@@ -70,13 +67,8 @@ export class SceneManager {
     colorAttr.needsUpdate = true;
   }
 
-  private getSafeColor(c: string) {
-    const colorStr = c || "#0b1020";
-    return colorStr.startsWith("#") ? colorStr : "#" + colorStr;
-  }
-
   public updateBackground(color: string) {
-    const nextColor = new THREE.Color(this.getSafeColor(color));
+    const nextColor = new THREE.Color(getSafeColor(color));
     if (this.scene.background instanceof THREE.Color) {
       if (!this.scene.background.equals(nextColor)) {
         this.scene.background.set(nextColor);
@@ -88,7 +80,7 @@ export class SceneManager {
 
   public updateFog(enabled: boolean, color: string) {
     if (enabled) {
-      const fogColor = new THREE.Color(this.getSafeColor(color));
+      const fogColor = new THREE.Color(getSafeColor(color));
       if (this.scene.fog instanceof THREE.FogExp2) {
         this.scene.fog.color.set(fogColor);
       } else {

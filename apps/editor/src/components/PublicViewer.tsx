@@ -14,7 +14,17 @@ declare module "react" {
         src?: string | null;
         "camera-controls"?: boolean;
         "auto-rotate"?: boolean;
+        // Spherical camera placement — set from the editor's active camera profile
+        // (see utils/previewCamera.ts) so preview matches the viewport exactly.
+        "camera-orbit"?: string;
+        "camera-target"?: string;
+        "field-of-view"?: string;
+        "min-camera-orbit"?: string;
+        "max-camera-orbit"?: string;
+        "min-field-of-view"?: string;
+        "max-field-of-view"?: string;
         ar?: boolean;
+        ref?: React.Ref<any>;
         style?: React.CSSProperties;
       };
     }

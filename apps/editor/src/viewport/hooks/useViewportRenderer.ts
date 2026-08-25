@@ -44,6 +44,10 @@ export function useViewportRenderer(
 
     const animate = () => {
       animationFrameId = window.requestAnimationFrame(animate);
+      // Preview covers this canvas with the <model-viewer> overlay, so stop
+      // rendering. The canvas stays laid out (never display:none) because the
+      // overlay is pointer-events:none and the editor's OrbitControls still need
+      // to receive the orbit/pan/zoom gestures through it.
       if (useEditorStore.getState().isPreviewMode) return;
       stats.update();
       if (onRender) onRender();

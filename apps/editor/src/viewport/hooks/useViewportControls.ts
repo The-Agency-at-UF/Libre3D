@@ -79,6 +79,7 @@ export function useViewportControls(
     }
 
     const helperObj = transformControls.getHelper();
+    helperObj.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
     scene.add(helperObj);
     transformControlsRef.current = transformControls;
 

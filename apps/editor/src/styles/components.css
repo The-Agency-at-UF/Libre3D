@@ -699,6 +699,26 @@
   z-index: 10;
 }
 
+/* Floating Stop chip shown while previewing — the inspector (and its Play/Stop
+   button) is hidden then, so this sits above the <model-viewer> overlay. */
+.btn-chip.preview-exit-btn {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  background: var(--bg-danger, #ef4444);
+  border-color: var(--bg-danger, #ef4444);
+  color: #ffffff;
+}
+
+.btn-chip.preview-exit-btn:hover {
+  background: #dc2626;
+}
+
 .viewport-container {
   position: absolute;
   inset: 0;
