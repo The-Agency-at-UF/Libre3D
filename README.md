@@ -85,27 +85,22 @@ pnpm --filter editor dev
 
 ## How to contribute
 
-1. Make sure your local `main` branch is up to date, so you're not working from outdated code (this helps avoid merge conflicts later):
+See [CONTRIBUTING.md](.github/CONTRIBUTING.md) for the complete guide to contributing, including:
+- Local setup and development workflow
+- Commit and PR conventions
+- Code review process
+- Reporting bugs and asking questions
 
+**Quick start**:
 ```bash
-git checkout main
-git pull
+git checkout main && git pull
+git checkout -b [your-initials]/[feature-name]
+# Make changes, test in dev server
+pnpm build  # Verify no TypeScript errors
+git commit -m "type: description"
+git push origin [your-branch-name]
+# Open PR on GitHub
 ```
-
-2. Create a new branch for your feature. Name it `[your-initials]/[feature-name]`, for example:
-
-```bash
-git checkout -b em/add-sandbox-viewport
-```
-
-3. Double check you're on the right branch (most terminals and git tools show this).
-4. Push your new branch to GitHub, then make your changes in VSCode.
-5. Commit your work in small, logical chunks using the [Conventional Commits](https://gist.github.com/Zekfad/f51cb06ac76e2457f11c80ed705c95a3) style (a `type: short description` format that keeps commit history easy to scan):
-
-- Example: `feat: prune guideline lines from transform controls initialization`
-- Example: `fix: correct calc sizing for asymmetric sidebar centering`
-
-6. Push your commits and open a Pull Request (PR) on GitHub. Assign reviewers so they're notified to look at your changes.
 
 ## How to review code
 
