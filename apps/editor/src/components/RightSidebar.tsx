@@ -20,8 +20,14 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
 
   const selectedEntities = entities.filter((e) => selectedEntityIds.includes(e.id));
 
+  // Hidden rather than unmounted while previewing so the inspector's own local
+  // state (open panels, scroll position) is exactly where the user left it on Stop.
   return (
-    <aside className="right-sidebar panel" aria-label="Properties inspector">
+    <aside
+      className="right-sidebar panel"
+      aria-label="Properties inspector"
+      style={isPreviewMode ? { display: "none" } : undefined}
+    >
       <InspectorTopbar
         setIsModalOpen={setIsModalOpen}
         setActiveTab={setActiveTab}
@@ -30,7 +36,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
       />
 
       {/* SCROLLABLE BODY */}
-      <div className="panel-body" style={isPreviewMode ? { opacity: 0.5, pointerEvents: "none" } : undefined}>
+      <div className="panel-body">
         <FramePanel />
         <ViewportSettingsPanel />
         <ScenePanel />

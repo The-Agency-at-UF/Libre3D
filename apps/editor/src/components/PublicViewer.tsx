@@ -14,7 +14,18 @@ declare module "react" {
         src?: string | null;
         "camera-controls"?: boolean;
         "auto-rotate"?: boolean;
+        // Spherical camera placement — set from the editor's active camera profile
+        // (see utils/previewCamera.ts) so preview matches the viewport exactly.
+        "camera-orbit"?: string;
+        "camera-target"?: string;
+        "field-of-view"?: string;
+        "min-camera-orbit"?: string;
+        "max-camera-orbit"?: string;
+        "min-field-of-view"?: string;
+        "max-field-of-view"?: string;
+        "tone-mapping"?: string;
         ar?: boolean;
+        ref?: React.Ref<any>;
         style?: React.CSSProperties;
       };
     }
@@ -100,6 +111,9 @@ export function PublicViewer({ sceneId }: PublicViewerProps) {
         src={cloudAssetUrl}
         camera-controls
         auto-rotate
+        // Pinned rather than left on "auto" so the published scene keeps the exact
+        // tone curve the editor renders with (see useViewportRenderer).
+        tone-mapping="neutral"
         style={{ width: "100%", height: "100%" }}
       />
     </div>

@@ -3,6 +3,11 @@ import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
 import Stats from "three/examples/jsm/libs/stats.module.js";
 
+// model-viewer's exposure boost for Neutral tone mapping without an explicit
+// environment/skybox image. Keep in step with the `tone-mapping` attribute on the
+// preview <model-viewer> in App.tsx.
+const MODEL_VIEWER_NEUTRAL_EXPOSURE = 1.3;
+
 export function useViewportRenderer(
   containerRef: React.RefObject<HTMLDivElement | null>,
   scene: THREE.Scene,
@@ -21,6 +26,28 @@ export function useViewportRenderer(
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    // Match <model-viewer>'s tone mapping so the editor is a truthful preview of
+    // what gets published, instead of showing raw untone-mapped colour.
+    //
+    // Both numbers are read off model-viewer 4.0.0 rather than guessed. Its
+    // `tone-mapping` default of "auto" resolves to three's NeutralToneMapping (7),
+    // and its renderer does:
+    //
+    //   c = toneMapping === 7 && ("neutral" === envImage || "legacy" === envImage
+    //                             || (!envImage && !skyboxImage));
+    //   threeRenderer.toneMappingExposure = (exposure ?? 1) * (c ? 1.3 : 1);
+    //
+    // We set neither environment-image nor skybox-image on the preview element
+    // (see App.tsx), so that 1.3 boost is always in play and the editor has to
+    // apply it too. The preview element pins `tone-mapping="neutral"` so this
+    // pairing can't drift if a future model-viewer redefines "auto".
+    //
+    // NOTE: this only matches the tone *curve*. The editor still lights with an
+    // AmbientLight while model-viewer lights with a generated environment map, so
+    // the two are not yet identical — that gap needs a shared IBL environment.
+    renderer.toneMapping = THREE.NeutralToneMapping;
+    renderer.toneMappingExposure = MODEL_VIEWER_NEUTRAL_EXPOSURE;
     renderer.domElement.style.width   = "100%";
     renderer.domElement.style.height  = "100%";
     renderer.domElement.style.display = "block";
@@ -44,6 +71,10 @@ export function useViewportRenderer(
 
     const animate = () => {
       animationFrameId = window.requestAnimationFrame(animate);
+      // Preview covers this canvas with the <model-viewer> overlay, so stop
+      // rendering. The canvas stays laid out (never display:none) because the
+      // overlay is pointer-events:none and the editor's OrbitControls still need
+      // to receive the orbit/pan/zoom gestures through it.
       if (useEditorStore.getState().isPreviewMode) return;
       stats.update();
       if (onRender) onRender();

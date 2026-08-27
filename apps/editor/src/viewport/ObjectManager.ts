@@ -40,6 +40,13 @@ const materialClassForModel = (model: LightingLayer["model"]) => {
   }
 };
 
+// Points a directional light at the world origin by rotation, which is what both
+// three's renderer (via the child target) and the glTF exporter read.
+function aimDirectionalLight(light: THREE.DirectionalLight): void {
+  light.updateMatrixWorld();
+  light.lookAt(0, 0, 0);
+}
+
 export class ObjectManager {
   private scene: THREE.Scene;
   private meshMap: Map<string, THREE.Object3D>;
@@ -392,6 +399,7 @@ export class ObjectManager {
     });
 
     const outline = new THREE.LineSegments(edges, material);
+    outline.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
     outline.visible = false;
     outline.renderOrder = 999;
     outline.raycast = () => { }; // never an independent click/box-select target —
@@ -430,13 +438,23 @@ export class ObjectManager {
       light.rotation.set(...entity.rotation);
       light.scale.set(...entity.scale);
 
-      // Target setup
-      light.target.position.set(0, 0, 0);
-      this.scene.add(light.target);
+      // Target setup. glTF encodes a directional light's direction as the node's
+      // own rotation (it shines down -Z) and has no concept of a separate target
+      // object, so THREE.GLTFExporter only preserves the direction when the
+      // light's target is its *child* at (0, 0, -1). Parenting it that way and
+      // aiming the light with lookAt keeps the editor behaviour identical — the
+      // light still points at the world origin — while making the exported GLB
+      // light match. Wired the old way (target loose in the scene at the origin)
+      // the export silently dropped the rotation, so preview and published scenes
+      // were lit from world -Z instead of from the light's position.
+      light.add(light.target);
+      light.target.position.set(0, 0, -1);
+      aimDirectionalLight(light);
       light.userData.target = light.target;
 
       // Helper setup
       const helper = new THREE.DirectionalLightHelper(light, 1.0, 0xfde047);
+      helper.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
       helper.userData.entityId = entity.id;
       this.scene.add(helper);
       light.userData.helper = helper;
@@ -628,9 +646,8 @@ export class ObjectManager {
         this.scene.remove(obj.userData.helper);
         obj.userData.helper.dispose();
       }
-      if (obj.userData.target) {
-        this.scene.remove(obj.userData.target);
-      }
+      // The target is a child of the light now, so it goes with it — nothing to
+      // detach from the scene.
     } else if (obj instanceof THREE.Group) {
       const outline = obj.userData.selectionOutline as THREE.LineSegments | undefined;
       if (outline) {
@@ -669,6 +686,10 @@ export class ObjectManager {
       obj.position.set(...entity.position);
       obj.rotation.set(...entity.rotation);
       obj.scale.set(...entity.scale);
+      // Re-aim after a move so the baked rotation keeps tracking the origin.
+      // (A directional light's stored entity.rotation has never affected its
+      // direction — three drives that from position → target.)
+      if (obj instanceof THREE.DirectionalLight) aimDirectionalLight(obj);
     }
     obj.visible = entity.visible;
     obj.userData.locked = entity.locked;

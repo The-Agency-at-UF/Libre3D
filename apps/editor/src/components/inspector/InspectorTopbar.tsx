@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useEditorStore } from "../../store/useEditorStore";
-import { getLiveScene, createSceneExportBlob } from "../../utils/exportScene";
+import { usePreviewSession } from "../../hooks/usePreviewSession";
 
 interface InspectorTopbarProps {
   setIsModalOpen: (open: boolean) => void;
@@ -17,9 +17,7 @@ export function InspectorTopbar({
 }: InspectorTopbarProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const setEditorState = useEditorStore((state) => state.setEditorState);
-  const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
-  const previewGlbUrl = useEditorStore((state) => state.previewGlbUrl);
-  const setPreviewMode = useEditorStore((state) => state.setPreviewMode);
+  const { isPreviewMode, togglePreview } = usePreviewSession();
 
   useEffect(() => {
     return () => {
@@ -29,33 +27,6 @@ export function InspectorTopbar({
       }
     };
   }, []);
-
-  const handlePlayToggle = async () => {
-    if (isPreviewMode) {
-      if (previewGlbUrl) {
-        URL.revokeObjectURL(previewGlbUrl);
-      }
-      setPreviewMode(false, null);
-    } else {
-      const liveScene = getLiveScene();
-      if (!liveScene) {
-        window.alert("The live scene is not ready yet.");
-        return;
-      }
-      try {
-        const blob = await createSceneExportBlob(liveScene, "glb");
-        if (!blob) {
-          window.alert("There is no exportable mesh content in the current scene to preview.");
-          return;
-        }
-        const url = URL.createObjectURL(blob);
-        setPreviewMode(true, url);
-      } catch (error) {
-        console.error("Failed to generate preview GLB:", error);
-        window.alert("Failed to start Play Mode.");
-      }
-    }
-  };
 
   const zoomPresets = [25, 50, 75, 100, 150, 200];
 
@@ -277,7 +248,7 @@ export function InspectorTopbar({
       <div className="topbar-right">
         <button
           className={`btn-chip ${isPreviewMode ? "stop-btn" : "play-btn"}`}
-          onClick={handlePlayToggle}
+          onClick={togglePreview}
           style={{
             display: "flex",
             alignItems: "center",
