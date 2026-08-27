@@ -410,6 +410,7 @@ function EditorApp() {
                 max-camera-orbit={previewCamera.maxCameraOrbit}
                 min-field-of-view={previewCamera.minFieldOfView}
                 max-field-of-view={previewCamera.maxFieldOfView}
+                tone-mapping="neutral"
                 style={{ width: "100%", height: "100%", backgroundColor: getSafeColor(sceneSettings.bgColor) }}
               >
                 {/* Replaces model-viewer's default poster, whose button is the one

@@ -76,7 +76,7 @@ A complete file-by-file map of the Libre3D repository. Generated to help orient 
 
 - **`useViewportControls.ts`** — Creates and owns `OrbitControls` and `TransformControls` for the viewport: configures gizmo hitbox sizing, alt/space-modifier-driven orbit vs. pan behavior, writes live camera changes back into the active `CameraProfile` (and derived zoom %) on orbit "change" events, handles undo/redo pausing during drags, and subscribes to store changes (transform tool, transform space, axis-guide visibility, zoom) to keep the controls in sync.
 - **`useViewportRaycaster.ts`** — Implements click-to-select: on pointer up (if not a drag and not a gizmo-handle click), raycasts against the live mesh map using the current active camera and dispatches `selectEntity` (supporting shift-click multi-select) based on the hit entity's `userData.entityId`.
-- **`useViewportRenderer.ts`** — Creates and owns the `THREE.WebGLRenderer` and its `requestAnimationFrame` render loop (skipping renders while in preview/play mode), plus a `Stats` FPS overlay whose visibility is driven by the `hudOverlay` store setting.
+- **`useViewportRenderer.ts`** — Creates and owns the `THREE.WebGLRenderer` and its `requestAnimationFrame` render loop (skipping renders while in preview/play mode), plus a `Stats` FPS overlay whose visibility is driven by the `hudOverlay` store setting. Also pins the renderer's tone mapping to `NeutralToneMapping` at exposure 1.3, matching what `<model-viewer>` applies to the published GLB so the editor shows the published tone curve rather than raw colour.
 
 ## `apps/editor/src/utils/` — export & publish
 
