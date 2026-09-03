@@ -103,6 +103,30 @@ Run this quick smoke test after ANY change to catch obvious regressions:
 
 ---
 
+### Model Import & Asset Storage
+
+**In addition to smoke test**:
+
+- [ ] **Import works** (toolbar → Add Shape → Import Model… → pick a `.glb`)
+- [ ] **Hierarchy fills** (import root named after the file, child nodes beneath it)
+- [ ] **Model is visible** (if the hierarchy filled but the viewport didn't change, it's scale — see [troubleshooting](troubleshooting.md))
+- [ ] **Survives reload** (refresh; the model rehydrates from storage, not from memory)
+- [ ] **Materials and textures rehydrate** (image layers still render after reload)
+- [ ] **Delete then reload frees storage** (`listModelAssetIds()` shrinks — deletion is deferred to the next load's reconciliation sweep, so it will *not* shrink before the refresh)
+- [ ] **Undo after delete restores a working model** (this is what deferred deletion protects)
+
+Storage lives outside `localStorage`, so clearing the store doesn't reset it:
+
+```javascript
+const models = await import("/src/utils/modelAssetStore.ts");
+await models.listModelAssetIds();
+for (const id of await models.listModelAssetIds()) await models.deleteModelAsset(id);
+```
+
+**Time**: 5 minutes
+
+---
+
 ### Export/Publish Features
 
 **In addition to smoke test**:
@@ -145,9 +169,17 @@ Open Chrome DevTools Console (F12). After loading the app, you should see:
 Test in:
 - [ ] Chrome/Chromium (primary)
 - [ ] Firefox (secondary)
-- [ ] Safari (if accessible)
+- [ ] Safari — **required for any change touching asset storage or model import**
 
 **Look for**: Rendering differences, WebGL errors, performance issues
+
+**Safari runs a different storage path, not just a different renderer.** It exposes the OPFS directory API without `createWritable()`, so every asset write falls back to IndexedDB (see [architecture.md §7](architecture.md)). A change that works in Chrome can fail there outright.
+
+Without a Mac, in rough order of fidelity:
+
+1. **An iPhone or iPad** — same WebKit engine, same limitation, and Apple permits no other engine on iOS. Run `pnpm --filter editor dev --host` and open the printed Network URL on the device.
+2. **Playwright's WebKit build** — runs on Windows and bundles real WebCore/JavaScriptCore. Faithful on API presence; it carries none of Safari's storage policies, so it can't tell you anything about quota or eviction.
+3. **Simulate the capability gap in Chromium** — `delete FileSystemFileHandle.prototype.createWritable`, then import. Exercises the real fallback branch and is worth doing before reaching for a device, but proves nothing about WebKit's own IndexedDB behaviour.
 
 ---
 

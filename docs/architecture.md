@@ -227,7 +227,27 @@ set({ sceneSettings: { bgColor: "#ff0000" } });   // drops every other setting
 
 ---
 
-## 7. Why not react-three-fiber?
+## 7. Binary assets live outside the store
+
+Everything in §5 is JSON small enough for `localStorage`. An imported `.glb` is not — a modest car model runs to 11 MB, and texture bitmaps are worse. So binary payloads never enter the store at all. An `importedModel` entity persists a short `assetId`, an `ImageLayer` persists a `textureAssetId`, and the bytes live in browser storage under that key.
+
+```
+localStorage                          browser storage (OPFS / IndexedDB)
+  entity { assetId: "…" }  ──────────►  the actual .glb bytes
+  layer  { textureAssetId } ─────────►  the actual texture blob
+```
+
+**Two stores, one implementation.** `modelAssetStore.ts` and `textureAssetStore.ts` are thin bindings of the `createAssetStore.ts` factory. Each supplies its own OPFS directory and IndexedDB database plus a `decode` hook — the only genuine difference between them, since models want an `ArrayBuffer` and textures want a `Blob`. They were once copy-pasted twins, which meant every fix had to be written twice; don't reintroduce that by hand-rolling a third store.
+
+**OPFS first, IndexedDB as fallback.** OPFS avoids the structured-clone copy IndexedDB performs on every write. But OPFS is two capabilities, not one, and Safari shipped only half: it exposes the directory and file-handle API while lacking `createWritable()`, its only main-thread write path (`createSyncAccessHandle()` is worker-only by spec, and there is no worker here). The store probes for this up front and routes whole operations to IndexedDB when it's missing.
+
+**The write must not report success it hasn't earned.** The two halves above are written at different times — the asset on import, the entity to `localStorage` moments later — and read back in a *different session*. Nothing checks that they still agree until then. So a write that resolves before its IndexedDB transaction commits, or that leaves a truncated file behind, produces an entity pointing at bytes that don't exist, and the failure only surfaces on the user's next reload as a broken model. Storage writes settle on the transaction's own completion, and a failed OPFS write clears its partial entry rather than leaving one that would shadow the fallback copy.
+
+**Orphans are freed on load, not on delete.** `assetReconciliation.ts` runs once per app load, diffs stored ids against referenced ones, and deletes the difference. Freeing at entity-delete time would break undo — zundo's history is in-memory and session-scoped, so an asset deleted eagerly could not be restored by Ctrl+Z. The cost is an unused buffer surviving until the next reload; the benefit is that undo always works.
+
+---
+
+## 8. Why not react-three-fiber?
 
 A fair question, since most React + Three.js projects use it. Libre3D doesn't, for two reasons:
 
@@ -258,4 +278,18 @@ __libre3dViewport   // { sceneManager, objectManager }
 __libre3dStore.getState().entities
 __libre3dScene.children.forEach(o => console.log(o.name, o.position))
 localStorage.removeItem("editor-store"); location.reload();   // reset to a clean scene
+```
+
+Binary assets (§7) live outside the store and outside `localStorage`, so clearing the store does not remove them — the next load's reconciliation sweep does, once nothing references them. To inspect or clear them directly, the store modules are reachable through Vite's dev server:
+
+```javascript
+const models = await import("/src/utils/modelAssetStore.ts");
+await models.listModelAssetIds();                              // what's actually stored
+for (const id of await models.listModelAssetIds()) await models.deleteModelAsset(id);
+```
+
+To exercise the Safari path on a Chromium browser, make the OPFS write capability disappear and re-run an import — the store should route everything to IndexedDB and leave no OPFS entry behind:
+
+```javascript
+delete FileSystemFileHandle.prototype.createWritable;          // restore by reloading
 ```

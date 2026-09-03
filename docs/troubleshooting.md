@@ -250,6 +250,30 @@ useEditorStore.getState().updateEntityTransform(id, updates);
 
 ---
 
+### "Imported .glb doesn't appear, but its nodes are in the Hierarchy"
+
+**Cause**: Almost always scale, not a failed import. If the hierarchy filled up and the console has no `[Libre3D] Failed to import model` or `was not found in storage` error, the model imported correctly and is simply too small or too large to see. glTF declares metres, but exporters routinely bake a unit conversion in instead — a Sketchfab download of a 4.7 m car authored in centimetres arrives with a `RootNode` scaled to `0.01`, measuring 0.047 units end to end, which is an invisible speck beside the 1-unit default cube.
+
+**Diagnosis**: measure what was actually parsed.
+
+```javascript
+const { createConfiguredGltfLoader } = await import("/src/utils/createGltfLoader.ts");
+const buf = await fetch("/your-model.glb").then(r => r.arrayBuffer());
+const gltf = await new Promise((res, rej) =>
+  createConfiguredGltfLoader().then(l => l.parse(buf, "", res, rej)));
+gltf.scene.updateMatrixWorld(true);
+new THREE.Box3().setFromObject(gltf.scene).getSize(new THREE.Vector3());
+```
+
+**Solutions**:
+1. **Select the import root and set Scale** in the inspector — the whole hierarchy scales with it.
+2. Imports whose longest axis falls outside 0.5–100 units are auto-normalized to 2 units (see `importModel.ts`). If a model lands unscaled and invisible, it measured *inside* that band, so check the box above rather than assuming normalization is broken.
+3. **Check it isn't inside the default cube** — both sit at the origin on import.
+
+**Not the cause**: storage. A genuine storage failure logs `[Libre3D] Imported model asset "…" was not found in storage` and renders an error placeholder, not nothing.
+
+---
+
 ### "Gizmo doesn't appear or is not draggable"
 
 **Cause**: Gizmo (transform tool) isn't attached to selected entity.
