@@ -1,80 +1,35 @@
-// Raw imported-model buffers live in the Origin Private File System (OPFS)
-// instead of IndexedDB. IndexedDB structured-clones every value on write; OPFS
-// moves the bytes through a real file handle and skips that copy. Note this
-// uses OPFS's async main-thread API (getFile/createWritable) — the fast
-// synchronous createSyncAccessHandle path is worker-only by spec, and there's
-// no worker in this codebase yet — so the win here is avoiding the structured-
-// clone tax, not the order-of-magnitude numbers benchmarks cite for the sync
-// worker API.
+// Raw imported-model buffers, stored outside the persisted editor state -- an
+// importedModel entity holds only an assetId pointing here, because a .glb is far
+// too large to inline into the localStorage-backed store.
 //
-// The three exported functions keep their original signatures — callers are
-// unchanged.
+// Storage strategy (OPFS first, IndexedDB fallback) and the reasoning behind it
+// live in createAssetStore.ts; this module only supplies the model-specific names
+// and the ArrayBuffer decode. The four exported functions keep their original
+// signatures -- callers are unchanged.
 
-const DIR_NAME = "libre3d-models";
+import { createAssetStore } from "./createAssetStore";
 
-// Grabs the OPFS subdirectory holding model buffers. With { create: true } it's
-// made on demand (used on write); with { create: false } a missing directory
-// surfaces as a NotFoundError, which read/delete treat as "no such asset".
-async function getModelsDir(create: boolean): Promise<FileSystemDirectoryHandle> {
-  const root = await navigator.storage.getDirectory();
-  return root.getDirectoryHandle(DIR_NAME, { create });
+const store = createAssetStore<ArrayBuffer>({
+  dirName: "libre3d-models",
+  dbName: "libre3d-model-assets",
+  storeName: "model-assets",
+  // GLTFLoader.parse() wants the bytes, so read the file through to an
+  // ArrayBuffer rather than handing back the File.
+  decode: (file) => file.arrayBuffer(),
+});
+
+export function saveModelAsset(assetId: string, data: ArrayBuffer): Promise<void> {
+  return store.save(assetId, data);
 }
 
-function isNotFound(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "NotFoundError";
+export function loadModelAsset(assetId: string): Promise<ArrayBuffer | null> {
+  return store.load(assetId);
 }
 
-export async function saveModelAsset(assetId: string, data: ArrayBuffer): Promise<void> {
-  const dir = await getModelsDir(true);
-  const fileHandle = await dir.getFileHandle(assetId, { create: true });
-  const writable = await fileHandle.createWritable();
-  try {
-    await writable.write(data);
-  } finally {
-    // close() flushes the bytes to disk; skipping it on an error would leave a
-    // truncated/locked file behind.
-    await writable.close();
-  }
+export function deleteModelAsset(assetId: string): Promise<void> {
+  return store.remove(assetId);
 }
 
-export async function loadModelAsset(assetId: string): Promise<ArrayBuffer | null> {
-  try {
-    const dir = await getModelsDir(false);
-    const fileHandle = await dir.getFileHandle(assetId, { create: false });
-    const file = await fileHandle.getFile();
-    return await file.arrayBuffer();
-  } catch (error) {
-    if (isNotFound(error)) return null;
-    throw error;
-  }
-}
-
-export async function deleteModelAsset(assetId: string): Promise<void> {
-  try {
-    const dir = await getModelsDir(false);
-    await dir.removeEntry(assetId);
-  } catch (error) {
-    // Already gone (or the directory never existed) — nothing to free.
-    if (isNotFound(error)) return;
-    throw error;
-  }
-}
-
-// Every stored model buffer's id. Used by the app-load reconciliation sweep to
-// diff against entity-referenced ids and free orphans. A missing directory means
-// nothing has been stored yet, so it's an empty list, not an error.
-export async function listModelAssetIds(): Promise<string[]> {
-  try {
-    // keys() is part of the OPFS spec and shipped in every OPFS-capable browser,
-    // but the installed TS DOM lib doesn't declare it yet — cast to reach it.
-    const dir = (await getModelsDir(false)) as FileSystemDirectoryHandle & {
-      keys(): AsyncIterableIterator<string>;
-    };
-    const ids: string[] = [];
-    for await (const name of dir.keys()) ids.push(name);
-    return ids;
-  } catch (error) {
-    if (isNotFound(error)) return [];
-    throw error;
-  }
+export function listModelAssetIds(): Promise<string[]> {
+  return store.listIds();
 }
