@@ -45,6 +45,43 @@ export function takeParsedModel(assetId: string): GLTF | undefined {
   return gltf;
 }
 
+// glTF declares its unit as the metre, but nothing enforces it and exporters
+// routinely bake a unit conversion into the file instead: a Sketchfab download of
+// a 4.7 m car authored in centimetres arrives with a RootNode scaled to 0.01, so
+// the whole model measures 0.047 units and lands as an invisible speck beside the
+// 1-unit default cube. Measuring the parsed scene and giving the import root a
+// starting scale puts it on screen.
+//
+// Only wildly out-of-range models are touched. Anything whose longest axis
+// already falls inside the band below keeps scale 1, so a correctly authored
+// model retains its real proportions and several imports from the same source
+// stay consistent with each other. The factor lands on the synthetic import root
+// -- no geometry and no child transform is modified -- which makes it a starting
+// value the user can reset to 1 in the inspector.
+const NORMALIZE_TARGET_UNITS = 2;
+const NORMALIZE_MIN_UNITS = 0.5;
+const NORMALIZE_MAX_UNITS = 100;
+
+function computeImportRootScale(scene: THREE.Object3D): number {
+  // setFromObject reads each mesh's world matrix, which GLTFLoader has not
+  // necessarily flushed yet on the freshly parsed scene.
+  scene.updateMatrixWorld(true);
+
+  const box = new THREE.Box3().setFromObject(scene);
+  // An import with no renderable geometry (an empty scene, lights or cameras
+  // only) has nothing to measure.
+  if (box.isEmpty()) return 1;
+
+  const size = box.getSize(new THREE.Vector3());
+  const longest = Math.max(size.x, size.y, size.z);
+  // A degenerate box -- a single point, or NaN from malformed vertex data --
+  // would otherwise divide into an infinite or NaN scale.
+  if (!Number.isFinite(longest) || longest <= 0) return 1;
+  if (longest >= NORMALIZE_MIN_UNITS && longest <= NORMALIZE_MAX_UNITS) return 1;
+
+  return NORMALIZE_TARGET_UNITS / longest;
+}
+
 // The single entry point for importing a .glb: validates, reads the file once,
 // stores the raw buffer, parses it once into a node hierarchy, and names the
 // import root after the file. Call sites just hand the result to
@@ -129,7 +166,17 @@ async function extractModelHierarchy(buffer: ArrayBuffer, assetId: string): Prom
     isProtectedByTempId.set(tempId, boneSet.has(object));
   });
 
-  return pruneExtractedNodes(nodes, hasMeshByTempId, isProtectedByTempId);
+  const pruned = pruneExtractedNodes(nodes, hasMeshByTempId, isProtectedByTempId);
+
+  // Applied after pruning so the factor lands on whichever spec survives as the
+  // root, and measured from the parsed scene rather than the specs because the
+  // bounds depend on geometry the specs don't carry.
+  const rootScale = computeImportRootScale(gltf.scene);
+  if (rootScale === 1) return pruned;
+
+  return pruned.map((node) =>
+    node.parentTempId === null ? { ...node, scale: [rootScale, rootScale, rootScale] as [number, number, number] } : node,
+  );
 }
 
 // Collapses pass-through wrappers and drops dead leaves from a freshly
