@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
-import { createPublishSession, getPublishedScene } from "./src/utils/awsPublishHandler";
+import { createPublishSession, getPublishedScene, resolveRequestBaseUrl } from "./src/utils/awsPublishHandler";
 
 const editorConfigDir = fileURLToPath(new URL(".", import.meta.url));
 const repoRootDir = path.resolve(editorConfigDir, "../..");
@@ -71,7 +71,7 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
             }
           }
 
-          const session = await createPublishSession(env, currentPublishId);
+          const session = await createPublishSession(env, currentPublishId, resolveRequestBaseUrl(req.headers, env));
 
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
