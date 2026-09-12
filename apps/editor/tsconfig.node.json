@@ -1,11 +1,12 @@
 {
   "compilerOptions": {
     "composite": true,
+    "strict": true,
     "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "allowSyntheticDefaultImports": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "src/utils/awsPublishHandler.ts"]
+  "include": ["vite.config.ts", "src/utils/awsPublishHandler.ts", "src/utils/publishAuth.ts"]
 }
