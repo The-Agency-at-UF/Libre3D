@@ -11,6 +11,8 @@ apps/editor/vite.config.js
 apps/editor/vite.config.d.ts
 apps/editor/src/utils/awsPublishHandler.js
 apps/editor/src/utils/awsPublishHandler.d.ts
+apps/editor/src/utils/publishAuth.js
+apps/editor/src/utils/publishAuth.d.ts
 
 # tsc -b typecheck output for the Vercel functions (api/) — kept out of api/ so Vercel
 # only ever sees the .ts sources there

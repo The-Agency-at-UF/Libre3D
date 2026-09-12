@@ -12,6 +12,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 import { createPublishSession, resolveRequestBaseUrl } from "../src/utils/awsPublishHandler";
+import { authorizePublishRequest } from "../src/utils/publishAuth";
 
 const readCurrentPublishId = (body: unknown): string | null => {
   if (!body) {
@@ -42,6 +43,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     res.status(405).json({ error: "Method not allowed" });
+    return;
+  }
+
+  const auth = authorizePublishRequest(req.headers, process.env);
+
+  if (!auth.authorized) {
+    res.status(auth.status).json({ error: auth.error });
     return;
   }
 

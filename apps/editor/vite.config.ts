@@ -8,6 +8,7 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
 import { createPublishSession, getPublishedScene, resolveRequestBaseUrl } from "./src/utils/awsPublishHandler";
+import { authorizePublishRequest } from "./src/utils/publishAuth";
 
 const editorConfigDir = fileURLToPath(new URL(".", import.meta.url));
 const repoRootDir = path.resolve(editorConfigDir, "../..");
@@ -47,6 +48,15 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
       }
 
       if (req.url === "/api/publish" && req.method === "POST") {
+        const auth = authorizePublishRequest(req.headers, env);
+
+        if (!auth.authorized) {
+          res.statusCode = auth.status;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: auth.error }));
+          return;
+        }
+
         try {
           const bodyStr = await new Promise<string>((resolve, reject) => {
             let body = "";

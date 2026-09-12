@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import type * as THREE from "three";
 
 // tsx components for editor scene and UI
 import { HierarchyPanel } from "./components/HierarchyPanel";
@@ -17,7 +18,8 @@ import { useHotkeys } from "./hooks/useHotkeys";
 
 //import tsx utils for editor export and publish
 import { exportLiveScene, getLiveScene, createDownload } from "./utils/exportScene";
-import { publishLiveScene } from "./utils/publishScene";
+import { publishLiveScene, PublishAuthError, type PublishSceneResult } from "./utils/publishScene";
+import { readPublishToken, writePublishToken, clearPublishToken } from "./utils/publishToken";
 import { getModelViewerCamera } from "./utils/previewCamera";
 import { getSafeColor } from "./utils/sceneColor";
 
@@ -243,6 +245,39 @@ function EditorApp() {
     }
   };
 
+  // Publishing is gated by a shared passphrase (see utils/publishAuth.ts). Ask for it only when the
+  // server actually rejects a publish, and only remember it once it has been proven to work.
+  const publishWithPassphrase = async (
+    liveScene: THREE.Scene,
+    publishId: string | null,
+  ): Promise<PublishSceneResult | null> => {
+    try {
+      return await publishLiveScene(liveScene, publishId, readPublishToken());
+    } catch (error) {
+      if (!(error instanceof PublishAuthError)) {
+        throw error;
+      }
+
+      const enteredToken = window.prompt("Enter the publish passphrase for this Libre3D deployment:")?.trim();
+
+      if (!enteredToken) {
+        throw error;
+      }
+
+      try {
+        const retryResult = await publishLiveScene(liveScene, publishId, enteredToken);
+        writePublishToken(enteredToken);
+        return retryResult;
+      } catch (retryError) {
+        if (retryError instanceof PublishAuthError) {
+          clearPublishToken();
+        }
+
+        throw retryError;
+      }
+    }
+  };
+
   const handlePublishLink = async (): Promise<void> => {
     if (sidebarUI.isPublishing) {
       return;
@@ -258,7 +293,7 @@ function EditorApp() {
     sidebarUI.setIsPublishing(true);
 
     try {
-      const publishResult = await publishLiveScene(liveScene, currentPublishId);
+      const publishResult = await publishWithPassphrase(liveScene, currentPublishId);
 
       if (!publishResult) {
         window.alert("There is no exportable mesh content in the current scene.");
@@ -268,6 +303,11 @@ function EditorApp() {
       setCurrentPublishId(publishResult.sceneId);
       sidebarUI.setShareUrl(`http://${window.location.host}/v/${publishResult.sceneId}`);
     } catch (error) {
+      if (error instanceof PublishAuthError) {
+        window.alert("Publishing requires this deployment's passphrase.");
+        return;
+      }
+
       console.error("Failed to publish the current scene.", error);
       window.alert("The scene could not be published. Check the console for details.");
     } finally {
