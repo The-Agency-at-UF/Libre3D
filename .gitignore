@@ -17,3 +17,8 @@ apps/editor/src/utils/publishAuth.d.ts
 # tsc -b typecheck output for the Vercel functions (api/) — kept out of api/ so Vercel
 # only ever sees the .ts sources there
 apps/editor/.tsbuild
+
+# npm/yarn lockfiles - this repo uses pnpm, and a stray lockfile in apps/editor makes
+# Vercel detect the wrong package manager for the deploy Root Directory
+package-lock.json
+yarn.lock
