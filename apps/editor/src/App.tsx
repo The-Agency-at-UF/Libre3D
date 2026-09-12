@@ -301,7 +301,9 @@ function EditorApp() {
       }
 
       setCurrentPublishId(publishResult.sceneId);
-      sidebarUI.setShareUrl(`http://${window.location.host}/v/${publishResult.sceneId}`);
+      // The server builds this from the request origin, so it carries the right scheme and host
+      // on every deployment instead of assuming http:// and the current window.
+      sidebarUI.setShareUrl(publishResult.shareUrl);
     } catch (error) {
       if (error instanceof PublishAuthError) {
         window.alert("Publishing requires this deployment's passphrase.");
