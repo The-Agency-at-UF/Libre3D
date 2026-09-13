@@ -11,3 +11,6 @@ apps/editor/vite.config.js
 apps/editor/vite.config.d.ts
 apps/editor/src/utils/awsPublishHandler.js
 apps/editor/src/utils/awsPublishHandler.d.ts
+
+# Local-only assets for the dev perf harness (utils/perfHarness.ts) — never commit
+apps/editor/public/perf-assets/

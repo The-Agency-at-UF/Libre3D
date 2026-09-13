@@ -15,6 +15,8 @@ import "./styles/index.css";
 // test suite — store actions are exercised from the devtools console).
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__libre3dStore = useEditorStore;
+  // Viewport FPS measurement (window.__libre3dPerf) — see utils/perfHarness.ts.
+  void import("./utils/perfHarness").then(({ installPerfHarness }) => installPerfHarness());
 }
 
 const rootElement = document.getElementById("root");

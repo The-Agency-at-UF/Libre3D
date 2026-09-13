@@ -239,7 +239,7 @@ useEditorStore.getState().updateEntityTransform(id, updates);
 **Diagnosis**:
 1. Open DevTools Console (F12) — any errors?
 2. Check if scene loads: add a cube with "Add Shape"
-3. Check HUD overlay (toggle via Scene Panel) — does it show FPS?
+3. Enable the Stats overlay (dev console: `__libre3dStore.getState().setEditorState({ hudOverlay: "Stats" })`) — does it show FPS?
 
 **Solutions** (try in order):
 1. **Check camera** — press F to focus on scene

@@ -135,7 +135,7 @@ Open Chrome DevTools Console (F12). After loading the app, you should see:
 
 ### Performance
 
-- [ ] **FPS stable** (toggle HUD overlay, check FPS — should be 60 with no lag)
+- [ ] **FPS stable** (enable the Stats overlay — see [Measure Viewport FPS](#measure-viewport-fps-by-eye-stats-overlay) — and check FPS doesn't drop when you orbit)
 - [ ] **No stuttering** (smooth camera panning, no frame drops)
 - [ ] **Large scene performant** (add 50+ entities, still interactive)
 - [ ] **Memory doesn't leak** (open DevTools Performance, record for 30s, memory stable)
@@ -243,6 +243,34 @@ Check in order:
 ---
 
 ## Performance Profiling
+
+### Measure Viewport FPS (dev harness)
+
+`pnpm dev` installs a dev-only harness at `window.__libre3dPerf` (`src/utils/perfHarness.ts`; it is not included in production builds). From the DevTools console:
+
+```javascript
+await __libre3dPerf.addPrimitives(400);                     // grid of cubes/spheres/tori
+await __libre3dPerf.importGlb("/perf-assets/model.glb");     // or: await __libre3dPerf.importGlb(await __libre3dPerf.generateHeavyGlb())
+__libre3dPerf.sceneStats();                                   // entities, meshes, triangles, draw calls, textures
+await __libre3dPerf.measure({ orbit: true, durationMs: 10000 });                       // camera orbit
+await __libre3dPerf.measure({ orbit: false, transformEntityId: "<id>", durationMs: 10000 }); // gizmo-style moves
+```
+
+- Put local test models in `apps/editor/public/perf-assets/` (gitignored — never commit assets there).
+- `measure()` reports average FPS, 1% low FPS (mean of the slowest 1% of frames), frame-time percentiles, renderer CPU time per frame, and store writes per frame, plus the GPU string, drawing-buffer size, and scene size. Pass `cameraPosition`/`cameraTarget` so runs start from the same view; draw calls vary a lot with what's in frame.
+- **Discard any result with `isValid: false`.** Chrome stops delivering frames when the window is hidden, minimized, or covered, so keep the tab visible and in front for the whole run.
+- FPS is capped at your display's refresh rate. Look at `renderCpuMs` for headroom under that cap.
+- Record the GPU string. On laptops with two GPUs, Chrome usually renders on the integrated one unless told otherwise, which changes the numbers a lot.
+
+### Measure Viewport FPS (by eye, Stats overlay)
+
+No UI control currently switches the Stats overlay on. Enable it from the DevTools console in `pnpm dev`:
+
+```javascript
+__libre3dStore.getState().setEditorState({ hudOverlay: "Stats" });
+```
+
+The stats.js panel appears in the top-left of the viewport (click it to cycle FPS / ms / MB). Load your scene, then orbit (Alt + left-drag) continuously for 15–20 seconds and note the steady FPS and the lowest value the panel's graph dips to. Set it back with `hudOverlay: "None"`. The harness above is more precise; use this for a quick check.
 
 ### Check Frame Rate
 
