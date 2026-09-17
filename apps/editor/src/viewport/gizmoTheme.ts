@@ -204,8 +204,8 @@ export function buildGizmoTheme(): GizmoOptions {
       color: bgPanel.hex,
       opacity: bgPanel.alpha,
       hover: {
-        color: accent.hex,
-        opacity: 0.18, // same faint-wash intensity family as --accent-dim (0.1–0.16)
+        color: "var(--bg-hover)",
+        opacity: 1, // same faint-wash intensity family as --accent-dim (0.1–0.16)
       },
     },
 

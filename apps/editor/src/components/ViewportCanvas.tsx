@@ -315,11 +315,24 @@ export function ViewportCanvas() {
       const h = container.clientHeight || 1;
       cameraManager.updateAspect(w, h);
       rendererRef.current?.setSize(w, h, false);
+
+      // Re-sync the nav gizmo's DOM rect + its renderer-viewport snapshot
+      // *after* the line above, in this same callback, not from a second
+      // ResizeObserver of the gizmo's own. ViewportGizmo.update() snapshots
+      // whatever the renderer's current viewport is at the moment it's
+      // called, then restores exactly that snapshot after every future
+      // render() — so it has to run after setSize() has corrected that
+      // viewport, not racing it from an independently-scheduled observer
+      // callback on the same element (that ordering isn't guaranteed, and
+      // losing the race is what caused the viewport to collapse into a
+      // small stale corner shortly after load). See useViewportGizmo.ts's
+      // "Resize" doc note for the full explanation.
+      gizmoRef.current?.update();
     });
 
     resizeObserver.observe(container);
     return () => resizeObserver.disconnect();
-  }, [cameraManager, rendererRef]);
+  }, [cameraManager, rendererRef, gizmoRef]);
 
   // -- Auto Scale Logic (Fixed Frame Mode) --
   useEffect(() => {
