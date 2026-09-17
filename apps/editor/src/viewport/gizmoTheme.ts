@@ -71,7 +71,8 @@ export const GIZMO_SIZE = 88;
 type ParsedColor = { hex: string; alpha: number };
 
 const HEX_COLOR = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
-const RGB_COLOR = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?\s*\)$/i;
+const RGB_COLOR =
+  /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+))?\s*\)$/i;
 
 /** Parses a `#rrggbb`/`#rgb` or `rgb()`/`rgba()` CSS color string (the only
  *  formats `tokens.css` uses) into a solid hex color plus its alpha. Falls
@@ -116,7 +117,12 @@ function readColorToken(name: string, fallback: string): ParsedColor {
  *  `.editor-tree-item--selected` in `components.css`), and an accent-colored
  *  hover ring, mirroring the `--input-border-focus` treatment focused
  *  inputs get throughout the inspector. */
-function positiveAxis(color: string, label: string, textOnAccent: string, accentHex: string): GizmoAxisOptions {
+function positiveAxis(
+  color: string,
+  label: string,
+  textOnAccent: string,
+  accentHex: string,
+): GizmoAxisOptions {
   return {
     label,
     color,
@@ -136,9 +142,14 @@ function positiveAxis(color: string, label: string, textOnAccent: string, accent
  *  opacity — the ball-gizmo equivalent of Blender's hollow/unlabeled
  *  negative-axis indicators, so the six main axes stay readable at a glance
  *  instead of six identically-weighted labelled balls competing for focus. */
-function negativeAxis(color: string, textOnAccent: string, accentHex: string): GizmoAxisOptions {
+function negativeAxis(
+  color: string,
+  label: string,
+  textOnAccent: string,
+  accentHex: string,
+): GizmoAxisOptions {
   return {
-    label: "",
+    label,
     color,
     opacity: 0.45,
     hover: {
@@ -165,7 +176,10 @@ export function buildGizmoTheme(): GizmoOptions {
   const bgPanel = readColorToken("--bg-panel", "rgba(30, 30, 35, 0.72)");
   const accent = readColorToken("--accent", "#0A84FF");
   const textOnAccent = readColorToken("--text-on-accent", "#ffffff");
-  const textTertiary = readColorToken("--text-tertiary", "rgba(255, 255, 255, 0.35)");
+  const textTertiary = readColorToken(
+    "--text-tertiary",
+    "rgba(255, 255, 255, 0.35)",
+  );
 
   const fontFamily =
     typeof window !== "undefined"
@@ -195,27 +209,27 @@ export function buildGizmoTheme(): GizmoOptions {
       },
     },
 
-    corners: {
-      enabled: true,
-      color: textTertiary.hex,
-      opacity: 0.5,
-      scale: 0.85,
-      hover: { color: accent.hex, opacity: 1, scale: 1.15 },
-    },
+    // corners: {
+    //   enabled: false,
+    //   color: textTertiary.hex,
+    //   opacity: 0.5,
+    //   scale: 0.85,
+    //   hover: { color: accent.hex, opacity: 1, scale: 1.15 },
+    // },
 
-    edges: {
-      enabled: true,
-      color: textTertiary.hex,
-      opacity: 0.5,
-      scale: 0.85,
-      hover: { color: accent.hex, opacity: 1, scale: 1.15 },
-    },
+    // edges: {
+    //   enabled: false,
+    //   color: textTertiary.hex,
+    //   opacity: 0.5,
+    //   scale: 0.85,
+    //   hover: { color: accent.hex, opacity: 1, scale: 1.15 },
+    // },
 
     x: positiveAxis(AXIS_COLORS.x, "X", textOnAccent.hex, accent.hex),
-    nx: negativeAxis(AXIS_COLORS.x, textOnAccent.hex, accent.hex),
+    nx: negativeAxis(AXIS_COLORS.x, "-X", textOnAccent.hex, accent.hex),
     y: positiveAxis(AXIS_COLORS.y, "Y", textOnAccent.hex, accent.hex),
-    ny: negativeAxis(AXIS_COLORS.y, textOnAccent.hex, accent.hex),
+    ny: negativeAxis(AXIS_COLORS.y, "-Y", textOnAccent.hex, accent.hex),
     z: positiveAxis(AXIS_COLORS.z, "Z", textOnAccent.hex, accent.hex),
-    nz: negativeAxis(AXIS_COLORS.z, textOnAccent.hex, accent.hex),
+    nz: negativeAxis(AXIS_COLORS.z, "-Z", textOnAccent.hex, accent.hex),
   };
 }
