@@ -209,22 +209,6 @@ export function buildGizmoTheme(): GizmoOptions {
       },
     },
 
-    // corners: {
-    //   enabled: false,
-    //   color: textTertiary.hex,
-    //   opacity: 0.5,
-    //   scale: 0.85,
-    //   hover: { color: accent.hex, opacity: 1, scale: 1.15 },
-    // },
-
-    // edges: {
-    //   enabled: false,
-    //   color: textTertiary.hex,
-    //   opacity: 0.5,
-    //   scale: 0.85,
-    //   hover: { color: accent.hex, opacity: 1, scale: 1.15 },
-    // },
-
     x: positiveAxis(AXIS_COLORS.x, "X", textOnAccent.hex, accent.hex),
     nx: negativeAxis(AXIS_COLORS.x, "-X", textOnAccent.hex, accent.hex),
     y: positiveAxis(AXIS_COLORS.y, "Y", textOnAccent.hex, accent.hex),
