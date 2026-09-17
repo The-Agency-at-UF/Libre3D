@@ -32,6 +32,9 @@ importers:
       three:
         specifier: ^0.178.0
         version: 0.178.0
+      three-viewport-gizmo:
+        specifier: ^2.2.0
+        version: 2.2.0(three@0.178.0)
       zundo:
         specifier: ^2.3.0
         version: 2.3.0(zustand@5.0.14(@types/react@19.2.17)(react@19.2.7))
@@ -859,6 +862,10 @@ packages:
 
   std-env@4.2.0:
     resolution: {integrity: sha512-oCUKSupKTHX53EyjDtuZQ64pjLJ6yYCtpmEw0goYxtjG9KpbRe8KAsl2tBUGU9DyMcJ0RwJ8GqJAFzMXcXW1Rw==}
+  three-viewport-gizmo@2.2.0:
+    resolution: {integrity: sha512-Jo9Liur1rUmdKk75FZumLU/+hbF+RtJHi1qsKZpntjKlCYScK6tjbYoqvJ9M+IJphrlQJF5oReFW7Sambh0N4Q==}
+    peerDependencies:
+      three: '>=0.162.0 <1.0.0'
 
   three@0.178.0:
     resolution: {integrity: sha512-ybFIB0+x8mz0wnZgSGy2MO/WCO6xZhQSZnmfytSPyNpM0sBafGRVhdaj+erYh5U+RhQOAg/eXqw5uVDiM2BjhQ==}
@@ -1812,6 +1819,9 @@ snapshots:
   stackback@0.0.2: {}
 
   std-env@4.2.0: {}
+  three-viewport-gizmo@2.2.0(three@0.178.0):
+    dependencies:
+      three: 0.178.0
 
   three@0.178.0: {}
 

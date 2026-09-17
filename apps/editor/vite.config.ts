@@ -107,7 +107,24 @@ export default defineConfig(({ mode }) => {
       dedupe: ["three"],
     },
     optimizeDeps: {
-      exclude: ["three"],
+      // "three-viewport-gizmo" (the top-right navigation gizmo) also imports
+      // "three" internally. If Vite's dep optimizer pre-bundled it while
+      // "three" stays excluded (just above), the optimizer's copy of
+      // "three-viewport-gizmo" could end up pointing at a second, separately
+      // -evaluated module instance of "three" instead of the single aliased
+      // copy everything else uses — which would be a real correctness risk
+      // for a library that receives this app's own THREE.Camera/
+      // THREE.WebGLRenderer instances and does `instanceof` checks against
+      // them internally. Excluding it here keeps it un-bundled, so its
+      // "three" import resolves through the same alias as everything else.
+      //
+      // (Verified this app already shows three.js's own "Multiple instances
+      // of Three.js being imported" console warning even before this
+      // feature, unrelated to either of the above — it comes from
+      // <model-viewer>'s CDN bundle, which vendors its own three.js. Not
+      // something this file can fix; noted here so it isn't mistaken for a
+      // regression introduced by the gizmo.)
+      exclude: ["three", "three-viewport-gizmo"],
     },
     server: {
       port: 5173,

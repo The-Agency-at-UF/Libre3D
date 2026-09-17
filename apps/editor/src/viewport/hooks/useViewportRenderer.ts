@@ -14,7 +14,13 @@ export function useViewportRenderer(
   // Accept a ref so the RAF loop always reads the live camera,
   // even after perspective ↔ orthographic switches.
   cameraRef: React.RefObject<THREE.Camera>,
-  onRender?: () => void
+  onRender?: () => void,
+  // Runs immediately after the main scene render call, not before it — for
+  // anything that needs to draw *on top of* the just-rendered frame, such as
+  // the navigation gizmo (useViewportGizmo.ts), which scissor-renders itself
+  // into a corner of this same canvas and would otherwise be overpainted by
+  // the main `renderer.render(scene, camera)` call below.
+  onAfterRender?: () => void
 ) {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const statsRef    = useRef<Stats | null>(null);
@@ -80,6 +86,7 @@ export function useViewportRenderer(
       if (onRender) onRender();
       // cameraRef.current is always the active camera — no stale closure.
       renderer.render(scene, cameraRef.current);
+      if (onAfterRender) onAfterRender();
     };
     animate();
 
