@@ -8,7 +8,7 @@ export function useViewportControls(
   // Accept a ref so OrbitControls / TransformControls always use the live camera.
   cameraRef: React.RefObject<THREE.Camera>,
   rendererRef: React.RefObject<THREE.WebGLRenderer | null>,
-  scene: THREE.Scene
+  scene: THREE.Scene,
 ) {
   const orbitControlsRef = useRef<OrbitControls | null>(null);
   const transformControlsRef = useRef<TransformControls | null>(null);
@@ -19,7 +19,10 @@ export function useViewportControls(
 
     const camera = cameraRef.current;
 
-    const orbitControls = new OrbitControls(camera, rendererRef.current.domElement);
+    const orbitControls = new OrbitControls(
+      camera,
+      rendererRef.current.domElement,
+    );
     orbitControls.enableDamping = true;
     orbitControls.dampingFactor = 0.05;
     orbitControls.minZoom = 0.1;
@@ -30,7 +33,10 @@ export function useViewportControls(
     orbitControls.mouseButtons.MIDDLE = THREE.MOUSE.PAN;
     orbitControlsRef.current = orbitControls;
 
-    const transformControls = new TransformControls(camera, rendererRef.current.domElement);
+    const transformControls = new TransformControls(
+      camera,
+      rendererRef.current.domElement,
+    );
 
     // Spline-like aesthetic: keep the visual gizmo slightly larger but with good hitboxes
     transformControls.size = 1.0;
@@ -41,6 +47,31 @@ export function useViewportControls(
     const CENTER_HITBOX_SCALE = 1.6;
     const PLANE_HITBOX_SCALE = 0.5;
 
+    // Sensitivity multiplier for uniform scaling via the center (XYZ) cube.
+    //
+    // TransformControls computes uniform scale as a *ratio*, not a mouse-delta
+    // velocity: on pointerdown it records `pointStart`, the vector from the
+    // gizmo's world position to where the drag ray hits the drag plane; on
+    // every pointermove it recomputes `pointEnd` the same way and does
+    //   d = pointEnd.length() / pointStart.length()
+    //   object.scale = scaleAtDragStart * d
+    // (see node_modules/three/examples/jsm/controls/TransformControls.js,
+    // pointerMove(), the `mode === 'scale'` branch, `axis.search('XYZ')`).
+    // Because `pointStart` is usually short when you grab the center cube
+    // (you tend to click close to the object's on-screen center), a few
+    // pixels of mouse movement can swing `d` -- and therefore the scale --
+    // dramatically. There's no public option on TransformControls for this
+    // ratio, so it can't be configured on the instance directly.
+    //
+    // Instead we intercept the *result*: the 'objectChange' listener below
+    // reads back the ratio TransformControls just applied to the object and
+    // re-applies an eased version of it, `1 + (d - 1) * CENTER_SCALE_SENSITIVITY`,
+    // before the pre-existing 'objectChange' listener (further down) commits
+    // `target.scale` into the entity store. 1 reproduces stock
+    // TransformControls behavior; values below 1 dampen the center cube
+    // (less sensitive); values above 1 amplify it.
+    const CENTER_SCALE_SENSITIVITY = 0.1;
+
     try {
       const gizmo = (transformControls as any)._gizmo;
       if (gizmo && gizmo.picker) {
@@ -50,11 +81,13 @@ export function useViewportControls(
 
             // Only scale the center and planar handles.
             // Scaling X/Y/Z scales the rotation torus major radius, misaligning it with the visual gizmo!
-            const isCenter = handle.name === 'XYZ';
-            const isPlane = ['XY', 'YZ', 'XZ'].includes(handle.name);
+            const isCenter = handle.name === "XYZ";
+            const isPlane = ["XY", "YZ", "XZ"].includes(handle.name);
             if (!isCenter && !isPlane) return;
 
-            const scaleFactor = isCenter ? CENTER_HITBOX_SCALE : PLANE_HITBOX_SCALE;
+            const scaleFactor = isCenter
+              ? CENTER_HITBOX_SCALE
+              : PLANE_HITBOX_SCALE;
 
             // TransformControls bakes each handle's position/rotation into its
             // geometry vertices (see setupGizmo() in TransformControls.js), so the
@@ -100,16 +133,36 @@ export function useViewportControls(
 
         // Read the live camera from the ref for accurate position/type data.
         const liveCamera = cameraRef.current;
-        const isPerspectiveCamera = liveCamera instanceof THREE.PerspectiveCamera;
-        const isOrthographicCamera = liveCamera instanceof THREE.OrthographicCamera;
+        const isPerspectiveCamera =
+          liveCamera instanceof THREE.PerspectiveCamera;
+        const isOrthographicCamera =
+          liveCamera instanceof THREE.OrthographicCamera;
 
         const nextData = {
-          position: [liveCamera.position.x, liveCamera.position.y, liveCamera.position.z] as [number, number, number],
-          target: [orbitControls.target.x, orbitControls.target.y, orbitControls.target.z] as [number, number, number],
-          near: isPerspectiveCamera || isOrthographicCamera ? liveCamera.near : nextProfile.near,
-          far: isPerspectiveCamera || isOrthographicCamera ? liveCamera.far : nextProfile.far,
-          fov: isPerspectiveCamera ? (liveCamera as THREE.PerspectiveCamera).fov : nextProfile.fov,
-          zoom: isOrthographicCamera ? (liveCamera as THREE.OrthographicCamera).zoom : nextProfile.zoom,
+          position: [
+            liveCamera.position.x,
+            liveCamera.position.y,
+            liveCamera.position.z,
+          ] as [number, number, number],
+          target: [
+            orbitControls.target.x,
+            orbitControls.target.y,
+            orbitControls.target.z,
+          ] as [number, number, number],
+          near:
+            isPerspectiveCamera || isOrthographicCamera
+              ? liveCamera.near
+              : nextProfile.near,
+          far:
+            isPerspectiveCamera || isOrthographicCamera
+              ? liveCamera.far
+              : nextProfile.far,
+          fov: isPerspectiveCamera
+            ? (liveCamera as THREE.PerspectiveCamera).fov
+            : nextProfile.fov,
+          zoom: isOrthographicCamera
+            ? (liveCamera as THREE.OrthographicCamera).zoom
+            : nextProfile.zoom,
         };
 
         currentState.updateProfileData(currentProfileId, nextData);
@@ -120,7 +173,9 @@ export function useViewportControls(
           const dist = liveCamera.position.distanceTo(orbitControls.target);
           currentZoom = Math.round((defaultDistance / dist) * 100);
         } else if (isOrthographicCamera) {
-          currentZoom = Math.round((liveCamera as THREE.OrthographicCamera).zoom * 100);
+          currentZoom = Math.round(
+            (liveCamera as THREE.OrthographicCamera).zoom * 100,
+          );
         }
         currentZoom = Math.max(10, Math.min(500, currentZoom));
         if (currentState.viewportZoom !== currentZoom) {
@@ -137,21 +192,28 @@ export function useViewportControls(
 
     const updateOrbitControls = () => {
       orbitControls.enableRotate = isAltPressed && !isSpacePressed;
-      orbitControls.enablePan = isAltPressed || isSpacePressed || isMiddlePanning;
+      orbitControls.enablePan =
+        isAltPressed || isSpacePressed || isMiddlePanning;
       orbitControls.enabled = !isDragging;
 
       if (isSpacePressed) {
         orbitControls.mouseButtons.LEFT = THREE.MOUSE.PAN;
-        if (rendererRef.current) rendererRef.current.domElement.style.cursor = "grab";
+        if (rendererRef.current)
+          rendererRef.current.domElement.style.cursor = "grab";
       } else {
         orbitControls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
-        if (rendererRef.current) rendererRef.current.domElement.style.cursor = "";
+        if (rendererRef.current)
+          rendererRef.current.domElement.style.cursor = "";
       }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
-      const isInput = activeEl && (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA" || activeEl.getAttribute("contenteditable") === "true");
+      const isInput =
+        activeEl &&
+        (activeEl.tagName === "INPUT" ||
+          activeEl.tagName === "TEXTAREA" ||
+          activeEl.getAttribute("contenteditable") === "true");
 
       if (e.key === "Alt") {
         isAltPressed = true;
@@ -189,7 +251,8 @@ export function useViewportControls(
       if (e.button === 1) {
         isMiddlePanning = true;
         updateOrbitControls();
-        if (rendererRef.current) rendererRef.current.domElement.style.cursor = "grabbing";
+        if (rendererRef.current)
+          rendererRef.current.domElement.style.cursor = "grabbing";
       } else if (isSpacePressed && rendererRef.current) {
         rendererRef.current.domElement.style.cursor = "grabbing";
       }
@@ -205,7 +268,11 @@ export function useViewportControls(
       }
     };
 
-    rendererRef.current.domElement.addEventListener("pointerdown", handlePointerDown, true);
+    rendererRef.current.domElement.addEventListener(
+      "pointerdown",
+      handlePointerDown,
+      true,
+    );
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
@@ -220,14 +287,56 @@ export function useViewportControls(
       }
     });
 
+    // Damps/amplifies uniform (center-cube) scaling per CENTER_SCALE_SENSITIVITY,
+    // above. Must be registered before the 'objectChange' listener below --
+    // EventDispatcher fires listeners in registration order, and that listener
+    // reads `target.scale` to sync the entity store, so our corrected value has
+    // to land on the object first.
+    transformControls.addEventListener("objectChange", () => {
+      if (
+        transformControls.dragging &&
+        transformControls.mode === "scale" &&
+        transformControls.axis === "XYZ"
+      ) {
+        const target = transformControls.object;
+        // Internal, undocumented field -- the scale TransformControls captured
+        // at pointerdown, before this drag's ratio was applied. Same category of
+        // risk as the `_gizmo` reach-in above: it can move or vanish on a three.js
+        // upgrade, so this whole block is guarded by the try/catch below.
+        const scaleStart = (transformControls as any)._scaleStart as
+          | THREE.Vector3
+          | undefined;
+        if (target && scaleStart) {
+          try {
+            // All three components were scaled by the same ratio `d` (the XYZ
+            // handle is uniform-only), so any non-zero start component recovers
+            // it; pick the largest-magnitude one for numerical safety.
+            const axisKey = (["x", "y", "z"] as const).reduce((best, k) =>
+              Math.abs(scaleStart[k]) > Math.abs(scaleStart[best]) ? k : best,
+            );
+            const startValue = scaleStart[axisKey];
+            if (startValue !== 0) {
+              const rawRatio = target.scale[axisKey] / startValue;
+              const easedRatio = 1 + (rawRatio - 1) * CENTER_SCALE_SENSITIVITY;
+              target.scale.copy(scaleStart).multiplyScalar(easedRatio);
+            }
+          } catch (e) {
+            console.warn("Failed to apply center-cube scale sensitivity", e);
+          }
+        }
+      }
+    });
+
     transformControls.addEventListener("objectChange", () => {
       const target = transformControls.object;
       if (target && target.userData.entityId && !target.userData.locked) {
-        useEditorStore.getState().updateEntityTransform(target.userData.entityId, {
-          position: [target.position.x, target.position.y, target.position.z],
-          rotation: [target.rotation.x, target.rotation.y, target.rotation.z],
-          scale: [target.scale.x, target.scale.y, target.scale.z],
-        });
+        useEditorStore
+          .getState()
+          .updateEntityTransform(target.userData.entityId, {
+            position: [target.position.x, target.position.y, target.position.z],
+            rotation: [target.rotation.x, target.rotation.y, target.rotation.z],
+            scale: [target.scale.x, target.scale.y, target.scale.z],
+          });
       }
 
       if (isDragging && !hasPausedForDrag) {
@@ -239,19 +348,21 @@ export function useViewportControls(
     // Subscriptions
     const unsubActiveTransformTool = useEditorStore.subscribe(
       (s) => s.activeTransformTool,
-      (tool) => transformControls.setMode(tool)
+      (tool) => transformControls.setMode(tool),
     );
 
     const unsubTransformSpace = useEditorStore.subscribe(
       (s) => s.transformSpace,
-      (space) => transformControls.setSpace(space)
+      (space) => transformControls.setSpace(space),
     );
 
     const unsubShowAxisGuides = useEditorStore.subscribe(
       (s) => s.sceneSettings.showAxisGuides,
       (showAxisGuides) => {
         const HIDDEN_LAYER = 31;
-        const gizmo = (transformControls as any)._gizmo as THREE.Object3D & { helper: Record<string, THREE.Object3D> };
+        const gizmo = (transformControls as any)._gizmo as THREE.Object3D & {
+          helper: Record<string, THREE.Object3D>;
+        };
         const guidelineLines: THREE.Object3D[] = [];
         if (gizmo && gizmo.helper && typeof gizmo.helper === "object") {
           Object.values(gizmo.helper).forEach((subGroup) => {
@@ -262,9 +373,11 @@ export function useViewportControls(
             }
           });
         }
-        guidelineLines.forEach((line) => line.layers.set(showAxisGuides ? 0 : HIDDEN_LAYER));
+        guidelineLines.forEach((line) =>
+          line.layers.set(showAxisGuides ? 0 : HIDDEN_LAYER),
+        );
       },
-      { fireImmediately: true }
+      { fireImmediately: true },
     );
 
     const unsubViewportZoom = useEditorStore.subscribe(
@@ -278,16 +391,23 @@ export function useViewportControls(
         const defaultDistance = 11.180339887498949;
 
         if (isPerspective) {
-          const currentDist = liveCamera.position.distanceTo(orbitControls.target);
+          const currentDist = liveCamera.position.distanceTo(
+            orbitControls.target,
+          );
           const expectedDist = (defaultDistance * 100) / newZoom;
 
           if (Math.abs(currentDist - expectedDist) > 0.01) {
-            let direction = new THREE.Vector3().subVectors(liveCamera.position, orbitControls.target);
+            let direction = new THREE.Vector3().subVectors(
+              liveCamera.position,
+              orbitControls.target,
+            );
             if (direction.lengthSq() < 0.000001) {
               direction.set(0, 0, 1);
             }
             direction.normalize();
-            liveCamera.position.copy(orbitControls.target).add(direction.multiplyScalar(expectedDist));
+            liveCamera.position
+              .copy(orbitControls.target)
+              .add(direction.multiplyScalar(expectedDist));
             orbitControls.update();
           }
         } else if (isOrthographic) {
@@ -299,11 +419,15 @@ export function useViewportControls(
             orbitControls.update();
           }
         }
-      }
+      },
     );
 
     return () => {
-      rendererRef.current?.domElement.removeEventListener("pointerdown", handlePointerDown, true);
+      rendererRef.current?.domElement.removeEventListener(
+        "pointerdown",
+        handlePointerDown,
+        true,
+      );
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
