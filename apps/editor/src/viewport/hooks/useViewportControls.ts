@@ -23,8 +23,10 @@ export function useViewportControls(
       camera,
       rendererRef.current.domElement,
     );
-    orbitControls.enableDamping = true;
-    orbitControls.dampingFactor = 0.05;
+    // No damping: the camera tracks the pointer 1:1 and stops when the drag
+    // ends. With damping on, each update() only applied a fraction of the
+    // input, so the view trailed the mouse and kept gliding after release.
+    orbitControls.enableDamping = false;
     orbitControls.minZoom = 0.1;
     orbitControls.maxZoom = 5;
     orbitControls.enableRotate = false;
