@@ -6,7 +6,8 @@
  *   reach objects through short-lived presigned URLs minted by the API, never public URLs.
  * - DynamoDB `published-scenes`: public lookup from a share link's sceneId to its GLB, plus owner.
  * - DynamoDB `user-scenes`: one row per user scene (gallery metadata + single-editor lock).
- * - IAM role the Vercel functions assume via OIDC: no long-lived AWS keys anywhere.
+ * - IAM role the Vercel functions assume via OIDC: no long-lived AWS keys on Vercel.
+ * - Dev only: an IAM user with the same permissions, whose key powers `pnpm dev` on a laptop.
  *
  * Prod data survives stack deletion (RETAIN + point-in-time recovery); dev is disposable.
  */
@@ -144,8 +145,9 @@ export class Libre3dStack extends Stack {
 
     // Least privilege: exactly the operations the API performs, on these resources only. CDK's
     // grantReadWriteData/grantReadWrite would add Scan (read every user's rows), stream reads, and
-    // object-lock settings, none of which the API uses.
-    apiRole.addToPolicy(
+    // object-lock settings, none of which the API uses. A factory, so every identity that runs the
+    // API code gets its own copy of the same statements.
+    const apiPolicyStatements = (): iam.PolicyStatement[] => [
       new iam.PolicyStatement({
         sid: "SceneTableItems",
         actions: [
@@ -159,26 +161,41 @@ export class Libre3dStack extends Stack {
         ],
         resources: [publishedScenesTable.tableArn, userScenesTable.tableArn],
       }),
-    );
-
-    // Presigned URLs carry the signer's permissions: GET for loading, PUT for saving/publishing.
-    apiRole.addToPolicy(
+      // Presigned URLs carry the signer's permissions: GET for loading, PUT for saving/publishing.
       new iam.PolicyStatement({
         sid: "SceneObjects",
         actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
         resources: [bucket.arnForObjects("*")],
       }),
-    );
-
-    // Without ListBucket, HeadObject on a missing key answers 403 instead of 404, and the
-    // "upload this asset only if it isn't stored yet" check could not tell the two apart.
-    apiRole.addToPolicy(
+      // Without ListBucket, HeadObject on a missing key answers 403 instead of 404, and the
+      // "upload this asset only if it isn't stored yet" check could not tell the two apart.
       new iam.PolicyStatement({
         sid: "SceneBucketList",
         actions: ["s3:ListBucket"],
         resources: [bucket.bucketArn],
       }),
-    );
+    ];
+
+    for (const statement of apiPolicyStatements()) {
+      apiRole.addToPolicy(statement);
+    }
+
+    // ---- Local dev user (dev only) ----------------------------------------------------------
+
+    // `pnpm dev` runs the API in Vite middleware on a laptop, where there is no Vercel OIDC token
+    // and the agency's SSO session lasts only 30 minutes. This user has the API role's permissions
+    // and nothing else: no console password, no other resources. Its access key is created by hand
+    // in the console and lives only in the local `.env`, so the secret never passes through
+    // CloudFormation or git. Never created for prod.
+    let localDevUser: iam.User | undefined;
+
+    if (!isProd) {
+      localDevUser = new iam.User(this, "LocalDevUser", { userName: name("local") });
+
+      for (const statement of apiPolicyStatements()) {
+        localDevUser.addToPolicy(statement);
+      }
+    }
 
     // ---- Outputs: exactly what goes into .env (dev) / Vercel env vars ------------------------
 
@@ -192,5 +209,9 @@ export class Libre3dStack extends Stack {
     output("PublishedScenesTableName", publishedScenesTable.tableName, "PUBLISHED_SCENES_TABLE_NAME");
     output("UserScenesTableName", userScenesTable.tableName, "USER_SCENES_TABLE_NAME");
     output("VercelApiRoleArn", apiRole.roleArn, "AWS_ROLE_ARN (Vercel only)");
+
+    if (localDevUser) {
+      output("LocalDevUserName", localDevUser.userName, "Create its access key in the console for the local .env");
+    }
   }
 }
