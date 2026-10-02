@@ -110,6 +110,9 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), awsPublishRoutePlugin(env)],
+    // The one .env lives at the repo root (the server side already reads it from there). Only its
+    // VITE_-prefixed values reach the browser bundle; the AWS keys beside them stay server-side.
+    envDir: repoRootDir,
     resolve: {
       alias: {
         three: threeModulePath,
