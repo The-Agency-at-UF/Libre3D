@@ -11,10 +11,13 @@ import { PublicViewer } from "./components/PublicViewer";
 import { HamburgerMenu } from "./components/HamburgerMenu";
 import { FloatingToolbar } from "./components/FloatingToolbar";
 import { PreviewControls } from "./components/PreviewControls";
+import { SignInScreen } from "./components/SignInScreen";
+import { AuthCallback } from "./components/AuthCallback";
 
 // Custom state hook to manage right sidebar UI states like exporting, publishing, search, and tab selections
 import { useRightSidebarState } from "./hooks/useRightSidebarState";
 import { useHotkeys } from "./hooks/useHotkeys";
+import { useAuthSession } from "./hooks/useAuthSession";
 
 //import tsx utils for editor export and publish
 import { exportLiveScene, getLiveScene, createDownload } from "./utils/exportScene";
@@ -22,6 +25,7 @@ import { publishLiveScene, PublishAuthError, type PublishSceneResult } from "./u
 import { readPublishToken, writePublishToken, clearPublishToken } from "./utils/publishToken";
 import { getModelViewerCamera } from "./utils/previewCamera";
 import { getSafeColor } from "./utils/sceneColor";
+import { AUTH_CALLBACK_PATH, signOut } from "./utils/authSession";
 
 //import tsx hook for editor store
 import { initialFrameDefaults, useEditorStore } from "./store/useEditorStore";
@@ -31,14 +35,34 @@ export function App() {
   const match = window.location.pathname.match(/^\/v\/([^/]+)$/);
   const sceneId = match ? match[1] : null;
 
+  // Published scenes stay public; everything else requires sign-in.
   if (sceneId) {
     return <PublicViewer sceneId={sceneId} />;
   }
 
-  return <EditorApp />;
+  if (window.location.pathname === AUTH_CALLBACK_PATH) {
+    return <AuthCallback />;
+  }
+
+  return <SignedInEditor />;
 }
 
-function EditorApp() {
+// The editor (and its WebGL context and saved scene) only mounts once someone is signed in.
+function SignedInEditor() {
+  const auth = useAuthSession();
+
+  if (auth.status !== "signedIn") {
+    return <SignInScreen />;
+  }
+
+  return <EditorApp accountEmail={auth.email} />;
+}
+
+interface EditorAppProps {
+  accountEmail: string | null;
+}
+
+function EditorApp({ accountEmail }: EditorAppProps) {
   const entities = useEditorStore((state) => state.entities) ?? [];
   const currentPublishId = useEditorStore((state) => state.currentPublishId);
   const setCurrentPublishId = useEditorStore((state) => state.setCurrentPublishId);
@@ -355,6 +379,8 @@ function EditorApp() {
               onToggleTheme={handleToggleTheme}
               showAxisGuides={showAxisGuides}
               onToggleAxisGuides={handleToggleAxisGuides}
+              accountEmail={accountEmail}
+              onSignOut={() => void signOut()}
             />
           </div>
 
