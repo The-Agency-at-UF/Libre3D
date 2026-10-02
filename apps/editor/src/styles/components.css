@@ -1983,76 +1983,249 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* ── NESTED ACCORDION ── */
-.nested {
-  width: 100%;
-}
-
-.nested-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  list-style: none;
-  cursor: pointer;
-  padding: 5px 0;
-}
-
-.nested-header::-webkit-details-marker {
-  display: none;
-}
-
-.nested-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-secondary);
-}
-
-.nested-label i {
-  font-size: 13px;
-}
-
-.nested-body {
+/* ── MATERIAL LAYER STACK (Materials panel) ──
+   Spline-style compact layer list: one-line header per layer (chevron · icon ·
+   name · trailing action), property rows indented beneath it along a hairline
+   guide. Property-row rules are scoped to .mat-layer-body so the shared
+   Slider/Select/Switch components stay untouched elsewhere in the inspector. */
+.material-layer-stack {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 6px 0 4px 22px;
+  gap: 0;
+  width: 100%;
+  min-width: 0;
 }
 
-details[open]>.nested-header .chevron {
-  transform: rotate(90deg);
+.mat-layer {
+  width: 100%;
+  min-width: 0;
 }
 
-.section-footer {
-  display: flex;
-  gap: 6px;
+.mat-layer + .mat-layer {
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
   padding-top: 4px;
 }
 
-.footer-btn {
-  flex: 1;
+/* Header */
+.mat-layer-header {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 5px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
+  gap: 4px;
+  height: 26px;
+  padding: 0 2px 0 2px;
   border-radius: var(--radius-sm);
-  padding: 6px;
-  font-size: 10.5px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  font-family: var(--font);
-  transition: all 0.1s;
+  transition: background 0.1s ease;
 }
 
-.footer-btn:hover {
+.mat-layer-header:hover {
+  background: var(--bg-hover);
+}
+
+.mat-layer-toggle {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mat-layer-toggle .chevron {
+  width: 12px;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.mat-layer[data-open="true"] .mat-layer-toggle .chevron {
+  transform: rotate(90deg);
+}
+
+.mat-layer-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.mat-layer-icon i {
+  font-size: 13px;
+}
+
+.mat-layer-thumb {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-input);
+  background-size: cover;
+  background-position: center;
+}
+
+.mat-layer-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mat-layer-action {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.mat-icon-btn {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.mat-icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mat-icon-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* Body — indented under the header icon, with a hairline guide under the chevron */
+.mat-layer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 2px 6px 14px;
+  border-left: 1px solid var(--border);
+}
+
+/* Property rows: fixed label column so every control lines up */
+.mat-layer-body .prop {
+  gap: 8px;
+  min-height: 22px;
+}
+
+.mat-layer-body .prop-label {
+  flex: 0 0 84px;
+  width: 84px;
+  min-width: 84px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.mat-layer-body .slider-row {
+  gap: 8px;
+}
+
+.mat-layer-body input[type="range"] {
+  min-width: 0;
+}
+
+.mat-layer-body .slider-val {
+  min-width: 30px;
+  font-size: 11px;
+}
+
+.mat-layer-body .select-wrap {
+  min-width: 0;
+}
+
+.mat-layer-body select {
+  height: 22px;
+  padding: 0 20px 0 7px;
+  font-size: 11px;
+  border-radius: 4px;
+}
+
+.mat-layer-body .select-wrap::after {
+  right: 7px;
+}
+
+.mat-layer-body .inspector-color-field {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  border-radius: 4px;
+}
+
+.mat-layer-body .inspector-color-swatch {
+  width: 22px;
+  height: 22px;
+}
+
+.mat-layer-body .inspector-color-field .hex-input {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+/* Add-layer actions — quiet secondary buttons, not a call to action */
+.mat-layer-add {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.mat-add-btn {
+  flex: 1;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  font-family: var(--font);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+}
+
+.mat-add-btn i {
+  font-size: 12px;
+}
+
+.mat-add-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-primary);
   border-color: var(--border-strong);
 }
 
-.footer-btn i {
-  font-size: 13px;
+.mat-add-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* ── TONE MAP BADGE ── */
