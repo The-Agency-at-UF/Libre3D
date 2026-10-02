@@ -33,13 +33,15 @@ export interface Libre3dStackProps extends StackProps {
   allowedOrigins: string[];
   /** Which Vercel environment may assume this stage's API role. */
   vercelEnvironment: VercelEnvironment;
+  /** Where people use this stage of the editor; invitation emails link here. */
+  appUrl: string;
 }
 
 export class Libre3dStack extends Stack {
   constructor(scope: Construct, id: string, props: Libre3dStackProps) {
     super(scope, id, props);
 
-    const { stage, allowedOrigins, vercelEnvironment } = props;
+    const { stage, allowedOrigins, vercelEnvironment, appUrl } = props;
     const isProd = stage === "prod";
     const removalPolicy = isProd ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY;
     const name = (suffix: string) => `libre3d-${stage}-${suffix}`;
@@ -49,9 +51,29 @@ export class Libre3dStack extends Stack {
 
     // ---- Auth -------------------------------------------------------------------------------
 
+    // Invite-only: access is a short, hand-picked list of people, and the user list in this pool
+    // *is* that list. Nobody can sign themselves up; an admin creates each user, and Cognito emails
+    // them a temporary password. Disabling a user (plus a global sign-out) removes their access.
+    //
+    // MFA is required and limited to authenticator apps (TOTP), so a leaked password alone gets
+    // nobody in. Managed login walks each user through linking an app on their first sign-in.
+    // SMS stays off (cost, SIM-swap risk) and email codes stay off (recovery already uses email).
     const userPool = new cognito.UserPool(this, "UserPool", {
       userPoolName: name("users"),
-      selfSignUpEnabled: true,
+      selfSignUpEnabled: false,
+      userInvitation: {
+        emailSubject: "You're invited to Libre3D",
+        emailBody:
+          "You've been given access to Libre3D.<br><br>" +
+          `Sign in at <a href="${appUrl}">${appUrl}</a> with:<br>` +
+          "Email: {username}<br>" +
+          "Temporary password: {####}<br><br>" +
+          "You'll choose your own password and link an authenticator app (such as Google " +
+          "Authenticator or Duo Mobile) the first time you sign in. The temporary password " +
+          "expires in 7 days.",
+      },
+      mfa: cognito.Mfa.REQUIRED,
+      mfaSecondFactor: { otp: true, sms: false },
       signInAliases: { email: true },
       autoVerify: { email: true },
       standardAttributes: { email: { required: true, mutable: true } },
