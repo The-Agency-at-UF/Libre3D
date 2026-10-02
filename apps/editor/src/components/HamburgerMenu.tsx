@@ -8,6 +8,9 @@ interface HamburgerMenuProps {
   onToggleTheme: () => void;
   showAxisGuides: boolean;
   onToggleAxisGuides: () => void;
+  /** Who is signed in, shown above Sign Out. Null if the token carried no email. */
+  accountEmail: string | null;
+  onSignOut: () => void;
 }
 
 /*
@@ -22,6 +25,8 @@ export function HamburgerMenu({
   onToggleTheme,
   showAxisGuides,
   onToggleAxisGuides,
+  accountEmail,
+  onSignOut,
 }: HamburgerMenuProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -132,6 +137,22 @@ export function HamburgerMenu({
                 Axis Guidelines
               </span>
               <span className="hamburger-dropdown-shortcut">{showAxisGuides ? "On" : "Off"}</span>
+            </button>
+            <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+            {accountEmail && (
+              <div className="hamburger-dropdown-account" title={accountEmail}>
+                {accountEmail}
+              </div>
+            )}
+            <button
+              className="hamburger-dropdown-btn"
+              type="button"
+              onClick={() => handleItemClick(onSignOut)}
+            >
+              <span>
+                <i className="ti ti-logout" style={{ marginRight: "6px" }}></i>
+                Sign Out
+              </span>
             </button>
           </div>
         </>

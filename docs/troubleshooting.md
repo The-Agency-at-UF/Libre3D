@@ -65,22 +65,30 @@ Common issues contributors encounter and how to fix them.
 
 ---
 
-### "Environment variables not loading (AWS)"
+### "Environment variables not loading (AWS / sign-in)"
 
-**Error**: Publish fails, AWS S3 errors in console
+**Error**: Publish fails with AWS errors, or the sign-in screen says sign-in isn't configured
 
 **Solutions**:
-1. Create `.env` in repo root (not in `apps/editor/`):
+1. Create `.env` in repo root (not in `apps/editor/`); both the browser and the dev API read it from there:
    ```
-   AWS_REGION=us-east-1
-   AWS_ACCESS_KEY_ID=your-key
-   AWS_SECRET_ACCESS_KEY=your-secret
-   S3_BUCKET_NAME=your-bucket
-   DYNAMODB_TABLE_NAME=your-table
+   # Dev stack (values: Libre3d-dev CloudFormation outputs)
+   AWS_REGION=us-east-2
+   AWS_ACCESS_KEY_ID=<libre3d-dev-local access key>
+   AWS_SECRET_ACCESS_KEY=<libre3d-dev-local secret>
+   S3_BUCKET_NAME=<BucketName output>
+   PUBLISHED_SCENES_TABLE_NAME=<PublishedScenesTableName output>
+   USER_SCENES_TABLE_NAME=<UserScenesTableName output>
+
+   # Public sign-in config (shipped to the browser, never put secrets in VITE_ vars)
+   VITE_COGNITO_USER_POOL_ID=<UserPoolId output>
+   VITE_COGNITO_CLIENT_ID=<UserPoolClientId output>
+   VITE_COGNITO_DOMAIN=<LoginDomainUrl output>
    ```
 2. Verify Vite loads env: `pnpm dev` should start without AWS errors
 3. Restart dev server after changing `.env`
-4. **Don't commit `.env`** — add to `.gitignore` if not already
+4. **Don't commit `.env`**: it's already in `.gitignore`. Never paste the access key anywhere else.
+5. Sign-in only returns to `http://localhost:5173` locally; another port gets Cognito's `redirect_mismatch` error.
 
 ---
 

@@ -1,5 +1,6 @@
 import type * as THREE from "three";
 
+import { apiFetch } from "./apiFetch";
 import { createSceneExportBlob } from "./exportScene";
 
 export interface PublishSceneResponse {
@@ -15,35 +16,16 @@ export interface PublishSceneResult {
 }
 
 const PUBLISH_ENDPOINT = "/api/publish";
-const PUBLISH_TOKEN_HEADER = "x-publish-token";
 
-/**
- * Raised when the publish endpoint rejects the passphrase, so the caller can prompt for a new one
- * instead of showing the generic failure alert.
- */
-export class PublishAuthError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "PublishAuthError";
-  }
-}
-
-const readPublishSession = async (
-  currentPublishId: string | null,
-  publishToken: string,
-): Promise<PublishSceneResponse> => {
-  const response = await fetch(PUBLISH_ENDPOINT, {
+// Throws ApiAuthError when signed out or the session was rejected; the caller reports that.
+const readPublishSession = async (currentPublishId: string | null): Promise<PublishSceneResponse> => {
+  const response = await apiFetch(PUBLISH_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      [PUBLISH_TOKEN_HEADER]: publishToken,
     },
     body: JSON.stringify({ currentPublishId }),
   });
-
-  if (response.status === 401) {
-    throw new PublishAuthError("The publish passphrase was missing or incorrect.");
-  }
 
   if (!response.ok) {
     throw new Error("Failed to create a publish session.");
@@ -69,7 +51,6 @@ const uploadSceneBlob = async (uploadUrl: string, blob: Blob): Promise<void> => 
 export const publishLiveScene = async (
   scene: THREE.Scene,
   currentPublishId: string | null,
-  publishToken: string,
 ): Promise<PublishSceneResult | null> => {
   const sceneBlob = await createSceneExportBlob(scene, "glb");
 
@@ -77,7 +58,7 @@ export const publishLiveScene = async (
     return null;
   }
 
-  const session = await readPublishSession(currentPublishId, publishToken);
+  const session = await readPublishSession(currentPublishId);
   await uploadSceneBlob(session.uploadUrl, sceneBlob);
 
   return {
