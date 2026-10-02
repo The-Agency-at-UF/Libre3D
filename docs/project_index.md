@@ -4,7 +4,7 @@ A complete file-by-file map of the Libre3D repository. Generated to help orient 
 
 ## Root
 
-- **`.env`** — Local environment variables for the AWS-backed publish feature (`AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME`, `DYNAMODB_TABLE_NAME`). Loaded by Vite via `loadEnv` at the repo root, not from `apps/editor/.env`.
+- **`.env`** — Local environment variables, at the repo root (not `apps/editor/.env`): the dev stack's AWS settings for the API (`AWS_REGION`, the `libre3d-dev-local` `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME`, `PUBLISHED_SCENES_TABLE_NAME`, `USER_SCENES_TABLE_NAME`) and the public sign-in config the browser gets (`VITE_COGNITO_USER_POOL_ID`, `VITE_COGNITO_CLIENT_ID`, `VITE_COGNITO_DOMAIN`). Vite reads it with `loadEnv` for the server and `envDir` for the browser; only `VITE_` values reach the bundle.
 - **`.gitignore`** — Ignores `node_modules` and `CLAUDE.md` (the latter is treated as a local/generated file, not checked in).
 - **`CLAUDE.md`** — Guidance document for Claude Code instances working in this repo: commands, architecture, and conventions.
 - **`README.md`** — Project overview, feature list, tech stack, setup instructions, and contribution/review workflow.
@@ -25,7 +25,7 @@ A complete file-by-file map of the Libre3D repository. Generated to help orient 
 ## `apps/editor/src/` — entry & state
 
 - **`main.tsx`** — Application bootstrap: finds the `#root` DOM node, imports global styles, and renders `<App />` inside `React.StrictMode`.
-- **`App.tsx`** — Top-level component. Does manual path-based routing (`/v/:sceneId` → `PublicViewer`, everything else → the full editor shell), owns theme (dark/light) state and persistence, wires up New File/Duplicate/Reset Camera/hotkey handlers, and orchestrates the export/publish flows by calling into `utils/exportScene.ts` and `utils/publishScene.ts`.
+- **`App.tsx`** — Top-level component. Does manual path-based routing (`/v/:sceneId` → `PublicViewer` (public), `/auth/callback` → `AuthCallback`, everything else → the editor shell, which shows `SignInScreen` until someone is signed in), owns theme (dark/light) state and persistence, wires up New File/Duplicate/Reset Camera/hotkey handlers, and orchestrates the export/publish flows by calling into `utils/exportScene.ts` and `utils/publishScene.ts`.
 - **`store/useEditorStore.ts`** — The single Zustand store for all editor state: scene entities, camera profiles, selection, scene/post-processing/frame settings, and preview mode. Wrapped in `subscribeWithSelector` + `zundo` (undo/redo) + `persist` (localStorage), with a versioned `migrate` function and custom deep-merge logic so old saved scenes upgrade cleanly as the schema evolves.
 
 ## `apps/editor/src/components/` — top-level UI
@@ -33,9 +33,11 @@ A complete file-by-file map of the Libre3D repository. Generated to help orient 
 - **`ExportModal.tsx`** — Modal dialog with "Export Asset" (download `.glb`/`.json`) and "Share Scene" (publish to cloud, copy share link) tabs; purely presentational, driven by props/callbacks from `App.tsx`.
 - **`FloatingToolbar.tsx`** — The floating toolbar centered over the viewport: transform tool buttons (translate/rotate/scale), a local/world space toggle, and an "Add Shape" dropdown that creates new entities (cube, sphere, torus, directional light).
 - **`HamburgerMenu.tsx`** — The dropdown menu triggered from the left sidebar header, exposing New File, Duplicate, Undo/Redo, Reset Camera, Toggle Theme, and Axis Guidelines actions with their keyboard shortcuts shown.
+- **`AuthCallback.tsx`** — The `/auth/callback` page Cognito's hosted login returns to: redeems the one-time code for tokens, then replaces the URL with where the user was headed; falls back to `SignInScreen` with the reason on a forged, expired, or cancelled callback.
 - **`HierarchyPanel.tsx`** — Renders the scene's entity list (via an internal `HierarchyItem`) with inline rename, visibility toggle, lock toggle, delete, and click/shift-click select; filters entities by an incoming search query.
 - **`PreviewControls.tsx`** — The floating Stop chip rendered over the viewport during preview (plus an Escape binding). Preview hides the whole inspector, so this is the only way back to the editor.
 - **`PublicViewer.tsx`** — The read-only `/v/:sceneId` route component: fetches the published scene's asset URL from `/api/scene/:id` and displays it in a `<model-viewer>` element, handling loading and error states. Also declares the `model-viewer` custom element's JSX typing.
+- **`SignInScreen.tsx`** — Shown instead of the editor while signed out. Its only action hands off to Cognito's hosted login (managed login), which owns passwords, MFA setup, and resets.
 - **`RightSidebar.tsx`** — Composes the inspector column: `InspectorTopbar`, `FramePanel`, `ViewportSettingsPanel`, `ScenePanel`, and either `TransformPanel` (when entities are selected) or `CameraPanel` (when none are).
 - **`ViewportCanvas.tsx`** — The core Three.js integration component: constructs `SceneManager`/`CameraManager`/`ObjectManager`, wires up the viewport hooks (renderer, controls, raycaster), handles single- and multi-selection transform proxying, syncs store state (entities, scene settings, camera profile) into the live Three.js scene each render, manages fixed-frame auto-scaling, and listens for custom "center on selected"/"orient to selected" events.
 - **`ViewportOverlays.tsx`** — Small fixed UI overlaid on the viewport: the perspective/orthographic projection toggle capsule. (Used to also render a decorative, non-interactive 3D axis orb graphic; that's been replaced by the real navigation gizmo mounted via `viewport/hooks/useViewportGizmo.ts` — see that file's note.)
@@ -63,6 +65,7 @@ A complete file-by-file map of the Libre3D repository. Generated to help orient 
 
 - **`useHotkeys.ts`** — Global `keydown` listener implementing keyboard shortcuts (ignoring text-input focus): Ctrl/Cmd+D duplicate, Ctrl/Cmd+N new file, Ctrl/Cmd+Z/Shift+Z undo/redo, Ctrl/Cmd+G group selection (2+ entities), Ctrl/Cmd +/- zoom, and unmodified W/E/R (transform tool), Delete/Backspace (remove selection), F (center/orient on selection).
 - **`usePreviewSession.ts`** — Owns the Play/Stop preview session: exports the live scene to a GLB blob URL on start and revokes it on stop. Shared by `InspectorTopbar` and `PreviewControls` so the object URL has a single lifecycle.
+- **`useAuthSession.ts`** — `useSyncExternalStore` over `utils/authSession.ts`: whether someone is signed in and their email (display only). Re-renders on sign-in/out, including in another tab.
 - **`useRightSidebarState.ts`** — Centralizes local (non-persisted) right-sidebar/editor-shell UI state: export/publish in-flight flags, modal open/tab state, copy-link feedback, share URL, active left-sidebar tab, search query, shape-dropdown open state, and collapsible-section states.
 
 ## `apps/editor/src/viewport/` — imperative Three.js layer
@@ -81,9 +84,12 @@ A complete file-by-file map of the Libre3D repository. Generated to help orient 
 
 ## `apps/editor/src/utils/` — export & publish
 
-- **`awsPublishHandler.ts`** — Server-side (Node) logic used only inside the Vite dev-middleware: creates a "publish session" (presigned S3 PUT URL + a DynamoDB record keyed by scene id) and looks up a previously published scene's asset URL by id. Reads AWS config from environment variables.
+- **`apiFetch.ts`** — `fetch` for our own `/api/*` routes only: adds `Authorization: Bearer <access token>` (refreshing it first if needed) and raises `ApiAuthError` when signed out or the server rejects the session. Never used for presigned S3 URLs.
+- **`authSession.ts`** — Browser sign-in session for Cognito managed login: authorization-code + PKCE redirect (`startSignIn`/`completeSignIn`), tokens in localStorage, `getAccessToken` with shared auto-refresh, and `signOut` (revoke + hosted logout). Deliberately not in `useEditorStore`.
+- **`awsPublishHandler.ts`** — Server-side (Node) logic shared by the Vercel functions in `api/` and the Vite dev middleware: creates a "publish session" (presigned S3 PUT URL + a DynamoDB record keyed by scene id) and looks up a previously published scene's asset URL by id. AWS credentials come from Vercel OIDC (`AWS_ROLE_ARN`), else the local dev key, else the SDK default chain.
 - **`exportScene.ts`** — Client-side scene export utilities: reads the live scene off `window.__libre3dScene`, serializes it to a `.glb` (falling back to `.gltf` on failure) via Three.js's `GLTFExporter`, and provides a generic `createDownload` helper for triggering browser file downloads (used for both asset and JSON scene-config exports). Objects tagged `userData.editorOnly` (grid, directional-light helpers, selection outlines, the multi-select proxy, the transform gizmo) are hidden for the duration of the parse so viewport furniture never lands in an exported or published GLB.
 - **`previewCamera.ts`** — Converts the active camera profile into `<model-viewer>`'s spherical camera attributes (`camera-orbit`/`camera-target`/`field-of-view`), so preview tracks the editor's exact camera instead of model-viewer's auto-fit framing. Preview keeps the `<model-viewer>` on top but `pointer-events: none` (with an inert slotted poster), so orbit/pan/zoom fall through to the still-mounted viewport canvas and the editor's own OrbitControls keep handling them; this conversion just follows the resulting camera profile. It must stay on top: model-viewer stops rendering while its element is occluded.
+- **`verifyAuth.ts`** — Server-side (Node) check for `/api/*`: verifies the Bearer access token against the Cognito user pool's public keys (`aws-jwt-verify`) and returns the token's `sub` as the user ID, or a 401. The user ID never comes from the request body.
 - **`sceneColor.ts`** — `getSafeColor`: normalizes a stored scene colour (which may lack the leading `#`) to a CSS/Three-safe hex. Shared by `SceneManager` (scene background, fog) and the preview surface so they can't drift on the same stored value.
 - **`publishScene.ts`** — Client-side publish flow: exports the live scene to a GLB blob, POSTs to `/api/publish` to obtain a presigned upload URL and scene id, then PUTs the blob directly to S3, returning the resulting share URL.
 
