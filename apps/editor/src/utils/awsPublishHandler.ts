@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { IncomingHttpHeaders } from "node:http";
 
 import { DynamoDBClient, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
@@ -57,14 +58,50 @@ const createDynamoClient = (config: AwsPublishConfig): DynamoDBClient =>
     },
   });
 
-const createShareUrl = (sceneId: string): string => `http://localhost:5173/v/${sceneId}`;
+const trimTrailingSlashes = (value: string): string => value.replace(/\/+$/, "");
+
+const readHeader = (headers: IncomingHttpHeaders, name: string): string | undefined => {
+  const value = headers[name];
+
+  return Array.isArray(value) ? value[0] : value;
+};
+
+const isLocalHost = (host: string): boolean => host.startsWith("localhost") || host.startsWith("127.0.0.1");
+
+/**
+ * Resolves the origin that published share links should point at.
+ *
+ * `PUBLIC_BASE_URL` wins when it is set, which pins production links to the real domain and
+ * keeps a spoofed `Host` header out of the share URL we persist. Without it we fall back to the
+ * incoming request, so dev servers and Vercel preview deployments link to themselves.
+ */
+export const resolveRequestBaseUrl = (headers: IncomingHttpHeaders, env: AwsPublishEnv): string => {
+  const configuredBaseUrl = env.PUBLIC_BASE_URL;
+
+  if (configuredBaseUrl) {
+    return trimTrailingSlashes(configuredBaseUrl);
+  }
+
+  const host = readHeader(headers, "x-forwarded-host") ?? readHeader(headers, "host");
+
+  if (!host) {
+    throw new Error("Unable to resolve the request host. Set PUBLIC_BASE_URL to provide one.");
+  }
+
+  const protocol = readHeader(headers, "x-forwarded-proto") ?? (isLocalHost(host) ? "http" : "https");
+
+  return `${protocol}://${host}`;
+};
+
+const createShareUrl = (baseUrl: string, sceneId: string): string => `${trimTrailingSlashes(baseUrl)}/v/${sceneId}`;
 
 const createAssetUrl = (config: AwsPublishConfig, assetKey: string): string =>
   `https://${config.bucketName}.s3.${config.region}.amazonaws.com/${assetKey}`;
 
 export const createPublishSession = async (
   env: AwsPublishEnv,
-  currentPublishId?: string | null,
+  currentPublishId: string | null | undefined,
+  baseUrl: string,
 ): Promise<PublishSessionResult> => {
   const config = readConfig(env);
   const s3Client = createS3Client(config);
@@ -90,7 +127,7 @@ export const createPublishSession = async (
         sceneId: { S: sceneId },
         assetKey: { S: assetKey },
         assetUrl: { S: assetUrl },
-        shareUrl: { S: createShareUrl(sceneId) },
+        shareUrl: { S: createShareUrl(baseUrl, sceneId) },
         createdAt: { S: new Date().toISOString() },
       },
     }),
@@ -100,7 +137,7 @@ export const createPublishSession = async (
     sceneId,
     assetKey,
     uploadUrl,
-    shareUrl: createShareUrl(sceneId),
+    shareUrl: createShareUrl(baseUrl, sceneId),
   };
 };
 
