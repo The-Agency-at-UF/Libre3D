@@ -26,6 +26,6 @@ Then **[CONTRIBUTING.md](../.github/CONTRIBUTING.md)** for branch naming, commit
 
 ## Two things to know up front
 
-**There is no test suite and no linter.** A clean `pnpm build` plus manually checking the feature in the dev server *is* the correctness bar. Check the DevTools console before you push.
+**The automated safety net is thin, and there's no linter.** A Vitest unit suite (`pnpm test`) covers the pure hierarchy and transform math, but nothing checks the UI or viewport for you. A clean `pnpm build`, a passing `pnpm test`, and manually checking the feature in the dev server *is* the correctness bar. Check the DevTools console before you push.
 
 **All editor state lives in one Zustand store.** Undo, autosave, and export all read from it, so a feature wired into the store gets those for free — and a feature that bypasses it gets none of them.

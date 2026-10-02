@@ -1,7 +1,8 @@
 {
   "compilerOptions": {
     "composite": true,
-    "strict": true,
+    "outDir": "./node_modules/.tmp/tsconfig.node",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "Bundler",

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import * as THREE from "three";
+import type { ViewportGizmo } from "three-viewport-gizmo";
 import { useEditorStore } from "../store/useEditorStore";
 import { SceneManager } from "../viewport/SceneManager";
 import { CameraManager } from "../viewport/CameraManager";
@@ -7,6 +8,7 @@ import { ObjectManager } from "../viewport/ObjectManager";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
 import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
+import { useViewportGizmo } from "../viewport/hooks/useViewportGizmo";
 import { prepareModelImport } from "../utils/importModel";
 
 export function ViewportCanvas() {
@@ -79,13 +81,30 @@ export function ViewportCanvas() {
 
 
   // -- Setup Hooks --
-  const rendererRef = useViewportRenderer(containerRef, scene, cameraRef);
+  // Declared before useViewportRenderer (and populated later, by
+  // useViewportGizmo below) so the render loop's onAfterRender callback can
+  // close over this ref and pick up the gizmo once it exists — see the
+  // "render ordering" note in useViewportGizmo.ts.
+  const gizmoRef = useRef<ViewportGizmo | null>(null);
+
+  const rendererRef = useViewportRenderer(
+    containerRef,
+    scene,
+    cameraRef,
+    undefined,
+    () => gizmoRef.current?.render()
+  );
 
   const { orbitControlsRef, transformControlsRef } = useViewportControls(
     cameraRef,
     rendererRef,
     scene
   );
+
+  // Top-right navigation gizmo (Blender-style). Must be set up after
+  // useViewportControls so orbitControlsRef.current already exists — see its
+  // own doc comment for the full render/camera-swap wiring.
+  useViewportGizmo(gizmoRef, cameraRef, rendererRef, orbitControlsRef, containerRef);
 
   useViewportRaycaster(
     cameraRef,
@@ -206,7 +225,17 @@ export function ViewportCanvas() {
     // Tell OrbitControls to track the new camera object.
     orbitControlsRef.current.object = nextCamera;
     orbitControlsRef.current.update();
-  }, [cameraManager, activeProfile, projectionMode, orbitControlsRef, cameraRef]);
+
+    // Keep the nav gizmo pointed at whichever camera is now active —
+    // ViewportGizmo doesn't follow cameraRef automatically (it holds a
+    // direct camera reference, not a ref), so it has to be told explicitly
+    // on every perspective ↔ orthographic swap, same as OrbitControls.object
+    // just above. See useViewportGizmo.ts's "Camera swaps" doc note.
+    if (gizmoRef.current) {
+      gizmoRef.current.camera = nextCamera as THREE.PerspectiveCamera | THREE.OrthographicCamera;
+      gizmoRef.current.update();
+    }
+  }, [cameraManager, activeProfile, projectionMode, orbitControlsRef, cameraRef, gizmoRef]);
 
   // -- Sync Entities --
   useEffect(() => {
@@ -286,11 +315,24 @@ export function ViewportCanvas() {
       const h = container.clientHeight || 1;
       cameraManager.updateAspect(w, h);
       rendererRef.current?.setSize(w, h, false);
+
+      // Re-sync the nav gizmo's DOM rect + its renderer-viewport snapshot
+      // *after* the line above, in this same callback, not from a second
+      // ResizeObserver of the gizmo's own. ViewportGizmo.update() snapshots
+      // whatever the renderer's current viewport is at the moment it's
+      // called, then restores exactly that snapshot after every future
+      // render() — so it has to run after setSize() has corrected that
+      // viewport, not racing it from an independently-scheduled observer
+      // callback on the same element (that ordering isn't guaranteed, and
+      // losing the race is what caused the viewport to collapse into a
+      // small stale corner shortly after load). See useViewportGizmo.ts's
+      // "Resize" doc note for the full explanation.
+      gizmoRef.current?.update();
     });
 
     resizeObserver.observe(container);
     return () => resizeObserver.disconnect();
-  }, [cameraManager, rendererRef]);
+  }, [cameraManager, rendererRef, gizmoRef]);
 
   // -- Auto Scale Logic (Fixed Frame Mode) --
   useEffect(() => {

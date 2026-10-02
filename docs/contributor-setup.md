@@ -65,7 +65,7 @@ dist/index.[hash].js            123.45 kB │ gzip: 45.67 kB
 ✓ built in 15.23s
 ```
 
-**A clean `pnpm build` is the correctness bar in this repo.** There is no test suite and no linter, so "it compiles and I checked it by hand" is what passes for green here. Get used to running it.
+**A clean `pnpm build` is the correctness bar in this repo**, together with `pnpm test` (a Vitest unit suite for the hierarchy and transform math — it runs in a couple of seconds). There's no linter and nothing tests the UI or viewport automatically, so "it compiles, the tests pass, and I checked it by hand" is what passes for green here. Get used to running both.
 
 If it fails, check your Node version first (needs v18+), then see [troubleshooting.md](troubleshooting.md).
 

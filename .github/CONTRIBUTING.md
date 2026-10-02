@@ -51,10 +51,14 @@ Keep the first line under 50 characters, blank line before the body, and use the
 
 ### 3. Verify before you push
 
-There is no test suite and no linter, so this part is on you:
+There's no linter, and the unit suite only covers the hierarchy and transform math, so most of this part is on you:
 
 ```bash
 pnpm build
+```
+
+```bash
+pnpm test
 ```
 
 Then run `pnpm dev` and check, by hand:

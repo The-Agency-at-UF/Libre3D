@@ -1,15 +1,54 @@
 # Testing & Verification Guide
 
-Since Libre3D has no automated test suite, all testing is manual. This guide provides checklists for different types of changes to ensure you don't break existing features.
+Libre3D has a small Vitest unit suite for its pure scene-graph and transform logic. Everything else — the UI, the Three.js viewport, store actions, persistence, export — is still tested manually. This guide covers how to run the unit suite, plus checklists for different types of changes to ensure you don't break existing features.
+
+---
+
+## Automated Unit Tests
+
+Run from the repo root:
+
+```bash
+pnpm test
+```
+
+That runs `vitest run` in `apps/editor` once and exits non-zero on any failure. Other useful invocations:
+
+```bash
+pnpm --filter editor exec vitest
+```
+
+Watch mode — re-runs affected tests as you save.
+
+```bash
+pnpm --filter editor exec vitest run src/utils/entityTransforms.test.ts
+```
+
+Runs a single test file.
+
+**What's covered** (test files sit next to the module, named `<module>.test.ts`):
+
+| Module | What the tests check |
+| --- | --- |
+| `store/entityIndex.ts` | `getChildren`, `getDescendantIds`, `getAncestorIds` (including cycle guards); `filterMoveRoots` drops descendants of already-selected nodes; `canReparentEntities` rejects moving a node into itself or its own subtree and enforces the imported-model boundary |
+| `utils/entityTransforms.ts` | `getEntityWorldMatrix` composes the parent chain root-down; `solveLocalFromWorld` round-trips — reparenting under a different transformed parent leaves the world matrix unchanged (hand-picked cases plus 200 seeded random chains) |
+| `utils/pruneImportHierarchy.ts` | `pruneImportNodes` drops dead leaves, collapses single-child wrappers into their child without moving it in world space, and never removes the root, mesh nodes, bones, or multi-child groups |
+
+**What's not covered**: React components, `SceneManager`/`CameraManager`/`ObjectManager`, store actions, persistence, and anything that needs a DOM or WebGL. Keep using the checklists below for those.
+
+**Tests marked "expected fail"** in the output are intentional. They use `it.fails` to pin down a known limitation (a TRS transform can't represent shear, so a rotated child under a non-uniformly scaled parent drifts slightly). If one of them starts *failing*, the limitation has been fixed — remove the `.fails`.
+
+**Writing a new test**: only for pure functions that don't touch the DOM, WebGL, or the live store. Build fixture data with a local factory (see `makeEntity` in `entityIndex.test.ts`), and compare transforms as matrices within a tolerance rather than exact Euler values.
 
 ---
 
 ## Before You Start
 
-1. Run `pnpm build` — ensures TypeScript has no errors
-2. Run `pnpm dev` — start the dev server
-3. Open Chrome DevTools (F12) — watch for console errors
-4. Keep the browser refreshed during testing
+1. Run `pnpm build` — ensures TypeScript has no errors (this also type-checks the test files)
+2. Run `pnpm test` — the unit suite should pass
+3. Run `pnpm dev` — start the dev server
+4. Open Chrome DevTools (F12) — watch for console errors
+5. Keep the browser refreshed during testing
 
 ---
 

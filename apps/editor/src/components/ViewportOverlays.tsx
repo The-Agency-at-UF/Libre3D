@@ -1,22 +1,23 @@
 import { useEditorStore } from "../store/useEditorStore";
 
+// NOTE: this used to also render a `.axis-orb-gizmo` — a static, purely
+// decorative SVG "3D Axis Gizmo" with no click/drag behavior. It's been
+// replaced by a real, interactive navigation gizmo (Blender-style) docked to
+// the top-right of the viewport instead of floating here at bottom-center:
+// see `viewport/hooks/useViewportGizmo.ts` (wiring) and
+// `viewport/gizmoTheme.ts` (styling — it also carries forward this
+// placeholder's exact X/Y/Z axis colors, #ef4444/#22c55e/#3b82f6, so the
+// app's "which color is which axis" convention didn't change). It's mounted
+// directly into the Three.js canvas by that hook (inside
+// ViewportCanvas.tsx), not rendered here as a sibling overlay, so there's no
+// JSX replacement for it in this component.
+
 export function ViewportOverlays() {
   const projectionMode = useEditorStore((state) => state.projectionMode);
   const setEditorState = useEditorStore((state) => state.setEditorState);
 
   return (
     <div className="viewport-bottom-overlays">
-      <div className="axis-orb-gizmo" title="3D Axis Gizmo">
-        <svg width="32" height="32" viewBox="0 0 32 32">
-          <circle cx="16" cy="16" r="12" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="1.5" />
-          <line x1="16" y1="16" x2="24" y2="16" stroke="#ef4444" strokeWidth="2.2" strokeLinecap="round" />
-          <line x1="16" y1="16" x2="16" y2="8" stroke="#22c55e" strokeWidth="2.2" strokeLinecap="round" />
-          <line x1="16" y1="16" x2="11" y2="21" stroke="#3b82f6" strokeWidth="2.2" strokeLinecap="round" />
-          <circle cx="24" cy="16" r="2" fill="#ef4444" />
-          <circle cx="16" cy="8" r="2" fill="#22c55e" />
-          <circle cx="11" cy="21" r="2" fill="#3b82f6" />
-        </svg>
-      </div>
       <div className="projection-toggle-capsule">
         <button
           className={`projection-btn ${projectionMode === "perspective" ? "active" : ""}`}

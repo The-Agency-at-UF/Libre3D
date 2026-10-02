@@ -841,18 +841,26 @@
   pointer-events: none;
 }
 
-.axis-orb-gizmo {
-  width: 48px;
-  height: 48px;
+/* .axis-orb-gizmo (a static, decorative 3D-axis SVG that used to live here)
+   has been retired in favor of a real, interactive navigation gizmo docked
+   to the top-right of the viewport — see viewport/hooks/useViewportGizmo.ts
+   and viewport/gizmoTheme.ts. */
+
+/* Navigation gizmo (three-viewport-gizmo), top-right, Blender-style.
+   Positioning, sizing, and the widget's own internal DOM structure are all
+   owned by the library at runtime (see useViewportGizmo.ts's `offset`/
+   `placement` options) — this rule only layers on the same glass-panel
+   chrome the rest of the viewport's floating UI uses (.floating-toolbar,
+   .projection-toggle-capsule below): a soft drop shadow so the widget reads
+   as elevated above the 3D view, and a short opacity transition for the
+   preview-mode show/hide toggle in useViewportGizmo.ts. Colors/opacity for
+   the gizmo's own background disc come from gizmoTheme.ts instead of here,
+   since three-viewport-gizmo paints that disc via a WebGL/canvas texture,
+   not a CSS background. */
+.libre3d-viewport-gizmo {
   border-radius: 50%;
-  background: var(--bg-panel);
-  backdrop-filter: blur(25px);
-  -webkit-backdrop-filter: blur(25px);
-  border: 1px solid var(--border-strong);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  pointer-events: auto;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  transition: opacity 120ms ease;
 }
 
 .projection-toggle-capsule {
