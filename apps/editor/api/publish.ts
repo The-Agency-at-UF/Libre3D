@@ -1,7 +1,8 @@
 /**
  * PURPOSE: Vercel serverless entry point for `POST /api/publish`.
  *
- * INPUT: An optional JSON body of `{ currentPublishId }` so republishing reuses an existing sceneId.
+ * INPUT: A signed-in user's `Authorization: Bearer <access token>`, plus an optional JSON body of
+ *        `{ currentPublishId }` so republishing reuses an existing sceneId.
  * OUTPUT: The publish session (`sceneId`, `assetKey`, presigned `uploadUrl`, `shareUrl`) the editor
  *         needs to upload the exported GLB straight to S3.
  *
@@ -12,7 +13,7 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 import { createPublishSession, resolveRequestBaseUrl } from "../src/utils/awsPublishHandler";
-import { authorizePublishRequest } from "../src/utils/publishAuth";
+import { verifyAuth } from "../src/utils/verifyAuth";
 
 const readCurrentPublishId = (body: unknown): string | null => {
   if (!body) {
@@ -46,7 +47,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
     return;
   }
 
-  const auth = authorizePublishRequest(req.headers, process.env);
+  // Presigned upload URLs are write access to the bucket, so only signed-in users get one.
+  const auth = await verifyAuth(req.headers, process.env);
 
   if (!auth.authorized) {
     res.status(auth.status).json({ error: auth.error });
