@@ -26,6 +26,9 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.1090.0
         version: 3.1090.0
+      aws-jwt-verify:
+        specifier: ^5.2.1
+        version: 5.2.1
       react:
         specifier: ^19.1.0
         version: 19.2.7
@@ -1327,6 +1330,10 @@ packages:
     resolution: {integrity: sha512-T3Kkke7c/vlGzrovtgxtb83u0ihF/Lq9z/R0hvOk+ncUZ734zrbG+0IWO/xZLd5tTQphwAO7OYufarg/wl5ZFA==}
     engines: {node: '>= 18.0.0'}
     hasBin: true
+
+  aws-jwt-verify@5.2.1:
+    resolution: {integrity: sha512-J+buA4M+qvQDk58WXFBLkDodkEX3DDL1ac5XFQPW3opxAsaLXYu5hYnlSHsaBRDBUXBAn695kE/cw/mdyJKwJg==}
+    engines: {node: '>=18.0.0'}
 
   balanced-match@1.0.2:
     resolution: {integrity: sha512-3oSeUO0TMV67hN1AmbXsK4yaqU7tjiHlbxRDZOpH0KW9+CeX4bRAaX0Anxt0tx2MrpRpWwQaPwIlISEJhYU5Pw==}
@@ -3019,6 +3026,8 @@ snapshots:
       constructs: 10.8.1
 
   aws-cdk@2.1144.0: {}
+
+  aws-jwt-verify@5.2.1: {}
 
   balanced-match@1.0.2: {}
 
