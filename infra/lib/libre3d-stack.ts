@@ -1,7 +1,8 @@
 /**
  * PURPOSE: Everything one deployment of the editor (dev or prod) talks to.
  *
- * - Cognito user pool + browser app client: who the user is.
+ * - Cognito user pool (invite-only, MFA required) + hosted login pages + browser app client: who
+ *   the user is.
  * - S3 bucket, fully private: scene JSON, imported assets, and published GLBs. Browsers only ever
  *   reach objects through short-lived presigned URLs minted by the API, never public URLs.
  * - DynamoDB `published-scenes`: public lookup from a share link's sceneId to its GLB, plus owner.
@@ -35,13 +36,18 @@ export interface Libre3dStackProps extends StackProps {
   vercelEnvironment: VercelEnvironment;
   /** Where people use this stage of the editor; invitation emails link here. */
   appUrl: string;
+  /**
+   * Exact origins the hosted login may send people back to (`<origin>/auth/callback` after sign-in,
+   * `<origin>/` after sign-out). Cognito allows no wildcards, so per-PR preview URLs can't sign in.
+   */
+  signInOrigins: string[];
 }
 
 export class Libre3dStack extends Stack {
   constructor(scope: Construct, id: string, props: Libre3dStackProps) {
     super(scope, id, props);
 
-    const { stage, allowedOrigins, vercelEnvironment, appUrl } = props;
+    const { stage, allowedOrigins, vercelEnvironment, appUrl, signInOrigins } = props;
     const isProd = stage === "prod";
     const removalPolicy = isProd ? RemovalPolicy.RETAIN : RemovalPolicy.DESTROY;
     const name = (suffix: string) => `libre3d-${stage}-${suffix}`;
@@ -60,6 +66,8 @@ export class Libre3dStack extends Stack {
     // SMS stays off (cost, SIM-swap risk) and email codes stay off (recovery already uses email).
     const userPool = new cognito.UserPool(this, "UserPool", {
       userPoolName: name("users"),
+      // Essentials is the lowest tier with managed login (the hosted sign-in pages below).
+      featurePlan: cognito.FeaturePlan.ESSENTIALS,
       selfSignUpEnabled: false,
       userInvitation: {
         emailSubject: "You're invited to Libre3D",
@@ -89,16 +97,40 @@ export class Libre3dStack extends Stack {
       removalPolicy,
     });
 
-    // Browser client: no secret (it would be public anyway), SRP so the password never leaves the
-    // browser in plain form, and no "user does not exist" leaks on sign-in.
+    // Hosted sign-in pages (managed login) at https://libre3d-<stage>-login.auth.<region>.amazoncognito.com.
+    // The app redirects here instead of drawing its own login form, so passwords, MFA setup, and
+    // password resets never touch our code.
+    const loginDomain = userPool.addDomain("LoginDomain", {
+      cognitoDomain: { domainPrefix: name("login") },
+      managedLoginVersion: cognito.ManagedLoginVersion.NEWER_MANAGED_LOGIN,
+    });
+
+    // Browser client: no secret (it would be public anyway) and no "user does not exist" leaks.
+    // Sign-in is the OAuth authorization-code flow; the app adds PKCE, which is what makes a
+    // secretless client safe. Only this pool's own users, never a social or SAML provider.
     const userPoolClient = userPool.addClient("WebClient", {
       userPoolClientName: name("web"),
       generateSecret: false,
       authFlows: { userSrp: true },
+      oAuth: {
+        flows: { authorizationCodeGrant: true },
+        scopes: [cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL],
+        callbackUrls: signInOrigins.map((origin) => `${origin}/auth/callback`),
+        logoutUrls: signInOrigins.map((origin) => `${origin}/`),
+      },
+      supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
       preventUserExistenceErrors: true,
       accessTokenValidity: Duration.hours(1),
       idTokenValidity: Duration.hours(1),
       refreshTokenValidity: Duration.days(30),
+    });
+
+    // Managed login only serves pages for an app client that has a style. The console creates one
+    // automatically; CloudFormation does not, so assign Cognito's default look explicitly.
+    new cognito.CfnManagedLoginBranding(this, "LoginBranding", {
+      userPoolId: userPool.userPoolId,
+      clientId: userPoolClient.userPoolClientId,
+      useCognitoProvidedValues: true,
     });
 
     // ---- Storage ----------------------------------------------------------------------------
@@ -227,6 +259,7 @@ export class Libre3dStack extends Stack {
     output("Region", this.region, "AWS_REGION");
     output("UserPoolId", userPool.userPoolId, "VITE_COGNITO_USER_POOL_ID");
     output("UserPoolClientId", userPoolClient.userPoolClientId, "VITE_COGNITO_CLIENT_ID");
+    output("LoginDomainUrl", loginDomain.baseUrl(), "VITE_COGNITO_DOMAIN");
     output("BucketName", bucket.bucketName, "S3_BUCKET_NAME");
     output("PublishedScenesTableName", publishedScenesTable.tableName, "PUBLISHED_SCENES_TABLE_NAME");
     output("UserScenesTableName", userScenesTable.tableName, "USER_SCENES_TABLE_NAME");

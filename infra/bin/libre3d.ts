@@ -26,6 +26,7 @@ const dev = new Libre3dStack(app, "Libre3d-dev", {
   vercelEnvironment: "preview",
   // The dev branch's stable Vercel preview (staging); per-PR preview URLs change every time.
   appUrl: "https://libre3d-editor-git-dev-libre3-d.vercel.app",
+  signInOrigins: ["http://localhost:5173", "https://libre3d-editor-git-dev-libre3-d.vercel.app"],
 });
 
 const prod = new Libre3dStack(app, "Libre3d-prod", {
@@ -34,6 +35,7 @@ const prod = new Libre3dStack(app, "Libre3d-prod", {
   allowedOrigins: ["https://libre3d.emilyapel.com"],
   vercelEnvironment: "production",
   appUrl: "https://libre3d.emilyapel.com",
+  signInOrigins: ["https://libre3d.emilyapel.com"],
 });
 
 // Stage roles trust the shared OIDC provider by its well-known ARN rather than a cross-stack
