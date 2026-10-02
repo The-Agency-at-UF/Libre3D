@@ -142,12 +142,43 @@ export class Libre3dStack extends Stack {
       }),
     });
 
-    // Least privilege: item-level access to the two tables and object-level access to the bucket.
-    // No table/bucket management, no other resources.
-    publishedScenesTable.grantReadWriteData(apiRole);
-    userScenesTable.grantReadWriteData(apiRole);
-    bucket.grantReadWrite(apiRole);
-    bucket.grantDelete(apiRole);
+    // Least privilege: exactly the operations the API performs, on these resources only. CDK's
+    // grantReadWriteData/grantReadWrite would add Scan (read every user's rows), stream reads, and
+    // object-lock settings, none of which the API uses.
+    apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "SceneTableItems",
+        actions: [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          // Needed for the condition checks inside TransactWriteItems (e.g. the editor lock).
+          "dynamodb:ConditionCheckItem",
+        ],
+        resources: [publishedScenesTable.tableArn, userScenesTable.tableArn],
+      }),
+    );
+
+    // Presigned URLs carry the signer's permissions: GET for loading, PUT for saving/publishing.
+    apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "SceneObjects",
+        actions: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+        resources: [bucket.arnForObjects("*")],
+      }),
+    );
+
+    // Without ListBucket, HeadObject on a missing key answers 403 instead of 404, and the
+    // "upload this asset only if it isn't stored yet" check could not tell the two apart.
+    apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: "SceneBucketList",
+        actions: ["s3:ListBucket"],
+        resources: [bucket.bucketArn],
+      }),
+    );
 
     // ---- Outputs: exactly what goes into .env (dev) / Vercel env vars ------------------------
 
