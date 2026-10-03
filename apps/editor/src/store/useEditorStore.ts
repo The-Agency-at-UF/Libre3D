@@ -3,7 +3,8 @@ import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middl
 import { temporal } from "zundo";
 import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
 import { createId } from "../utils/createId";
-import { reconcileAssetStorage } from "../utils/assetReconciliation";
+import { stashLegacyScene } from "../utils/legacyScene";
+import { hasSceneContent, toSceneDocument, type SceneContent, type StoredSceneContent } from "../utils/sceneDocument";
 import {
   getEntityWorldMatrix,
   solveLocalFromWorld,
@@ -334,7 +335,10 @@ export interface EditorState {
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
   setEntityMaterialLayers: (entityId: string, layers: MaterialLayer[]) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
+  // Replaces the whole scene with a saved one (null = a new scene's starting content) and clears
+  // undo history, so Ctrl+Z can't reach into the previously open scene.
+  loadScene: (content: StoredSceneContent | null) => void;
+  setEditorState:(updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -475,6 +479,22 @@ const cloneEntity = (entity: Entity): Entity => ({
   locked: entity.locked ?? false,
   ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map((layer) => ({ ...layer })) } : null),
 });
+
+/** The parts of the state that are saved as the scene (see utils/sceneDocument.ts). */
+export const selectSceneContent = (state: EditorState): SceneContent => ({
+  entities: state.entities,
+  sceneSettings: state.sceneSettings,
+  postProcessing: state.postProcessing,
+  frame: state.frame,
+  cameraProfiles: state.cameraProfiles,
+  activeProfileId: state.activeProfileId,
+});
+
+// What a new scene starts with: a fresh cube (new ID) and the default light.
+const createStartingEntities = (): Entity[] => [
+  createEntity("cube"),
+  ...initialEntities.filter((entity) => entity.type === "directionalLight").map(cloneEntity),
+];
 
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
@@ -658,11 +678,10 @@ export const useEditorStore = create<EditorState>()(
             });
 
             // Note: this intentionally does NOT free the removed entities' OPFS
-            // model/texture assets. Deletion is deferred to the app-load
-            // reconciliation sweep (see reconcileAssetStorage) so undo works:
-            // zundo's history is in-memory and session-scoped, so nothing is
-            // freed until the next reload, by which point the persisted store
-            // already reflects whether the delete was undone.
+            // model/texture assets, so undo always gets a working entity back.
+            // The app-load sweep that used to free them (reconcileAssetStorage)
+            // is off since scenes moved to the cloud: it only sees the open
+            // scene and would delete other scenes' imports (see persist below).
             set((state) => ({
               entities: state.entities.filter((entity) => !allIds.has(entity.id)),
               selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
@@ -1028,27 +1047,50 @@ export const useEditorStore = create<EditorState>()(
                   : entity,
               ),
             })),
+          loadScene: (content) => {
+            const savedProfiles = Object.values(content?.cameraProfiles ?? {}).map(cloneCameraProfile);
+            const cameraProfiles: Record<string, CameraProfile> = {
+              [DEFAULT_CAMERA_PROFILE_ID]: cloneCameraProfile(DEFAULT_CAMERA_PROFILE),
+              ...Object.fromEntries(savedProfiles.map((profile) => [profile.id, profile])),
+            };
+            const activeProfileId =
+              content?.activeProfileId && cameraProfiles[content.activeProfileId]
+                ? content.activeProfileId
+                : DEFAULT_CAMERA_PROFILE_ID;
+
+            set({
+              entities: content ? content.entities.map(cloneEntity) : createStartingEntities(),
+              // Deep-merged over the defaults, so a setting added since the scene was saved keeps
+              // its default instead of coming back undefined.
+              sceneSettings: deepMerge(initialSceneDefaults, content?.sceneSettings ?? {}),
+              postProcessing: deepMerge(initialPostProcessingDefaults, content?.postProcessing ?? {}),
+              frame: deepMerge(initialFrameDefaults, content?.frame ?? {}),
+              cameraProfiles,
+              activeProfileId,
+              selectedEntityIds: [],
+              // A publish link belongs to the scene it was made from (owned by the server from PR 6).
+              currentPublishId: null,
+              isPreviewMode: false,
+              previewGlbUrl: null,
+            });
+
+            // The editor no longer reloads the page between scenes, so history would otherwise
+            // carry over; the load itself also shouldn't be an undoable step.
+            useEditorStore.temporal.getState().clear();
+          },
           setEditorState: (updates) => set((state) => ({ ...state, ...updates })),
         }),
         {
+          // Since v17 this holds only editor preferences; the scene itself is saved in the cloud
+          // (utils/sceneLibrary.ts) and loaded with loadScene. The key keeps its old name so v17's
+          // migration can find a pre-cloud scene.
           name: "libre3d-scene-state",
-          version: 16,
+          version: 17,
           storage: createJSONStorage(() => localStorage),
-          // Once per app load, after persisted state is available, free OPFS
-          // model/texture assets no surviving entity references. This is the
-          // "next reload" point where deferred deletion is finally safe — the
-          // persisted store already reflects any undone deletes by now.
-          // Runs once per app load, right after rehydration. The rehydrated state
-          // isn't threaded into this callback's argument through zundo's temporal
-          // wrapper (it arrives undefined), so read the freshly rehydrated entities
-          // straight off the store on the next microtask — by then create() has
-          // assigned useEditorStore and the persisted state is in place. This is
-          // the "next reload" point where freeing deferred-deleted assets is safe.
-          onRehydrateStorage: () => () => {
-            queueMicrotask(() => {
-              void reconcileAssetStorage(useEditorStore.getState().entities);
-            });
-          },
+          // No asset reconciliation on rehydrate any more: reconcileAssetStorage frees OPFS
+          // models/textures the *loaded* entities don't reference, and with several scenes that
+          // would delete every other scene's imports, whose bytes aren't in the cloud until PR 5.
+          // Unreferenced assets now stay in OPFS until PR 5 reworks local assets into a cache.
           migrate: (persistedState: any, version: number) => {
             // v16: ColorLayer gained alphaMode/alphaCutoff/doubleSided so imported
             // materials preserve glTF alpha-blend/mask/doubleSided behavior instead of
@@ -1360,6 +1402,38 @@ export const useEditorStore = create<EditorState>()(
             if (persistedState) {
               persistedState.frame = persistedState.frame ?? { ...initialFrameDefaults };
             }
+
+            // v17: scenes moved to the cloud, so the scene leaves persisted state (only editor
+            // preferences stay). A scene with anything worth keeping moves to the legacy-scene key,
+            // where the gallery offers to add it to the user's scenes; otherwise opening a cloud
+            // scene would overwrite it. Runs last, after every older migration has shaped it.
+            if (version < 17 && persistedState) {
+              if (Array.isArray(persistedState.entities) && hasSceneContent(persistedState.entities)) {
+                stashLegacyScene(
+                  toSceneDocument({
+                    entities: persistedState.entities,
+                    sceneSettings: persistedState.sceneSettings,
+                    postProcessing: persistedState.postProcessing,
+                    frame: persistedState.frame,
+                    cameraProfiles: persistedState.cameraProfiles ?? {},
+                    activeProfileId: persistedState.activeProfileId ?? DEFAULT_CAMERA_PROFILE_ID,
+                  }),
+                );
+              }
+
+              [
+                "entities",
+                "selectedEntityIds",
+                "currentPublishId",
+                "sceneSettings",
+                "postProcessing",
+                "frame",
+                "cameraProfiles",
+                "activeProfileId",
+              ].forEach((key) => {
+                delete persistedState[key];
+              });
+            }
             // DIAGNOSTIC — remove after grid bug is confirmed fixed
             console.log(
               `[Libre3D] migrate v${version}→9: showGrid=${persistedState?.sceneSettings?.showGrid}`,
@@ -1368,20 +1442,11 @@ export const useEditorStore = create<EditorState>()(
             return persistedState;
 
           },
+          // Editor preferences only. The scene (selectSceneContent) is saved per scene in the cloud.
           partialize: (state) => ({
-            activeProfileId: state.activeProfileId,
-            cameraProfiles: state.cameraProfiles,
-            entities: state.entities,
-            selectedEntityIds: state.selectedEntityIds,
-            currentPublishId: state.currentPublishId,
-
             activeTransformTool: state.activeTransformTool,
             projectionMode: state.projectionMode,
             transformSpace: state.transformSpace,
-
-            sceneSettings: state.sceneSettings,
-            postProcessing: state.postProcessing,
-            frame: state.frame,
 
             hudOverlay: state.hudOverlay,
             viewportZoom: state.viewportZoom,

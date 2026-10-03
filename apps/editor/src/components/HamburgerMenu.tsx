@@ -16,7 +16,7 @@ interface HamburgerMenuProps {
 /*
  * BLOCK: HamburgerMenu (React Component)
  * PURPOSE: Renders the sidebar menu button and the dropdown list containing editor action items
- *          (New File, Duplicate, Undo/Redo, Reset Camera, Toggle Theme).
+ *          (New Scene, Duplicate, Undo/Redo, Reset Camera, Toggle Theme).
  */
 export function HamburgerMenu({
   onNewFile,
@@ -68,7 +68,7 @@ export function HamburgerMenu({
             >
               <span>
                 <i className="ti ti-file" style={{ marginRight: "6px" }}></i>
-                New File
+                New Scene
               </span>
               <span className="hamburger-dropdown-shortcut">Ctrl+N</span>
             </button>

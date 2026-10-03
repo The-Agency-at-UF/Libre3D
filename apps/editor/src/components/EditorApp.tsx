@@ -9,11 +9,15 @@ import { ExportModal } from "./ExportModal";
 import { HamburgerMenu } from "./HamburgerMenu";
 import { FloatingToolbar } from "./FloatingToolbar";
 import { PreviewControls } from "./PreviewControls";
+import { Button } from "./ui/Button";
+import { Link } from "./ui/Link";
+import { PageStatus } from "./ui/PageStatus";
 
 // Custom state hook to manage right sidebar UI states like exporting, publishing, search, and tab selections
 import { useRightSidebarState } from "../hooks/useRightSidebarState";
 import { useHotkeys } from "../hooks/useHotkeys";
 import { usePreviewSession } from "../hooks/usePreviewSession";
+import { useOpenScene } from "../hooks/useOpenScene";
 
 //import tsx utils for editor export and publish
 import { exportLiveScene, getLiveScene, createDownload } from "../utils/exportScene";
@@ -24,9 +28,10 @@ import { getSafeColor } from "../utils/sceneColor";
 import { signOut } from "../utils/authSession";
 import { toggleTheme } from "../utils/theme";
 import { navigate } from "../utils/navigation";
+import { createScene, type OpenedScene } from "../utils/sceneLibrary";
 
 //import tsx hook for editor store
-import { initialFrameDefaults, useEditorStore } from "../store/useEditorStore";
+import { useEditorStore } from "../store/useEditorStore";
 
 // Dev-only console handle for manual smoke tests (per CLAUDE.md there is no
 // test suite — store actions are exercised from the devtools console). Set here
@@ -37,10 +42,51 @@ if (import.meta.env.DEV) {
 }
 
 interface EditorAppProps {
+  sceneId: string;
   accountEmail: string | null;
 }
 
-export function EditorApp({ accountEmail }: EditorAppProps) {
+/*
+ * BLOCK: EditorApp (React Component)
+ * PURPOSE: The `/edit/:sceneId` page: opens that scene from the cloud, then shows the editor.
+ *          Remounted per scene (keyed in App.tsx), so each scene starts with fresh managers and
+ *          empty undo history.
+ */
+export function EditorApp({ sceneId, accountEmail }: EditorAppProps) {
+  const openScene = useOpenScene(sceneId);
+
+  switch (openScene.status) {
+    case "loading":
+      return <PageStatus label="Opening the scene…" />;
+    case "ready":
+      return <EditorWorkspace scene={openScene.scene} accountEmail={accountEmail} />;
+    case "notFound":
+      return (
+        <PageStatus label="This scene doesn't exist, or it was deleted." isWorking={false}>
+          <Link href="/scenes">Back to your scenes</Link>
+        </PageStatus>
+      );
+    case "newer":
+      return (
+        <PageStatus label="This scene was saved by a newer version of Libre3D. Reload the page to open it." isWorking={false}>
+          <Button variant="primary" onClick={() => window.location.reload()}>Reload</Button>
+        </PageStatus>
+      );
+    default:
+      return (
+        <PageStatus label={openScene.message} isWorking={false}>
+          <Link href="/scenes">Back to your scenes</Link>
+        </PageStatus>
+      );
+  }
+}
+
+interface EditorWorkspaceProps {
+  scene: OpenedScene;
+  accountEmail: string | null;
+}
+
+function EditorWorkspace({ scene, accountEmail }: EditorWorkspaceProps) {
   const entities = useEditorStore((state) => state.entities) ?? [];
   const currentPublishId = useEditorStore((state) => state.currentPublishId);
   const setCurrentPublishId = useEditorStore((state) => state.setCurrentPublishId);
@@ -115,39 +161,23 @@ export function EditorApp({ accountEmail }: EditorAppProps) {
     window.addEventListener("pointerup", onPointerUp);
   };
 
-  const handleNewFile = () => {
-    if (window.confirm("Are you sure you want to clear the scene?")) {
-      useEditorStore.setState({
-        entities: [
-          {
-            id: "directional-light-1",
-            type: "directionalLight",
-            name: "Directional Light",
-            position: [5, 8, 4],
-            rotation: [0, 0, 0],
-            scale: [1, 1, 1],
-            color: "#ffffff",
-            visible: true,
-            locked: false,
-          }
-        ],
-        selectedEntityIds: [],
-        activeProfileId: "personal",
-        cameraProfiles: {
-          personal: {
-            id: "personal",
-            name: "Personal Camera",
-            position: [0, 5, 10],
-            target: [0, 0, 0],
-            fov: 45,
-            near: 0.1,
-            far: 100,
-            zoom: 1,
-          },
-        },
-        frame: { ...initialFrameDefaults },
-        activeTransformTool: "translate"
-      });
+  // A new scene, not a cleared one: with autosave, clearing would overwrite this scene for good.
+  const isCreatingSceneRef = useRef(false);
+  const handleNewFile = async () => {
+    if (isCreatingSceneRef.current) {
+      return;
+    }
+
+    isCreatingSceneRef.current = true;
+
+    try {
+      const { sceneId } = await createScene();
+      navigate(`/edit/${encodeURIComponent(sceneId)}`);
+    } catch (error) {
+      console.error("Failed to create a scene.", error);
+      window.alert(error instanceof ApiAuthError ? error.message : "A new scene could not be created. Try again.");
+    } finally {
+      isCreatingSceneRef.current = false;
     }
   };
 
@@ -277,8 +307,8 @@ export function EditorApp({ accountEmail }: EditorAppProps) {
               <i className="ti ti-arrow-left" style={{ fontSize: "16px" }}></i>
             </button>
             
-            <span className="left-sidebar-header-title" title="Untitled Scene">
-              Untitled Scene
+            <span className="left-sidebar-header-title" title={scene.name}>
+              {scene.name}
             </span>
 
             <HamburgerMenu

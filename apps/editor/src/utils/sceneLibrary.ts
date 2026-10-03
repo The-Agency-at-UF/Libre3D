@@ -53,3 +53,12 @@ export const listScenes = async (): Promise<SceneSummary[]> => {
 
 export const createScene = async (): Promise<{ sceneId: string }> =>
   requestJson<SceneSummary>(SCENES_ENDPOINT, { method: "POST", body: JSON.stringify({}) });
+
+/** A scene's row as the editor needs it: the summary plus the revision its next save builds on. */
+export interface OpenedScene extends SceneSummary {
+  revision: number;
+}
+
+/** One scene and its saved document; `document` is null until the scene's first save. */
+export const getScene = async (sceneId: string): Promise<{ scene: OpenedScene; document: unknown }> =>
+  requestJson(scenePath(sceneId));
