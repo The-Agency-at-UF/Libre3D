@@ -1,16 +1,20 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 
 import { PublicViewer } from "./components/PublicViewer";
 import { LandingPage } from "./components/LandingPage";
 import { GalleryPage } from "./components/GalleryPage";
 import { AuthCallback } from "./components/AuthCallback";
-import { EditorApp } from "./components/EditorApp";
+import { PageStatus } from "./components/ui/PageStatus";
 
 import { useAuthSession } from "./hooks/useAuthSession";
 import { usePathname } from "./hooks/usePathname";
 
 import { AUTH_CALLBACK_PATH } from "./utils/authSession";
 import { HOME_PATH, getPostSignInPath, landingPathFor, navigate } from "./utils/navigation";
+
+// Loaded on demand: the editor brings Three.js and the whole viewport (most of the app's JS),
+// which the landing page, gallery, and viewer never need.
+const EditorApp = lazy(() => import("./components/EditorApp").then((module) => ({ default: module.EditorApp })));
 
 /*
  * Routes (every one needs a rewrite in vercel.json so a hard refresh works):
@@ -56,7 +60,11 @@ export function App() {
   if (editMatch) {
     // Until PR 3 loads scenes by ID, every ID opens the one scene saved in this browser. Keyed so
     // moving between scenes (e.g. with Back) remounts the editor rather than reusing it.
-    return <EditorApp key={editMatch[1]} accountEmail={auth.email} />;
+    return (
+      <Suspense fallback={<PageStatus label="Opening the editor…" />}>
+        <EditorApp key={editMatch[1]} accountEmail={auth.email} />
+      </Suspense>
+    );
   }
 
   return <GalleryPage accountEmail={auth.email} />;
