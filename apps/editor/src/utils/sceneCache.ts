@@ -11,6 +11,7 @@
  * The cloud stays the source of truth; this is a stopgap copy, not editor state. Free of the store
  * and Three.js so `authSession.signOut` can clear it.
  */
+import { parseSceneDocument, type StoredSceneContent } from "./sceneDocument";
 
 const CACHE_KEY_PREFIX = "libre3d-scene-cache:";
 
@@ -70,4 +71,42 @@ export const clearAllSceneCaches = (): void => {
   } catch {
     // Nothing to do.
   }
+};
+
+export type SceneToOpen = (
+  | { status: "ready"; content: StoredSceneContent | null; hasRecoveredEdits: boolean }
+  | { status: "newer" }
+  | { status: "invalid" }
+) & {
+  /** A local copy existed but lost to the cloud (saved from somewhere else since, or unreadable). */
+  discardCache: boolean;
+};
+
+/**
+ * What to open: this user's unsaved local edits when they were made on top of the cloud's current
+ * revision, otherwise the cloud document (`content: null` = a new scene that was never saved).
+ */
+export const resolveSceneToOpen = (
+  cloud: { document: unknown; revision: number },
+  cached: SceneCacheEntry | null,
+): SceneToOpen => {
+  const recovered = cached && cached.baseRevision === cloud.revision ? parseSceneDocument(cached.document) : null;
+
+  if (recovered?.ok) {
+    return { status: "ready", content: recovered.content, hasRecoveredEdits: true, discardCache: false };
+  }
+
+  const discardCache = cached !== null;
+
+  if (cloud.document === null) {
+    return { status: "ready", content: null, hasRecoveredEdits: false, discardCache };
+  }
+
+  const parsed = parseSceneDocument(cloud.document);
+
+  if (!parsed.ok) {
+    return { status: parsed.reason, discardCache };
+  }
+
+  return { status: "ready", content: parsed.content, hasRecoveredEdits: false, discardCache };
 };
