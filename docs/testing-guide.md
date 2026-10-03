@@ -132,8 +132,8 @@ Run this quick smoke test after ANY change to catch obvious regressions:
 
 - [ ] **State updates** (add entity → count increases)
 - [ ] **Mutations don't cause errors** (TypeScript strict mode passes)
-- [ ] **localStorage saves** (DevTools → Application → localStorage → "editor-store" exists)
-- [ ] **Persistence survives reload** (close tab completely, reopen → state restored)
+- [ ] **Autosave runs** (the header under the scene name goes Saving… → Saved about 2 s after an edit)
+- [ ] **Persistence survives reload** (close tab completely, reopen the scene → state restored)
 - [ ] **Undo/redo work** (every action creates a checkpoint)
 - [ ] **No duplicate undo steps** (one action = one undo step)
 - [ ] **Old state migrates** (if you bumped version, new fields have defaults)
@@ -261,10 +261,9 @@ Check in order:
 
 ### "Changes don't persist"
 
-1. Check localStorage: `JSON.parse(localStorage.getItem("editor-store"))`
-2. Is the field in store's `partialize`? (Only persisted fields survive reload)
+1. Scene content: does the save status under the scene name say Saved? If not, it says why (offline, conflict, signed out). A new top-level scene field must be in `SceneContent`, `selectSceneContent`, and `loadScene` (see architecture.md §5).
+2. Editor preferences: is the field in the store's `partialize`? Check `JSON.parse(localStorage.getItem("libre3d-scene-state"))`
 3. Is there a migration error? (Check console on load)
-4. Is localStorage quota exceeded? (Clear other sites' data)
 
 ### "Transforms jump/scale weirdly"
 

@@ -104,7 +104,7 @@ Common issues contributors encounter and how to fix them.
 1. Check the type definition: `src/store/useEditorStore.ts` → `interface Entity`
 2. If you added a field, did you update the interface?
 3. Did you use the correct field name? (TypeScript is case-sensitive)
-4. If editing store, remember to add to `EditorState` interface AND `persist`'s `partialize`
+4. If editing store, remember to add to `EditorState`, and to the scene document (`SceneContent`, `selectSceneContent`, `loadScene`) if it's scene content, or to `persist`'s `partialize` if it's an editor preference
 
 **Example**:
 ```typescript
@@ -313,16 +313,16 @@ useEditorStore.getState().updateEntityTransform(id, updates);
 
 ### "Changes don't persist after reload"
 
-**Cause**: Store field not in `persist` config's `partialize`.
+**Cause**: The scene wasn't saved, or the field isn't part of what's saved.
 
 **Diagnosis**:
-1. Check localStorage: `JSON.parse(localStorage.getItem("editor-store"))`
-2. Look for your field in the JSON
+1. Read the save status under the scene name in the editor header (Saved, Saving…, or what went wrong)
+2. Scene content is saved through `selectSceneContent`; editor preferences through `persist`'s `partialize` (`JSON.parse(localStorage.getItem("libre3d-scene-state"))`)
 
 **Solutions**:
-1. If field is missing from localStorage, it's not in `partialize` → add it
-2. Check store version — if you added new field, bump `version` and add migration
-3. Clear localStorage and retry: `localStorage.removeItem("editor-store")`
+1. A new top-level piece of the scene → add it to `SceneContent`, `selectSceneContent`, and `loadScene`; if old documents need changing, bump `CURRENT_SCENE_SCHEMA_VERSION` and add a migration (`utils/sceneDocument.ts`)
+2. A new editor preference → add it to `partialize`, bump the persist `version`, and add a migration
+3. "Changed somewhere else": the scene was saved from another tab; reload to get the latest
 
 ---
 
@@ -539,7 +539,8 @@ console.log(mesh.position, mesh.rotation, mesh.scale);
 ### Check localStorage
 ```typescript
 // In browser console
-JSON.parse(localStorage.getItem("editor-store"))
+JSON.parse(localStorage.getItem("libre3d-scene-state")) // editor preferences
+Object.keys(localStorage).filter((k) => k.startsWith("libre3d-scene-cache:")) // scenes with unsaved edits
 ```
 
 ### Monitor performance

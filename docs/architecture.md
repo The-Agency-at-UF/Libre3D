@@ -30,6 +30,8 @@ graph LR
 
 The editor is one page of several. `App.tsx` hand-routes between them (no router library; `navigate()` in `utils/navigation.ts` changes pages without a reload): `/` is the landing page, `/scenes` the gallery, `/edit/:sceneId` the editor above (`EditorApp.tsx`, lazy-loaded so the other pages never download Three.js), and `/v/:sceneId` the read-only `PublicViewer` for published scenes. Every route also needs a rewrite in `vercel.json`.
 
+Scenes live in the cloud, one per row of the signed-in user's gallery. Opening `/edit/:sceneId` loads that scene into the store (`useOpenScene` → `loadScene`, which also clears undo history), and from then on edits are autosaved (`useSceneAutosave`). See [§5](#5-the-store) for what's saved where.
+
 ---
 
 ## 2. Three layers
@@ -78,12 +80,12 @@ sequenceDiagram
     VC->>OM: syncMeshes(...)
     OM->>OM: mesh.position.set(...)
     R->>R: requestAnimationFrame, renderer.render(scene, camera)
-    Note over Store: persist writes localStorage<br/>zundo pushes an undo checkpoint
+    Note over Store: autosave schedules a cloud save<br/>zundo pushes an undo checkpoint
 ```
 
 Two things happen automatically at the end of every store change, and you do not write code for either:
 
-- **Persistence** — the `persist` middleware serializes the store to `localStorage["editor-store"]`.
+- **Saving** — `useSceneAutosave` sees the scene change and saves it to the cloud about 2 s later. Until that lands, a copy of the unsaved edits stays in this browser.
 - **Undo** — the `zundo` middleware pushes a checkpoint, so `Ctrl+Z` works on your feature for free.
 
 ---
@@ -172,9 +174,9 @@ One Zustand store, [`useEditorStore.ts`](../apps/editor/src/store/useEditorStore
 ```typescript
 subscribeWithSelector(   // .subscribe() with a selector
   temporal(              // zundo — undo/redo
-    persist(             // localStorage + versioned migrations
+    persist(             // editor preferences in localStorage + versioned migrations
       (set, get) => ({ /* state and actions */ }),
-      { name: "editor-store", version: 16, partialize, migrate, merge: deepMerge }
+      { name: "libre3d-scene-state", version: 17, partialize, migrate, merge: deepMerge }
     )
   )
 )
@@ -194,7 +196,16 @@ const addEntity = useEditorStore((s) => s.addEntity);
 addEntity("cube");
 ```
 
-`partialize` decides what survives a reload. If you add a field and forget to list it there, it will silently reset every time the page loads. The full action list is in [store-api-reference.md](store-api-reference.md).
+**What's saved where.** The store holds two kinds of durable state:
+
+| | What | Saved by | Format |
+|---|---|---|---|
+| **The scene** | `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId` (`selectSceneContent`) | autosave, to the cloud per scene (`/api/scenes/:id`) | a versioned scene document, `utils/sceneDocument.ts` |
+| **Editor preferences** | transform tool and space, projection, HUD, zoom | `persist`, to this browser's localStorage | persist's own `version` + `migrate` |
+
+A new field on an entity is saved automatically (it's part of `entities`). A new top-level piece of the scene (the animation timeline, say) goes into `SceneContent`, `selectSceneContent`, and `loadScene`, and into the document as its own section. Selection, preview state, and undo history are neither: they last only while the editor is open. Imported model/texture bytes aren't in the document at all; they stay in this browser (OPFS) and entities reference them by ID.
+
+While a scene has unsaved edits, a copy stays in localStorage (`utils/sceneCache.ts`, tagged with the user), so a closed tab or a lost connection doesn't lose them; reopening the scene restores and saves them. The full action list is in [store-api-reference.md](store-api-reference.md).
 
 ---
 
@@ -221,7 +232,11 @@ updateSceneSettings({ bgColor: "#ff0000" });      // merges
 set({ sceneSettings: { bgColor: "#ff0000" } });   // drops every other setting
 ```
 
-**3. Bump the persist `version` whenever you change the store's shape,** and add a matching `if (version < N)` block in `migrate`. Existing users have the old shape sitting in `localStorage`; without a migration they get `undefined` where your code expects a value.
+**3. Version every saved shape you change.** Saved data outlives the code that wrote it:
+
+- **The scene document** (`utils/sceneDocument.ts`): when a change would leave old documents wrong, bump `CURRENT_SCENE_SCHEMA_VERSION` and add a migration from the previous version. New data goes in its own optional section with a migration that fills its default. A document newer than the running code is refused, not loaded, so an old tab can't silently drop what it doesn't understand on its next save.
+- **Persisted preferences** (`persist`): bump `version` and add a matching `if (version < N)` block in `migrate` when you change what `partialize` saves. Existing users have the old shape sitting in `localStorage`; without a migration they get `undefined` where your code expects a value.
+- Either way, nested settings are deep-merged over the current defaults on load, so a setting you *add* keeps its default for old data without a migration.
 
 **4. Read the camera through `cameraRef.current`,** never by capturing a camera object. See CameraManager above.
 
@@ -257,5 +272,5 @@ __libre3dViewport   // { sceneManager, objectManager }
 
 __libre3dStore.getState().entities
 __libre3dScene.children.forEach(o => console.log(o.name, o.position))
-localStorage.removeItem("editor-store"); location.reload();   // reset to a clean scene
+__libre3dStore.getState().loadScene(null)   // replace the open scene with a new scene's content (autosaves)
 ```
