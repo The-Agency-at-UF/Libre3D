@@ -33,7 +33,7 @@ A complete file-by-file map of the Libre3D repository. Generated to help orient 
 
 - **`EditorApp.tsx`** — The editor shell (the `/edit/:sceneId` page), loaded with `React.lazy` so other pages never download Three.js: composes the sidebars and viewport, wires up New File/Duplicate/Reset Camera/hotkey handlers, ends any Play preview when the editor is left, and orchestrates the export/publish flows by calling into `utils/exportScene.ts` and `utils/publishScene.ts`. Also sets the dev-only `__libre3dStore` handle.
 - **`ExportModal.tsx`** — Modal dialog with "Export Asset" (download `.glb`/`.json`) and "Share Scene" (publish to cloud, copy share link) tabs; purely presentational, driven by props/callbacks from `EditorApp.tsx`.
-- **`GalleryPage.tsx`** — The signed-in home at `/scenes`: a grid of scene cards (each a link to `/edit/:sceneId`), a New scene button, an empty state, and its own sign-out. Reads scenes only through `utils/sceneLibrary.ts`.
+- **`GalleryPage.tsx`** — The signed-in home at `/scenes`, laid out like a file browser (`SidebarLayout`): a sidebar with the account menu (theme, sign-out), a name search, and section nav; a header bar with New scene; a sort (last modified / name) and grid/list toolbar; and scene cards (each a link to `/edit/:sceneId`, "Edited 11 hours ago"), or an empty state. Reads scenes only through `utils/sceneLibrary.ts`.
 - **`LandingPage.tsx`** — The signed-out home at `/`. Its only action hands off to Cognito's hosted login (managed login), which owns passwords, MFA setup, and resets, then returns to the `?next` path (default `/scenes`). Also shown, with the reason, when `/auth/callback` fails.
 - **`FloatingToolbar.tsx`** — The floating toolbar centered over the viewport: transform tool buttons (translate/rotate/scale), a local/world space toggle, and an "Add Shape" dropdown that creates new entities (cube, sphere, torus, directional light).
 - **`HamburgerMenu.tsx`** — The dropdown menu triggered from the left sidebar header, exposing New File, Duplicate, Undo/Redo, Reset Camera, Toggle Theme, and Axis Guidelines actions with their keyboard shortcuts shown.
@@ -57,12 +57,17 @@ A complete file-by-file map of the Libre3D repository. Generated to help orient 
 
 ## `apps/editor/src/components/ui/` — generic UI primitives
 
-The pages outside the editor (landing, gallery, status screens) are built only from `Button`, `Link`, `PageLayout`, and `PageStatus` plus `styles/pages.css`, so a design system can replace their styling without touching page logic.
+The pages outside the editor (landing, gallery, status screens) are built only from these primitives (`Avatar`, `Button`, `Link`, `Menu`, `NavItem`, `PageLayout`, `PageStatus`, `SearchField`, `SidebarLayout`) plus `styles/pages.css`, so a design system can replace their styling without touching page logic.
 
+- **`Avatar.tsx`** — A round initial standing in for a person (no profile pictures).
 - **`Button.tsx`** — Button primitive for the pages outside the editor, with `primary`/`secondary`/`ghost` variants styled by `ui-button` classes in `pages.css`.
 - **`Link.tsx`** — An `<a href>` for in-app paths: a plain left click navigates without a reload (`utils/navigation.ts`); modified clicks keep the browser's default (new tab, copy link).
+- **`Menu.tsx`** — A trigger button with a dropdown of actions (`items: { label, icon?, onSelect }[]` plus an optional header line); closes on select, outside click, or Escape.
+- **`NavItem.tsx`** — A sidebar navigation entry (icon + label, `aria-current` when active).
 - **`PageLayout.tsx`** — Frame for the pages outside the editor: a header with the product name (linking home) and optional actions, then the page content.
 - **`PageStatus.tsx`** — Full-screen spinner with a label (finishing sign-in, loading the editor).
+- **`SearchField.tsx`** — Search input with a leading magnifier icon.
+- **`SidebarLayout.tsx`** — File-browser frame for signed-in pages (the gallery): fixed left sidebar, header bar with title and actions, scrolling content. Stacks vertically on narrow screens.
 - **`Icons.tsx`** — Hand-authored inline SVG icon components: `TranslateIcon`, `RotateIcon`, `ScaleIcon`, `PlusIcon`, `EyeIcon` (visible/hidden), `LockIcon` (locked/unlocked).
 - **`PanelSection.tsx`** — A collapsible `<details>`-based section wrapper (chevron + title + body) used to group each inspector panel's contents.
 - **`Select.tsx`** — A labeled `<select>` dropdown wrapper taking a list of `{label, value}` options.
