@@ -13,6 +13,7 @@ import { PreviewControls } from "./PreviewControls";
 // Custom state hook to manage right sidebar UI states like exporting, publishing, search, and tab selections
 import { useRightSidebarState } from "../hooks/useRightSidebarState";
 import { useHotkeys } from "../hooks/useHotkeys";
+import { usePreviewSession } from "../hooks/usePreviewSession";
 
 //import tsx utils for editor export and publish
 import { exportLiveScene, getLiveScene, createDownload } from "../utils/exportScene";
@@ -22,6 +23,7 @@ import { getModelViewerCamera } from "../utils/previewCamera";
 import { getSafeColor } from "../utils/sceneColor";
 import { signOut } from "../utils/authSession";
 import { toggleTheme } from "../utils/theme";
+import { navigate } from "../utils/navigation";
 
 //import tsx hook for editor store
 import { initialFrameDefaults, useEditorStore } from "../store/useEditorStore";
@@ -56,6 +58,16 @@ export function EditorApp({ accountEmail }: EditorAppProps) {
   // the editor camera actually moved — never mid-preview while the viewer orbits.
   const previewCamera = activeCameraProfile ? getModelViewerCamera(activeCameraProfile) : null;
   const modelViewerRef = useRef<(HTMLElement & { jumpCameraToGoal?: () => void }) | null>(null);
+
+  // Leaving the editor (Back, or the projects button) unmounts it without a page
+  // reload, so end any preview here: otherwise its blob URL leaks and the editor
+  // reopens in preview mode next time.
+  const { stopPreview } = usePreviewSession();
+  useEffect(() => () => {
+    if (useEditorStore.getState().isPreviewMode) {
+      stopPreview();
+    }
+  }, [stopPreview]);
 
   // model-viewer eases toward a new camera goal. That easing is wrong here — it is
   // a follower of the editor's OrbitControls, so anything but an immediate jump
@@ -260,9 +272,7 @@ export function EditorApp({ accountEmail }: EditorAppProps) {
               className="left-sidebar-header-btn"
               type="button"
               title="Back to Projects"
-              onClick={() => {
-                window.location.href = "/scenes";
-              }}
+              onClick={() => navigate("/scenes")}
             >
               <i className="ti ti-arrow-left" style={{ fontSize: "16px" }}></i>
             </button>

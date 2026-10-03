@@ -4,12 +4,14 @@ import { AuthCallback } from "./components/AuthCallback";
 import { EditorApp } from "./components/EditorApp";
 
 import { useAuthSession } from "./hooks/useAuthSession";
+import { usePathname } from "./hooks/usePathname";
 
 import { AUTH_CALLBACK_PATH } from "./utils/authSession";
 
 
 export function App() {
-  const match = window.location.pathname.match(/^\/v\/([^/]+)$/);
+  const pathname = usePathname();
+  const match = pathname.match(/^\/v\/([^/]+)$/);
   const sceneId = match ? match[1] : null;
 
   // Published scenes stay public; everything else requires sign-in.
@@ -17,7 +19,7 @@ export function App() {
     return <PublicViewer sceneId={sceneId} />;
   }
 
-  if (window.location.pathname === AUTH_CALLBACK_PATH) {
+  if (pathname === AUTH_CALLBACK_PATH) {
     return <AuthCallback />;
   }
 
