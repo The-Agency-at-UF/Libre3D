@@ -2,7 +2,12 @@ import type { Entity } from "../store/useEditorStore";
 import { deleteModelAsset, listModelAssetIds } from "./modelAssetStore";
 import { deleteTextureAsset, listTextureAssetIds } from "./textureAssetStore";
 
-// Runs once per app load (wired via useEditorStore's onRehydrateStorage) to free
+// NOT WIRED UP since scenes moved to the cloud (persist v17): it only knows the
+// open scene's entities, so it would delete every other scene's imported assets,
+// which exist only in this browser until PR 5. PR 5 replaces it once local
+// assets are a cache of cloud copies.
+//
+// Ran once per app load (wired via useEditorStore's onRehydrateStorage) to free
 // OPFS storage for model/texture assets no entity references anymore. Deletion
 // is deliberately deferred to this reconciliation pass rather than happening at
 // entity-delete time: zundo's undo history is in-memory/session-scoped and never

@@ -58,17 +58,28 @@ export function App() {
   }
 
   if (editMatch) {
-    // Until PR 3 loads scenes by ID, every ID opens the one scene saved in this browser. Keyed so
-    // moving between scenes (e.g. with Back) remounts the editor rather than reusing it.
+    // Keyed so moving between scenes (e.g. with Back) remounts the editor: fresh managers, a fresh
+    // load, and no undo history carried over from the previous scene.
+    const editSceneId = decodePathSegment(editMatch[1]);
+
     return (
       <Suspense fallback={<PageStatus label="Opening the editor…" />}>
-        <EditorApp key={editMatch[1]} accountEmail={auth.email} />
+        <EditorApp key={editSceneId} sceneId={editSceneId} accountEmail={auth.email} />
       </Suspense>
     );
   }
 
   return <GalleryPage accountEmail={auth.email} />;
 }
+
+// A malformed escape (`/edit/%E0`) would throw; the raw text then just finds no scene.
+const decodePathSegment = (segment: string): string => {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+};
 
 // Navigating during render isn't allowed, so routes that only forward do it right after.
 function Redirect({ to }: { to: string }) {

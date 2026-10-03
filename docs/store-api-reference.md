@@ -4,6 +4,7 @@ Complete reference for the Libre3D Zustand store (`useEditorStore`). This guide 
 
 ## Quick Links
 - [State Fields](#state-fields)
+- [Loading a Scene](#loading-a-scene)
 - [Entity Management](#entity-management)
 - [Viewport & Transform](#viewport--transform)
 - [Settings & Config](#settings--config)
@@ -30,7 +31,7 @@ IDs of currently selected entities. Use `selectEntity()` or `selectEntities()` t
 ```typescript
 currentPublishId: string | null
 ```
-ID of the most recently published scene (for sharing links). Set via `setCurrentPublishId()`.
+ID of the open scene's most recent publish (for sharing links). Set via `setCurrentPublishId()`; reset by `loadScene`, and not saved, so it lasts one editing session (the server will own it per scene in PR 6).
 
 ### Viewport State
 ```typescript
@@ -50,7 +51,7 @@ viewportZoom: number
 ```
 HUD settings (FPS overlay, grid, axis guides, etc.). Zoom level is managed by controls and stored for persistence.
 
-### Scene Configuration (Persisted)
+### Scene Configuration (Saved with the scene)
 ```typescript
 sceneSettings: SceneSettingsConfig
 postProcessing: PostProcessingConfig
@@ -76,6 +77,20 @@ activeProfileId: string
 cameraProfiles: Record<string, CameraProfile>
 ```
 Named camera positions (viewport bookmarks). Default profile is always "personal".
+
+---
+
+## Loading a Scene
+
+#### `loadScene(content: StoredSceneContent | null) → void`
+Replaces the whole scene with a saved one, or with a new scene's starting content (a cube and the default light) when `content` is `null`. Called by `useOpenScene` when `/edit/:sceneId` opens.
+- **Deep merge**: `sceneSettings`, `postProcessing`, and `frame` are merged over the current defaults, so settings added since the scene was saved keep their defaults
+- **Camera profiles**: the "personal" profile is always present; an unknown `activeProfileId` falls back to it
+- **Resets** selection, preview mode, and `currentPublishId`
+- **Clears undo history**: the editor no longer reloads the page between scenes, so Ctrl+Z must not reach into the previous one, and the load itself isn't an undoable step
+
+#### `selectSceneContent(state) → SceneContent`
+Not an action: a selector (exported from the store module) returning the parts of the state that are saved as the scene: `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId`. Autosave subscribes to it (with `shallow` equality) and passes it to `toSceneDocument`.
 
 ---
 
@@ -453,7 +468,7 @@ deepMerge(oldSettings, newSettings) {
 
 ### Versioned Persistence
 
-The store uses `zundo` for undo/redo and `persist` middleware to save to localStorage.
+The store uses `zundo` for undo/redo and `persist` middleware to save editor preferences to localStorage. The scene itself is saved as a versioned scene document (`utils/sceneDocument.ts`) with its own `CURRENT_SCENE_SCHEMA_VERSION` and migrations; see [architecture.md](architecture.md#6-four-rules-you-have-to-follow), rule 3.
 
 **Versioning**: If you change the store schema (add/rename a field), **bump the `version` number** and add a migration:
 ```typescript
@@ -540,15 +555,17 @@ useEditorStore.subscribe(
 
 ## Quick Reference: Persistence Rules
 
-**Persisted (localStorage)**:
-- entities, selectedEntityIds, activeProfileId, cameraProfiles
+**Saved with the scene (cloud, per scene, via autosave)**:
+- entities, activeProfileId, cameraProfiles
 - sceneSettings, postProcessing, frame
+
+**Persisted (localStorage, `persist` v17)** — editor preferences:
 - activeTransformTool, projectionMode, transformSpace
 - hudOverlay, viewportZoom
 
-**NOT Persisted** (session-scoped):
-- currentPublishId, isPreviewMode, previewGlbUrl
-- pendingImportCount
+**NOT saved** (while the editor is open only):
+- selectedEntityIds, currentPublishId, isPreviewMode, previewGlbUrl
+- pendingImportCount, undo history
 
 ---
 
@@ -572,7 +589,8 @@ useEditorStore.subscribe(
 ### Check localStorage
 ```typescript
 // Browser console
-JSON.parse(localStorage.getItem("editor-store")) // JSON persisted state
+JSON.parse(localStorage.getItem("libre3d-scene-state")) // persisted editor preferences
+Object.keys(localStorage).filter((k) => k.startsWith("libre3d-scene-cache:")) // scenes with unsaved edits
 ```
 
 ### Undo/Redo
