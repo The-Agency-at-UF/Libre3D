@@ -21,6 +21,7 @@ import { ApiAuthError } from "../utils/apiFetch";
 import { getModelViewerCamera } from "../utils/previewCamera";
 import { getSafeColor } from "../utils/sceneColor";
 import { signOut } from "../utils/authSession";
+import { toggleTheme } from "../utils/theme";
 
 //import tsx hook for editor store
 import { initialFrameDefaults, useEditorStore } from "../store/useEditorStore";
@@ -66,54 +67,9 @@ export function EditorApp({ accountEmail }: EditorAppProps) {
   // Hook for right sidebar local UI state
   const sidebarUI = useRightSidebarState(currentPublishId);
 
-  const [theme, setTheme] = useState<"dark" | "light">(() => {
-    const saved = localStorage.getItem("libre3d-theme");
-    if (saved === "dark" || saved === "light") {
-      return saved;
-    }
-    const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-    return prefersDark ? "dark" : "light";
-  });
-
-  useEffect(() => {
-    const root = document.documentElement;
-    if (theme === "light") {
-      root.classList.add("light-theme");
-    } else {
-      root.classList.remove("light-theme");
-    }
-    // Only save to localStorage if user explicitly interacts,
-    // or keep the check clean:
-    if (localStorage.getItem("libre3d-theme") !== null) {
-      localStorage.setItem("libre3d-theme", theme);
-    }
-  }, [theme]);
-
-  // Listen to system theme preference changes if no manual override exists
-  useEffect(() => {
-    const saved = localStorage.getItem("libre3d-theme");
-    if (saved) return;
-
-    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    const handleChange = (e: MediaQueryListEvent) => {
-      setTheme(e.matches ? "dark" : "light");
-    };
-
-    mediaQuery.addEventListener("change", handleChange);
-    return () => {
-      mediaQuery.removeEventListener("change", handleChange);
-    };
-  }, []);
-
-  const handleToggleTheme = () => {
-    const nextTheme = theme === "dark" ? "light" : "dark";
-    setTheme(nextTheme);
-    localStorage.setItem("libre3d-theme", nextTheme); // Explicit manual override
-  };
-
   // Left sidebar width — non-persisted-store UI state (local component state,
-  // per the "no parallel stores" rule), mirroring the theme persistence
-  // pattern above via a plain localStorage key instead of useEditorStore.
+  // per the "no parallel stores" rule), persisted like the theme (utils/theme.ts)
+  // via a plain localStorage key instead of useEditorStore.
   const LEFT_SIDEBAR_MIN_WIDTH = 220;
   const LEFT_SIDEBAR_MAX_WIDTH = 520;
   const [leftSidebarWidth, setLeftSidebarWidth] = useState<number>(() => {
@@ -319,7 +275,7 @@ export function EditorApp({ accountEmail }: EditorAppProps) {
               onNewFile={handleNewFile}
               onDuplicate={handleDuplicate}
               onResetCamera={handleResetCamera}
-              onToggleTheme={handleToggleTheme}
+              onToggleTheme={toggleTheme}
               showAxisGuides={showAxisGuides}
               onToggleAxisGuides={handleToggleAxisGuides}
               accountEmail={accountEmail}

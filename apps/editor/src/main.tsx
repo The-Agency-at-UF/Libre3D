@@ -8,7 +8,10 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./App";
+import { initTheme } from "./utils/theme";
 import "./styles/index.css";
+
+initTheme();
 
 const rootElement = document.getElementById("root");
 
