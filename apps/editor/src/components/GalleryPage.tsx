@@ -11,6 +11,7 @@ import { SidebarLayout } from "./ui/SidebarLayout";
 import { useStoredChoice } from "../hooks/useStoredChoice";
 
 import { signOut } from "../utils/authSession";
+import { clearLegacyScene, findLegacyScene } from "../utils/legacyScene";
 import { HOME_PATH, navigate } from "../utils/navigation";
 import { ApiAuthError } from "../utils/apiFetch";
 import { createScene, deleteScene, listScenes, renameScene, type SceneSummary } from "../utils/sceneLibrary";
@@ -43,6 +44,25 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOrder, setSortOrder] = useStoredChoice<SortOrder>("libre3d-gallery-sort", SORT_ORDERS, "modified");
   const [viewMode, setViewMode] = useStoredChoice<ViewMode>("libre3d-gallery-view", VIEW_MODES, "grid");
+  // A scene saved in this browser before cloud saving, offered once for upload (legacyScene.ts).
+  const [legacyScene, setLegacyScene] = useState<unknown | null>(null);
+  const [isUploadingLegacy, setIsUploadingLegacy] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+
+    findLegacyScene()
+      .then((document) => {
+        if (active) {
+          setLegacyScene(document);
+        }
+      })
+      .catch((error: unknown) => console.error("Failed to check for a scene saved in this browser.", error));
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     // Ignore a response that arrives after the page was left.
@@ -123,6 +143,29 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
     }
   };
 
+  const handleAddLegacyScene = async () => {
+    setIsUploadingLegacy(true);
+
+    try {
+      const created = await createScene({ name: "Untitled scene", document: legacyScene });
+      clearLegacyScene();
+      setLegacyScene(null);
+      updateScenes((scenes) => [created, ...scenes]);
+    } catch (error) {
+      console.error("Failed to upload the scene saved in this browser.", error);
+      window.alert(error instanceof ApiAuthError ? error.message : "The scene could not be added. Try again.");
+    } finally {
+      setIsUploadingLegacy(false);
+    }
+  };
+
+  const handleDiscardLegacyScene = () => {
+    if (window.confirm("Discard the scene saved in this browser? This can't be undone.")) {
+      clearLegacyScene();
+      setLegacyScene(null);
+    }
+  };
+
   const sidebar = (
     <>
       <AccountMenu email={accountEmail} />
@@ -147,6 +190,22 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
       {gallery.status === "loading" && <p className="page-message">Loading your scenes…</p>}
 
       {gallery.status === "error" && <p className="page-message page-message--error">{gallery.message}</p>}
+
+      {legacyScene !== null && gallery.status === "ready" && (
+        <div className="gallery-notice" role="region" aria-label="Scene saved in this browser">
+          <p className="page-message">
+            This browser has a scene saved before scenes moved to the cloud. Add it to your scenes to keep it.
+          </p>
+          <div className="gallery-notice-actions">
+            <Button variant="primary" onClick={handleAddLegacyScene} disabled={isUploadingLegacy}>
+              {isUploadingLegacy ? "Adding…" : "Add to my scenes"}
+            </Button>
+            <Button variant="ghost" onClick={handleDiscardLegacyScene} disabled={isUploadingLegacy}>
+              Discard
+            </Button>
+          </div>
+        </div>
+      )}
 
       {gallery.status === "ready" && allScenes.length === 0 && (
         <div className="gallery-empty">

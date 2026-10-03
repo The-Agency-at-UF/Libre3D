@@ -56,8 +56,9 @@ export const listScenes = async (): Promise<SceneSummary[]> => {
   return scenes;
 };
 
-export const createScene = async (): Promise<{ sceneId: string }> =>
-  requestJson<SceneSummary>(SCENES_ENDPOINT, { method: "POST", body: JSON.stringify({}) });
+/** Creates a scene; `document` only when uploading a scene saved in the browser before cloud saving. */
+export const createScene = async (options: { name?: string; document?: unknown } = {}): Promise<SceneSummary> =>
+  requestJson<SceneSummary>(SCENES_ENDPOINT, { method: "POST", body: JSON.stringify(options) });
 
 /** A scene's row as the editor needs it: the summary plus the revision its next save builds on. */
 export interface OpenedScene extends SceneSummary {

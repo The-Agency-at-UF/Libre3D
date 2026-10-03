@@ -661,3 +661,22 @@
   left: auto;
   right: 0;
 }
+
+/* Offer to upload the scene saved in this browser before cloud saving. */
+.gallery-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+  padding: var(--space-4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+}
+
+.gallery-notice-actions {
+  display: flex;
+  gap: var(--space-2);
+}
