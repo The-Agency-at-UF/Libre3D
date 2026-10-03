@@ -8,14 +8,10 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 
 import { App } from "./App";
-import { useEditorStore } from "./store/useEditorStore";
+import { initTheme } from "./utils/theme";
 import "./styles/index.css";
 
-// Dev-only console handle for manual smoke tests (per CLAUDE.md there is no
-// test suite — store actions are exercised from the devtools console).
-if (import.meta.env.DEV) {
-  (window as unknown as Record<string, unknown>).__libre3dStore = useEditorStore;
-}
+initTheme();
 
 const rootElement = document.getElementById("root");
 

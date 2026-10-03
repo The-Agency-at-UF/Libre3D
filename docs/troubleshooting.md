@@ -67,7 +67,7 @@ Common issues contributors encounter and how to fix them.
 
 ### "Environment variables not loading (AWS / sign-in)"
 
-**Error**: Publish fails with AWS errors, or the sign-in screen says sign-in isn't configured
+**Error**: Publish fails with AWS errors, or the landing page says sign-in isn't configured
 
 **Solutions**:
 1. Create `.env` in repo root (not in `apps/editor/`); both the browser and the dev API read it from there:
