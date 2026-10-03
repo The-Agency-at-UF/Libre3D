@@ -1471,3 +1471,14 @@ export const useEditorStore = create<EditorState>()(
     )
   )
 );
+
+// zundo wraps set() to snapshot partialize(get()) first, and get() is still undefined while create()
+// runs, so persist's first hydration throws right after building the loaded state. The store still
+// starts from that state (persist returns it), but a migrated state is never written back and
+// hasHydrated() stays false: until something else is set, every load migrates again (and v17 would
+// re-offer a pre-cloud scene the user already added or discarded). Hydrating again now that the
+// store exists writes the migration back once. The load is not an undoable step.
+if (!useEditorStore.persist.hasHydrated()) {
+  void useEditorStore.persist.rehydrate();
+  useEditorStore.temporal.getState().clear();
+}
