@@ -177,6 +177,8 @@ function HierarchyContextMenu({
   const removeEntity = useEditorStore((state) => state.removeEntity);
   const groupEntities = useEditorStore((state) => state.groupEntities);
   const ungroupEntity = useEditorStore((state) => state.ungroupEntity);
+  // View only: everything but Frame Selected would change the scene.
+  const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -192,7 +194,7 @@ function HierarchyContextMenu({
     .filter((entity): entity is Entity => !!entity);
   const targetEntity = menu.targetId ? byId.get(menu.targetId) : undefined;
 
-  const canRename = !!targetEntity && !targetEntity.locked;
+  const canRename = !isReadOnly && !!targetEntity && !targetEntity.locked;
 
   const moveRoots = filterMoveRoots(entities, selectedEntityIds);
   const parentIds = new Set(moveRoots.map((id) => byId.get(id)?.parentId ?? null));
@@ -239,7 +241,7 @@ function HierarchyContextMenu({
         <button
           className="hamburger-dropdown-btn"
           type="button"
-          disabled={selected.length < 2}
+          disabled={isReadOnly || selected.length < 2}
           onClick={() => run(onBatchRename)}
         >
           <span>Batch Rename…</span>
@@ -247,7 +249,7 @@ function HierarchyContextMenu({
         <button
           className="hamburger-dropdown-btn"
           type="button"
-          disabled={!hasSelection}
+          disabled={isReadOnly || !hasSelection}
           onClick={() => run(() => duplicateEntity(useEditorStore.getState().selectedEntityIds))}
         >
           <span>Duplicate</span>
@@ -257,7 +259,7 @@ function HierarchyContextMenu({
         <button
           className="hamburger-dropdown-btn"
           type="button"
-          disabled={!canGroup}
+          disabled={isReadOnly || !canGroup}
           onClick={() => run(() => groupEntities(useEditorStore.getState().selectedEntityIds))}
         >
           <span>Group Selection</span>
@@ -266,7 +268,7 @@ function HierarchyContextMenu({
         <button
           className="hamburger-dropdown-btn"
           type="button"
-          disabled={selectedGroups.length === 0}
+          disabled={isReadOnly || selectedGroups.length === 0}
           onClick={() => run(() => selectedGroups.forEach((group) => ungroupEntity(group.id)))}
         >
           <span>Ungroup</span>
@@ -290,7 +292,7 @@ function HierarchyContextMenu({
         <button
           className="hamburger-dropdown-btn"
           type="button"
-          disabled={deletableIds.length === 0}
+          disabled={isReadOnly || deletableIds.length === 0}
           onClick={() => run(() => removeEntity(deletableIds))}
         >
           <span>Delete</span>
@@ -328,6 +330,7 @@ function HierarchyItem({
   const toggleVisibility = useEditorStore((state) => state.toggleVisibility);
   const toggleLock = useEditorStore((state) => state.toggleLock);
   const renameEntity = useEditorStore((state) => state.renameEntity);
+  const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
 
   const [editName, setEditName] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -354,7 +357,7 @@ function HierarchyItem({
 
   const handleDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (entity.locked) return; // Cannot rename locked elements
+    if (entity.locked || isReadOnly) return; // Cannot rename locked elements, or in a view-only scene
     onRequestRename(entity.id);
   };
 
@@ -387,7 +390,7 @@ function HierarchyItem({
       style={{ paddingLeft: `${ROW_INDENT_BASE_REM + visualDepth * ROW_INDENT_STEP_REM}rem` }}
       data-entity-id={entity.id}
       onContextMenu={(e) => onRowContextMenu(entity.id, e)}
-      draggable={!isRenaming}
+      draggable={!isRenaming && !isReadOnly}
       onDragStart={(e) => onRowDragStart(entity.id, e)}
       onDragOver={(e) => onRowDragOver(entity.id, e)}
       onDrop={(e) => onRowDrop(entity.id, e)}
@@ -454,6 +457,7 @@ function HierarchyItem({
             className={`hierarchy-action-btn${entity.visible ? "" : " inactive"}`}
             type="button"
             aria-label={entity.visible ? "Hide entity" : "Show entity"}
+            disabled={isReadOnly}
             onClick={(e) => {
               e.stopPropagation();
               toggleVisibility(entity.id);
@@ -465,6 +469,7 @@ function HierarchyItem({
             className={`hierarchy-action-btn${entity.locked ? " active-locked" : ""}`}
             type="button"
             aria-label={entity.locked ? "Unlock entity" : "Lock entity"}
+            disabled={isReadOnly}
             onClick={(e) => {
               e.stopPropagation();
               toggleLock(entity.id);
@@ -476,7 +481,7 @@ function HierarchyItem({
             className="editor-tree-delete"
             type="button"
             aria-label={`Delete ${entity.name}`}
-            disabled={entity.locked}
+            disabled={entity.locked || isReadOnly}
             onClick={(event) => {
               event.stopPropagation();
               removeEntity([entity.id]);
@@ -1030,7 +1035,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       case "F2": {
         if (!activeId) return;
         const entity = entities.find((e) => e.id === activeId);
-        if (!entity || entity.locked) return;
+        if (!entity || entity.locked || useEditorStore.getState().readOnlyReason) return;
         event.preventDefault();
         setRenamingId(activeId);
         break;

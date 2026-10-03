@@ -8,9 +8,10 @@
  * Timing: a save goes out 2 s after the last edit, or after 10 s of continuous editing at the
  * latest (dragging a slider never pauses for 2 s). One save is in flight at a time; edits made
  * during it are saved right after. Failures retry with backoff, and immediately when the browser
- * comes back online. A conflict (saved from somewhere else), a deleted scene, or a lost session
- * stops saving until the page is reloaded: retrying those would fail the same way, or overwrite
- * someone's newer save.
+ * comes back online. A conflict (saved from somewhere else), a deleted scene, a lost session, or
+ * losing the editing lock (another tab or device took the scene over) stops this autosaver for good:
+ * retrying those would fail the same way, or overwrite someone's newer save. Getting the lock back
+ * starts a new autosaver (useSceneLock.ts).
  */
 import { ApiAuthError } from "./apiFetch";
 import { SceneApiError, saveScene } from "./sceneLibrary";
@@ -22,7 +23,9 @@ export type SaveStatus =
   | { kind: "error"; message: string; willRetry: boolean }
   | { kind: "conflict" }
   | { kind: "deleted" }
-  | { kind: "signedOut" };
+  | { kind: "signedOut" }
+  /** Another editor session holds the scene's lock, so this tab is read-only. */
+  | { kind: "openElsewhere" };
 
 interface SceneAutosaverOptions {
   sceneId: string;
@@ -49,7 +52,7 @@ export class SceneAutosaver {
   private inFlight: Promise<void> | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private retryCount = 0;
-  /** Set by a conflict, deletion, lost session, or dispose: no more saves from this instance. */
+  /** Set by a conflict, deletion, lost session or lock, or dispose: no more saves from this instance. */
   private isStopped = false;
 
   constructor(options: SceneAutosaverOptions) {
@@ -147,8 +150,10 @@ export class SceneAutosaver {
       this.firstChangeAt = Date.now();
     }
 
-    if (error instanceof SceneApiError && (error.status === 409 || error.status === 404)) {
-      this.stop(error.status === 409 ? { kind: "conflict" } : { kind: "deleted" });
+    if (error instanceof SceneApiError && (error.status === 409 || error.status === 404 || error.status === 423)) {
+      this.stop(
+        error.status === 423 ? { kind: "openElsewhere" } : error.status === 409 ? { kind: "conflict" } : { kind: "deleted" },
+      );
       return;
     }
 

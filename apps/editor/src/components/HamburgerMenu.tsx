@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 
 interface HamburgerMenuProps {
+  /** False while the scene is view only: the items that would change it are disabled. */
+  canEdit: boolean;
   onNewFile: () => void;
   onDuplicate: () => void;
   onResetCamera: () => void;
@@ -19,6 +21,7 @@ interface HamburgerMenuProps {
  *          (New Scene, Duplicate, Undo/Redo, Reset Camera, Toggle Theme).
  */
 export function HamburgerMenu({
+  canEdit,
   onNewFile,
   onDuplicate,
   onResetCamera,
@@ -75,6 +78,7 @@ export function HamburgerMenu({
             <button
               className="hamburger-dropdown-btn"
               type="button"
+              disabled={!canEdit}
               onClick={() => handleItemClick(onDuplicate)}
             >
               <span>
@@ -87,6 +91,7 @@ export function HamburgerMenu({
             <button
               className="hamburger-dropdown-btn"
               type="button"
+              disabled={!canEdit}
               onClick={() => handleItemClick(() => useEditorStore.temporal.getState().undo())}
             >
               <span>
@@ -98,6 +103,7 @@ export function HamburgerMenu({
             <button
               className="hamburger-dropdown-btn"
               type="button"
+              disabled={!canEdit}
               onClick={() => handleItemClick(() => useEditorStore.temporal.getState().redo())}
             >
               <span>
@@ -130,6 +136,7 @@ export function HamburgerMenu({
             <button
               className="hamburger-dropdown-btn"
               type="button"
+              disabled={!canEdit}
               onClick={() => handleItemClick(onToggleAxisGuides)}
             >
               <span>

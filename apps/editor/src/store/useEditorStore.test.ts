@@ -226,6 +226,91 @@ describe("loadScene", () => {
   });
 });
 
+describe("read-only (the scene is open for editing elsewhere)", () => {
+  const viewOnlyStore = async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [entity("cube-1"), light] });
+    useEditorStore.getState().setReadOnly("openElsewhere");
+    return useEditorStore;
+  };
+
+  it("drops every action that would change the scene's content", async () => {
+    const useEditorStore = await viewOnlyStore();
+    const before = useEditorStore.getState();
+    const store = useEditorStore.getState();
+
+    store.addEntity("torus");
+    store.removeEntity(["cube-1"]);
+    store.duplicateEntity(["cube-1"]);
+    store.groupEntities(["cube-1", "directional-light-1"]);
+    store.renameEntity("cube-1", "Renamed");
+    store.toggleVisibility("cube-1");
+    store.updateEntityTransform("cube-1", { position: [5, 5, 5] });
+    store.updateSceneSettings({ bgColor: "#ff0000" });
+    store.updatePostProcessing({ bloom: { enabled: false } });
+    store.updateFrameSettings({ mode: "fixed" });
+    store.addMaterialLayer("cube-1", "color");
+    store.setEditorState({ sceneSettings: { ...before.sceneSettings, bgColor: "#00ff00" } });
+
+    const after = useEditorStore.getState();
+    expect(after.entities).toBe(before.entities);
+    expect(after.sceneSettings).toBe(before.sceneSettings);
+    expect(after.postProcessing).toBe(before.postProcessing);
+    expect(after.frame).toBe(before.frame);
+  });
+
+  it("drops a mixed update whole rather than applying part of it", async () => {
+    const useEditorStore = await viewOnlyStore();
+    const before = useEditorStore.getState();
+
+    useEditorStore.getState().setEditorState({ viewportZoom: 140, frame: { ...before.frame, width: 640 } });
+
+    expect(useEditorStore.getState()).toMatchObject({ viewportZoom: before.viewportZoom, frame: before.frame });
+  });
+
+  it("still lets you select, move the camera, and change editor preferences", async () => {
+    const useEditorStore = await viewOnlyStore();
+
+    useEditorStore.getState().selectEntity("cube-1");
+    useEditorStore.getState().updateProfileData("personal", { position: [9, 9, 9] });
+    useEditorStore.getState().setEditorState({ viewportZoom: 140, activeTransformTool: "rotate" });
+
+    expect(useEditorStore.getState()).toMatchObject({ selectedEntityIds: ["cube-1"], viewportZoom: 140, activeTransformTool: "rotate" });
+    expect(useEditorStore.getState().cameraProfiles.personal.position).toEqual([9, 9, 9]);
+  });
+
+  it("still shows the latest saved scene through loadScene", async () => {
+    const useEditorStore = await viewOnlyStore();
+
+    useEditorStore.getState().loadScene({ entities: [entity("sphere-1", { type: "sphere" })] });
+
+    expect(useEditorStore.getState().entities.map((e) => e.id)).toEqual(["sphere-1"]);
+    expect(useEditorStore.getState().readOnlyReason).toBe("openElsewhere");
+  });
+
+  it("clears undo history on entering it, so Ctrl+Z can't step the scene back either", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+    useEditorStore.getState().addEntity("torus");
+
+    useEditorStore.getState().setReadOnly("openElsewhere");
+    useEditorStore.temporal.getState().undo();
+
+    expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
+    expect(useEditorStore.getState().entities.map((e) => e.type)).toEqual(["directionalLight", "torus"]);
+  });
+
+  it("edits again once it's lifted, and is never persisted", async () => {
+    const useEditorStore = await viewOnlyStore();
+
+    expect(persisted().state.readOnlyReason).toBeUndefined();
+    useEditorStore.getState().setReadOnly(null);
+    useEditorStore.getState().addEntity("torus");
+
+    expect(useEditorStore.getState().entities.map((e) => e.type)).toContain("torus");
+  });
+});
+
 describe("store → document → cloud → store", () => {
   it("brings back exactly the scene that was saved", async () => {
     const { selectSceneContent, useEditorStore } = await loadStore();

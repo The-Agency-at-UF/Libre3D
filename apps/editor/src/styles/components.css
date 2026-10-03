@@ -621,6 +621,16 @@
   color: #fbbf24;
 }
 
+/* View only: the eye/lock still show the state, but can't be clicked. */
+.hierarchy-action-btn:disabled {
+  cursor: default;
+}
+
+.hierarchy-action-btn:disabled:hover {
+  color: inherit;
+  background: transparent;
+}
+
 .editor-tree-delete:disabled {
   opacity: 0.3;
   cursor: not-allowed;
@@ -1059,6 +1069,70 @@
   color: var(--red);
 }
 
+/* Where the floating toolbar sits, in the same floating chrome, while the scene is view only. */
+.read-only-banner {
+  position: absolute;
+  top: 1.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  /* Narrow enough to stay clear of the navigation gizmo in the top-right corner. */
+  width: max-content;
+  max-width: min(400px, calc(100% - 2.5rem));
+  padding: 0.5rem 0.5rem 0.5rem 0.875rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-panel);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: var(--font-size-xs);
+}
+
+.read-only-banner-icon {
+  color: var(--amber);
+  font-size: 18px;
+}
+
+.read-only-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.read-only-banner-text strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.read-only-banner-action {
+  flex-shrink: 0;
+  padding: 6px 12px;
+}
+
+.read-only-banner-action:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Inspector controls for the scene's content, disabled while it's view only. */
+.inspector-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.inspector-fieldset:disabled {
+  opacity: 0.6;
+}
+
 .save-status-action {
   padding: 0;
   border: none;
@@ -1131,6 +1205,15 @@
 
 .hamburger-dropdown-btn:hover {
   background: var(--bg-hover);
+}
+
+.hamburger-dropdown-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.hamburger-dropdown-btn:disabled:hover {
+  background: transparent;
 }
 
 .hamburger-dropdown-shortcut {
