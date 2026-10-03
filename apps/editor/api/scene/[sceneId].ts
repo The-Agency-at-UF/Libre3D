@@ -8,7 +8,8 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-import { getPublishedScene } from "../../src/utils/awsPublishHandler";
+// `.js` is required: Vercel runs this under Node's ES module loader (see api/publish.ts).
+import { getPublishedScene } from "../../src/utils/awsPublishHandler.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== "GET") {
