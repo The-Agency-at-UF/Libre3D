@@ -12,8 +12,11 @@
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-import { createPublishSession, resolveRequestBaseUrl } from "../src/utils/awsPublishHandler";
-import { verifyAuth } from "../src/utils/verifyAuth";
+// The `.js` extensions are required: this package is `"type": "module"`, and on Vercel these files
+// run under Node's ES module loader, which doesn't guess extensions (Vite does, so `pnpm dev` works
+// either way). Without them the function crashes at load with ERR_MODULE_NOT_FOUND.
+import { createPublishSession, resolveRequestBaseUrl } from "../src/utils/awsPublishHandler.js";
+import { verifyAuth } from "../src/utils/verifyAuth.js";
 
 const readCurrentPublishId = (body: unknown): string | null => {
   if (!body) {
