@@ -142,5 +142,18 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
     },
+    build: {
+      // Three.js core alone is ~550 kB minified and can't usefully shrink. The limit sits just
+      // above it so the warning still catches any other chunk (especially the entry) growing.
+      chunkSizeWarningLimit: 600,
+      rollupOptions: {
+        output: {
+          // Three.js core in its own chunk: it changes far less often than the editor, so browsers
+          // keep it cached across deploys. Only the lazily loaded editor imports it.
+          // Matched by package path: pnpm resolves the alias above to `.pnpm/three@…/node_modules/three`.
+          manualChunks: (id) => (id.replace(/\\/g, "/").includes("/node_modules/three/build/") ? "three" : undefined),
+        },
+      },
+    },
   };
 });
