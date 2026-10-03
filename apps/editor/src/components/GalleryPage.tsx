@@ -8,6 +8,8 @@ import { NavItem } from "./ui/NavItem";
 import { SearchField } from "./ui/SearchField";
 import { SidebarLayout } from "./ui/SidebarLayout";
 
+import { useStoredChoice } from "../hooks/useStoredChoice";
+
 import { signOut } from "../utils/authSession";
 import { HOME_PATH, navigate } from "../utils/navigation";
 import { createScene, listScenes, type SceneSummary } from "../utils/sceneLibrary";
@@ -22,8 +24,11 @@ type GalleryState =
   | { status: "error"; message: string }
   | { status: "ready"; scenes: SceneSummary[] };
 
-type SortOrder = "modified" | "name";
-type ViewMode = "grid" | "list";
+const SORT_ORDERS = ["modified", "name"] as const;
+const VIEW_MODES = ["grid", "list"] as const;
+
+type SortOrder = (typeof SORT_ORDERS)[number];
+type ViewMode = (typeof VIEW_MODES)[number];
 
 /*
  * BLOCK: GalleryPage (React Component)
@@ -35,8 +40,8 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
   const [gallery, setGallery] = useState<GalleryState>({ status: "loading" });
   const [isCreating, setIsCreating] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortOrder, setSortOrder] = useState<SortOrder>("modified");
-  const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [sortOrder, setSortOrder] = useStoredChoice<SortOrder>("libre3d-gallery-sort", SORT_ORDERS, "modified");
+  const [viewMode, setViewMode] = useStoredChoice<ViewMode>("libre3d-gallery-view", VIEW_MODES, "grid");
 
   useEffect(() => {
     // Ignore a response that arrives after the page was left.
