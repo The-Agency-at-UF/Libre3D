@@ -28,7 +28,7 @@ graph LR
     end
 ```
 
-`App.tsx` also hand-routes `/v/:sceneId` to the read-only `PublicViewer` instead of the editor — that's the published-scene view, and it shares the same viewport code with all the editing chrome stripped out.
+The editor is one page of several. `App.tsx` hand-routes between them (no router library; `navigate()` in `utils/navigation.ts` changes pages without a reload): `/` is the landing page, `/scenes` the gallery, `/edit/:sceneId` the editor above (`EditorApp.tsx`, lazy-loaded so the other pages never download Three.js), and `/v/:sceneId` the read-only `PublicViewer` for published scenes. Every route also needs a rewrite in `vercel.json`.
 
 ---
 
