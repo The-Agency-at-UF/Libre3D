@@ -15,7 +15,16 @@
  * zundo's undo history. Components read it through `useAuthSession`.
  */
 
-export type AuthSnapshot = { status: "signedIn"; email: string | null } | { status: "signedOut" };
+import { clearAllSceneCaches } from "./sceneCache";
+
+/**
+ * `userId` is the ID token's `sub`, the same ID the server takes from the verified access token.
+ * Here it's unverified, so it only keys this browser's per-user data (sceneCache.ts); the server
+ * never trusts anything the browser says about who it is.
+ */
+export type AuthSnapshot =
+  | { status: "signedIn"; email: string | null; userId: string | null }
+  | { status: "signedOut" };
 
 interface StoredTokens {
   accessToken: string;
@@ -104,10 +113,17 @@ const buildSnapshot = (): AuthSnapshot => {
     return { status: "signedOut" };
   }
 
-  // Display only. Nothing trusts this unverified claim; the server verifies the access token itself.
-  const email = decodeJwtPayload(tokens.idToken)?.email;
+  // Display and local keying only. Nothing trusts these unverified claims; the server verifies the
+  // access token itself.
+  const claims = decodeJwtPayload(tokens.idToken);
+  const email = claims?.email;
+  const userId = claims?.sub;
 
-  return { status: "signedIn", email: typeof email === "string" ? email : null };
+  return {
+    status: "signedIn",
+    email: typeof email === "string" ? email : null,
+    userId: typeof userId === "string" ? userId : null,
+  };
 };
 
 // useSyncExternalStore needs the same object back until something changes.
@@ -343,6 +359,8 @@ export const getAccessToken = async (): Promise<string | null> => {
 export const signOut = async (): Promise<void> => {
   const tokens = readTokens();
   clearTokens();
+  // Unsaved scene edits kept in this browser belong to this user; the next user mustn't find them.
+  clearAllSceneCaches();
 
   if (!isAuthConfigured()) {
     return;

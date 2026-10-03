@@ -26,13 +26,16 @@ export type SaveStatus =
 
 interface SceneAutosaverOptions {
   sceneId: string;
-  /** The revision the scene was opened at; each save builds on the last. */
-  revision: number;
+  /**
+   * The cloud revision the next save builds on. Read at each save, and owned by the caller (updated
+   * from onSaved), so a new autosaver for the same scene picks up a save an old one just made.
+   */
+  readRevision: () => number;
   /** The scene document to save, read at the moment the save goes out. */
   readDocument: () => unknown;
   onStatus: (status: SaveStatus) => void;
-  /** After every successful save. */
-  onSaved?: (revision: number) => void;
+  /** After every successful save; `hasPendingEdits` when edits made during it still need saving. */
+  onSaved: (revision: number, hasPendingEdits: boolean) => void;
 }
 
 const DEBOUNCE_MS = 2_000;
@@ -41,7 +44,6 @@ const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000];
 
 export class SceneAutosaver {
   private readonly options: SceneAutosaverOptions;
-  private revision: number;
   private isDirty = false;
   private firstChangeAt = 0;
   private inFlight: Promise<void> | null = null;
@@ -52,7 +54,6 @@ export class SceneAutosaver {
 
   constructor(options: SceneAutosaverOptions) {
     this.options = options;
-    this.revision = options.revision;
     window.addEventListener("online", this.handleOnline);
   }
 
@@ -97,7 +98,7 @@ export class SceneAutosaver {
     this.firstChangeAt = 0;
     this.options.onStatus({ kind: "saving" });
 
-    this.inFlight = saveScene(this.options.sceneId, this.options.readDocument(), this.revision)
+    this.inFlight = saveScene(this.options.sceneId, this.options.readDocument(), this.options.readRevision())
       .then(
         (result) => this.handleSaved(result.revision),
         (error: unknown) => this.handleFailed(error),
@@ -123,9 +124,8 @@ export class SceneAutosaver {
   }
 
   private handleSaved(revision: number): void {
-    this.revision = revision;
     this.retryCount = 0;
-    this.options.onSaved?.(revision);
+    this.options.onSaved(revision, this.isDirty);
 
     if (this.isStopped) {
       return;

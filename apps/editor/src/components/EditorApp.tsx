@@ -63,7 +63,9 @@ export function EditorApp({ sceneId, accountEmail }: EditorAppProps) {
     case "loading":
       return <PageStatus label="Opening the scene…" />;
     case "ready":
-      return <EditorWorkspace scene={openScene.scene} accountEmail={accountEmail} />;
+      return (
+        <EditorWorkspace scene={openScene.scene} hasRecoveredEdits={openScene.hasRecoveredEdits} accountEmail={accountEmail} />
+      );
     case "notFound":
       return (
         <PageStatus label="This scene doesn't exist, or it was deleted." isWorking={false}>
@@ -87,10 +89,11 @@ export function EditorApp({ sceneId, accountEmail }: EditorAppProps) {
 
 interface EditorWorkspaceProps {
   scene: OpenedScene;
+  hasRecoveredEdits: boolean;
   accountEmail: string | null;
 }
 
-function EditorWorkspace({ scene, accountEmail }: EditorWorkspaceProps) {
+function EditorWorkspace({ scene, hasRecoveredEdits, accountEmail }: EditorWorkspaceProps) {
   const entities = useEditorStore((state) => state.entities) ?? [];
   const currentPublishId = useEditorStore((state) => state.currentPublishId);
   const setCurrentPublishId = useEditorStore((state) => state.setCurrentPublishId);
@@ -165,7 +168,7 @@ function EditorWorkspace({ scene, accountEmail }: EditorWorkspaceProps) {
     window.addEventListener("pointerup", onPointerUp);
   };
 
-  const autosave = useSceneAutosave(scene);
+  const autosave = useSceneAutosave(scene, { hasRecoveredEdits });
 
   // Signing out leaves the app at once, so give pending edits a few seconds to save first.
   const handleSignOut = async () => {
