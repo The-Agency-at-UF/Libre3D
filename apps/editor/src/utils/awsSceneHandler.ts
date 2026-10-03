@@ -8,9 +8,19 @@
  *   GET    /api/scenes       the caller's scenes, newest first
  *   POST   /api/scenes       create one `{ name?, document? }`
  *   GET    /api/scenes/:id   one scene's row and document (`null` until its first save)
- *   PUT    /api/scenes/:id   save `{ document, baseRevision }`; 409 when another save got there first
+ *   PUT    /api/scenes/:id   save `{ document, baseRevision, sessionId }`; 423 unless that editor
+ *                             session holds the lock, 409 when another save got there first
  *   PATCH  /api/scenes/:id   rename `{ name }`
  *   DELETE /api/scenes/:id   delete the row and its S3 objects
+ *   POST   /api/scenes/:id/lock   claim or renew the editing lock `{ sessionId, takeOver? }`; 423 when
+ *                                  another session holds it
+ *   DELETE /api/scenes/:id/lock   release it `{ sessionId }` (a no-op unless that session holds it)
+ *
+ * The lock is a lease on the row (`lockHolder`, `lockUserId`, `lockExpiresAt`): one editor session
+ * (a browser tab) holds it for 60 s at a time and renews it while open; saves renew it too. Only the
+ * holder can save, so a second tab or device is read-only even if its UI misbehaves. `takeOver`
+ * moves the lock regardless; the old holder's next save or renewal finds out. Times are this
+ * server's clock only.
  *
  * The Vercel functions (`api/scenes/index.ts`, `api/scenes/[sceneId].ts`) and the Vite dev
  * middleware are thin adapters around `handleScenesRequest`, so routing, validation, and
@@ -52,6 +62,8 @@ export interface SceneApiRequest {
   method: string;
   /** The `:sceneId` path segment, or null for the collection (`/api/scenes`). */
   sceneId: string | null;
+  /** `lock` for `/api/scenes/:sceneId/lock`; absent for the scene itself. */
+  subresource?: "lock" | null;
   headers: IncomingHttpHeaders;
   /** Parsed JSON (Vercel) or the raw string (Vite middleware); either is accepted. */
   body: unknown;
@@ -82,6 +94,12 @@ const MAX_NAME_LENGTH = 120;
 // scene is a few hundred kB at most. Well under Vercel's 4.5 MB request body limit.
 const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
 const SCENE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Editor sessions are random UUIDs made per tab (editorSession.ts); anything else is malformed.
+const SESSION_ID_PATTERN = SCENE_ID_PATTERN;
+// How long a claim or save holds the lock. The editor renews every 20 s, so a closed tab that
+// couldn't release frees the scene within a minute.
+const LOCK_LEASE_MS = 60_000;
+const LOCKED_MESSAGE = "This scene is open somewhere else.";
 
 const json = (status: number, body: unknown, headers?: Record<string, string>): SceneApiResponse => ({
   status,
@@ -124,6 +142,9 @@ const parseBody = (body: unknown): Record<string, unknown> => {
     ? (parsed as Record<string, unknown>)
     : {};
 };
+
+const readSessionId = (value: unknown): string | null =>
+  typeof value === "string" && SESSION_ID_PATTERN.test(value) ? value : null;
 
 const readName = (value: unknown): string | null => {
   if (typeof value !== "string") {
@@ -178,6 +199,16 @@ const rowKey = (userId: string, sceneId: string): Record<string, AttributeValue>
   userId: { S: userId },
   sceneId: { S: sceneId },
 });
+
+// 423 Locked: another editor session holds the scene. `heldByYou` is false only once scenes can be
+// shared; today every row belongs to one user, so it's always one of their own tabs or devices.
+const lockedResponse = (item: Record<string, AttributeValue>, userId: string): SceneApiResponse =>
+  errorResponse(423, LOCKED_MESSAGE, {
+    revision: Number(item.revision?.N ?? "0"),
+    heldByYou: (item.lockUserId?.S ?? userId) === userId,
+  });
+
+const lockExpiry = (): string => String(Date.now() + LOCK_LEASE_MS);
 
 const toSummary = (item: Record<string, AttributeValue>): SceneSummaryBody => ({
   sceneId: item.sceneId?.S ?? "",
@@ -322,15 +353,25 @@ const saveScene = async (
     return errorResponse(400, "baseRevision must be the revision this save was based on.");
   }
 
+  const sessionId = readSessionId(body.sessionId);
+
+  if (!sessionId) {
+    // A tab still running the editor from before the lock existed. 409 makes it stop and offer
+    // Reload (its "changed somewhere else" state), which is what it needs.
+    return errorResponse(409, "Reload the page to keep editing this scene.");
+  }
+
   const check = checkDocument(body.document);
 
   if (!check.ok) {
     return check.response;
   }
 
-  // Write the new document under a fresh key first, then move the row to it only if nobody saved
-  // in between (`revision = baseRevision`). Whichever save loses that race deletes its own object,
-  // so the S3 document and the row can't disagree and a stale tab can't overwrite a newer save.
+  // Write the new document under a fresh key first, then move the row to it only if this session
+  // still holds the lock and nobody saved in between (`revision = baseRevision`). Whichever save
+  // loses deletes its own object, so the S3 document and the row can't disagree and neither a
+  // read-only tab nor a stale one can overwrite a newer save. The lease isn't checked here: a lapsed
+  // lock nobody else claimed is still this session's, and the save renews it.
   const documentKey = newDocumentKey(userId, sceneId);
   await putDocument(config, documentKey, check.serialized);
 
@@ -343,8 +384,9 @@ const saveScene = async (
       new UpdateItemCommand({
         TableName: config.tableName,
         Key: rowKey(userId, sceneId),
-        UpdateExpression: "SET #revision = :revision, updatedAt = :now, documentKey = :key, schemaVersion = :schema",
-        ConditionExpression: "attribute_exists(sceneId) AND #revision = :base",
+        UpdateExpression:
+          "SET #revision = :revision, updatedAt = :now, documentKey = :key, schemaVersion = :schema, lockExpiresAt = :expires",
+        ConditionExpression: "attribute_exists(sceneId) AND lockHolder = :session AND #revision = :base",
         ExpressionAttributeNames: { "#revision": "revision" },
         ExpressionAttributeValues: {
           ":revision": { N: String(revision) },
@@ -352,6 +394,8 @@ const saveScene = async (
           ":now": { S: now },
           ":key": { S: documentKey },
           ":schema": { N: String(check.schemaVersion) },
+          ":session": { S: sessionId },
+          ":expires": { N: lockExpiry() },
         },
         ReturnValues: "UPDATED_OLD",
         ReturnValuesOnConditionCheckFailure: "ALL_OLD",
@@ -369,6 +413,10 @@ const saveScene = async (
 
     if (!error.Item) {
       return errorResponse(404, "This scene was deleted.");
+    }
+
+    if (error.Item.lockHolder?.S !== sessionId) {
+      return lockedResponse(error.Item, userId);
     }
 
     return errorResponse(409, "This scene was saved from somewhere else.", {
@@ -458,11 +506,97 @@ const deleteScene = async (config: SceneConfig, userId: string, sceneId: string)
   return json(200, { deleted: true });
 };
 
+const claimLock = async (
+  config: SceneConfig,
+  userId: string,
+  sceneId: string,
+  body: Record<string, unknown>,
+): Promise<SceneApiResponse> => {
+  const sessionId = readSessionId(body.sessionId);
+
+  if (!sessionId) {
+    return errorResponse(400, "sessionId must be this editor session's ID.");
+  }
+
+  const takeOver = body.takeOver === true;
+  const values: Record<string, AttributeValue> = {
+    ":session": { S: sessionId },
+    ":user": { S: userId },
+    ":expires": { N: lockExpiry() },
+  };
+
+  if (!takeOver) {
+    values[":now"] = { N: String(Date.now()) };
+  }
+
+  try {
+    const result = await config.dynamo.send(
+      new UpdateItemCommand({
+        TableName: config.tableName,
+        Key: rowKey(userId, sceneId),
+        UpdateExpression: "SET lockHolder = :session, lockUserId = :user, lockExpiresAt = :expires",
+        // Free, already ours (a renewal, or a reload of this tab), or lapsed. A take-over skips that.
+        ConditionExpression: takeOver
+          ? "attribute_exists(sceneId)"
+          : "attribute_exists(sceneId) AND (attribute_not_exists(lockHolder) OR lockHolder = :session OR lockExpiresAt < :now)",
+        ExpressionAttributeValues: values,
+        ReturnValues: "ALL_NEW",
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+      }),
+    );
+
+    // The revision lets the editor tell whether the scene it shows is still the latest.
+    return json(200, { revision: Number(result.Attributes?.revision?.N ?? "0") });
+  } catch (error) {
+    if (!(error instanceof ConditionalCheckFailedException)) {
+      throw error;
+    }
+
+    return error.Item ? lockedResponse(error.Item, userId) : errorResponse(404, "Scene not found.");
+  }
+};
+
+const releaseLock = async (
+  config: SceneConfig,
+  userId: string,
+  sceneId: string,
+  body: Record<string, unknown>,
+): Promise<SceneApiResponse> => {
+  const sessionId = readSessionId(body.sessionId);
+
+  if (!sessionId) {
+    return errorResponse(400, "sessionId must be this editor session's ID.");
+  }
+
+  try {
+    await config.dynamo.send(
+      new UpdateItemCommand({
+        TableName: config.tableName,
+        Key: rowKey(userId, sceneId),
+        UpdateExpression: "REMOVE lockHolder, lockUserId, lockExpiresAt",
+        ConditionExpression: "lockHolder = :session",
+        ExpressionAttributeValues: { ":session": { S: sessionId } },
+      }),
+    );
+  } catch (error) {
+    if (error instanceof ConditionalCheckFailedException) {
+      // Taken over, lapsed and claimed, or the scene is gone: nothing of ours to release.
+      return json(200, { released: false });
+    }
+
+    throw error;
+  }
+
+  return json(200, { released: true });
+};
+
 // ---- Dispatch -------------------------------------------------------------------------------
 
 export const handleScenesRequest = async (request: SceneApiRequest, env: ServerEnv): Promise<SceneApiResponse> => {
   const method = request.method.toUpperCase();
-  const allowed = request.sceneId === null ? ["GET", "POST"] : ["GET", "PUT", "PATCH", "DELETE"];
+  const isLock = request.subresource === "lock";
+  const allowed =
+    request.sceneId === null ? ["GET", "POST"] : isLock ? ["POST", "DELETE"] : ["GET", "PUT", "PATCH", "DELETE"];
 
   if (!allowed.includes(method)) {
     return json(405, { error: "Method not allowed" }, { Allow: allowed.join(", ") });
@@ -486,6 +620,12 @@ export const handleScenesRequest = async (request: SceneApiRequest, env: ServerE
       return method === "GET" ? await listScenes(config, auth.userId) : await createScene(config, auth.userId, body);
     }
 
+    if (isLock) {
+      return method === "POST"
+        ? await claimLock(config, auth.userId, request.sceneId, body)
+        : await releaseLock(config, auth.userId, request.sceneId, body);
+    }
+
     switch (method) {
       case "GET":
         return await getScene(config, auth.userId, request.sceneId);
@@ -497,7 +637,7 @@ export const handleScenesRequest = async (request: SceneApiRequest, env: ServerE
         return await deleteScene(config, auth.userId, request.sceneId);
     }
   } catch (error) {
-    console.error(`Scene API error (${method} ${request.sceneId ?? "collection"}):`, error);
+    console.error(`Scene API error (${method} ${request.sceneId ?? "collection"}${isLock ? "/lock" : ""}):`, error);
     return errorResponse(500, "Something went wrong on the server. Try again.");
   }
 };
