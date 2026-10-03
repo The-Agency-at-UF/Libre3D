@@ -164,11 +164,26 @@ const sha256UrlSafe = async (value: string): Promise<string> => {
   return base64UrlEncode(new Uint8Array(digest));
 };
 
-// Only same-site paths, so a crafted link can't use sign-in to bounce someone to another site.
-const sanitizeReturnTo = (value: string | null | undefined): string =>
-  value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith(AUTH_CALLBACK_PATH)
-    ? value
-    : "/";
+/**
+ * Only same-site paths, so a crafted link (e.g. `/?next=…`) can't use sign-in to bounce someone to
+ * another site. Resolved with the URL parser rather than prefix checks: browsers read `/\evil.com`
+ * as `//evil.com`, which a `startsWith("//")` test misses.
+ */
+export const sanitizeReturnTo = (value: string | null | undefined): string => {
+  if (!value || !value.startsWith("/")) {
+    return "/";
+  }
+
+  try {
+    const url = new URL(value, window.location.origin);
+
+    return url.origin === window.location.origin && url.pathname !== AUTH_CALLBACK_PATH
+      ? url.pathname + url.search + url.hash
+      : "/";
+  } catch {
+    return "/";
+  }
+};
 
 // ---- Token endpoint -------------------------------------------------------------------------
 
