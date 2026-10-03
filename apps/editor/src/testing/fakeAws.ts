@@ -3,8 +3,9 @@
  * handlers. Test-only; nothing in the app imports this.
  *
  * They implement the commands the handlers send, and evaluate the expressions the handlers use
- * (`attribute_exists(x)`, `attribute_not_exists(x)`, `#a = :b` joined by AND, `SET a = :b, …`)
- * rather than matching on them, so a wrong condition fails a test instead of passing a fake.
+ * (`attribute_exists(x)`, `attribute_not_exists(x)`, `#a = :b`, `a < :b`, `a > :b`, joined by
+ * AND / OR with parentheses; `SET a = :b, …` and `REMOVE a, …`) rather than matching on them, so a
+ * wrong condition fails a test instead of passing a fake.
  * Query and ListObjectsV2 return small pages so the handlers' pagination loops run.
  */
 import {
@@ -49,33 +50,150 @@ const resolveValue = (token: string, input: ExpressionInput): AttributeValue => 
 
 const sameValue = (a: AttributeValue | undefined, b: AttributeValue): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-const meetsCondition = (item: Item | undefined, condition: string | undefined, input: ExpressionInput): boolean =>
-  !condition ||
-  condition.split(/\s+AND\s+/).every((clause) => {
-    const exists = clause.match(/^attribute_exists\((\S+)\)$/);
-    const notExists = clause.match(/^attribute_not_exists\((\S+)\)$/);
-    const equals = clause.match(/^(\S+) = (:\w+)$/);
+// DynamoDB rejects a request that defines an expression name or value none of its expressions use
+// (a ValidationException), so a handler that builds expressions conditionally must not leave one over.
+const assertAllUsed = (
+  input: ExpressionInput & { ConditionExpression?: string; UpdateExpression?: string; KeyConditionExpression?: string; ProjectionExpression?: string },
+): void => {
+  const expressions = [input.ConditionExpression, input.UpdateExpression, input.KeyConditionExpression, input.ProjectionExpression]
+    .filter(Boolean)
+    .join(" ");
+  const defined = [...Object.keys(input.ExpressionAttributeNames ?? {}), ...Object.keys(input.ExpressionAttributeValues ?? {})];
+  const unused = defined.filter((token) => !new RegExp(`${token}(?![\\w])`).test(expressions));
+
+  if (unused.length > 0) {
+    throw new Error(`Fake DynamoDB: ValidationException, unused in expressions: ${unused.join(", ")}`);
+  }
+};
+
+// `<` / `>` like DynamoDB: numbers by value, strings by code point; anything else is unsupported.
+const compareValues = (a: AttributeValue | undefined, b: AttributeValue, op: "<" | ">"): boolean => {
+  if (a === undefined) {
+    // A comparison against a missing attribute is false, as in DynamoDB.
+    return false;
+  }
+
+  if (a.N !== undefined && b.N !== undefined) {
+    return op === "<" ? Number(a.N) < Number(b.N) : Number(a.N) > Number(b.N);
+  }
+
+  if (a.S !== undefined && b.S !== undefined) {
+    return op === "<" ? a.S < b.S : a.S > b.S;
+  }
+
+  throw new Error(`Fake DynamoDB: can't compare ${JSON.stringify(a)} ${op} ${JSON.stringify(b)}`);
+};
+
+// A small recursive-descent evaluator: OR binds looser than AND, parentheses group.
+const meetsCondition = (item: Item | undefined, condition: string | undefined, input: ExpressionInput): boolean => {
+  if (!condition) {
+    return true;
+  }
+
+  const tokens = condition.match(/attribute_(?:not_)?exists\([^)\s]+\)|[()]|[^\s()]+/g) ?? [];
+  let position = 0;
+  const peek = () => tokens[position];
+  const next = () => {
+    const token = tokens[position];
+    position += 1;
+
+    if (token === undefined) {
+      throw new Error(`Fake DynamoDB: condition ended early: "${condition}"`);
+    }
+
+    return token;
+  };
+
+  const parsePrimary = (): boolean => {
+    const token = next();
+
+    if (token === "(") {
+      const value = parseOr();
+
+      if (next() !== ")") {
+        throw new Error(`Fake DynamoDB: unbalanced parentheses in "${condition}"`);
+      }
+
+      return value;
+    }
+
+    const exists = token.match(/^attribute_exists\((\S+)\)$/);
+    const notExists = token.match(/^attribute_not_exists\((\S+)\)$/);
 
     if (exists) return item?.[resolveName(exists[1], input)] !== undefined;
     if (notExists) return item?.[resolveName(notExists[1], input)] === undefined;
-    if (equals) return sameValue(item?.[resolveName(equals[1], input)], resolveValue(equals[2], input));
 
-    throw new Error(`Fake DynamoDB: unsupported condition clause "${clause}"`);
-  });
+    const op = next();
+    const value = resolveValue(next(), input);
+    const actual = item?.[resolveName(token, input)];
 
-const applySet = (item: Item, expression: string, input: ExpressionInput): string[] => {
-  const match = expression.match(/^SET (.+)$/);
+    if (op === "=") return sameValue(actual, value);
+    if (op === "<" || op === ">") return compareValues(actual, value, op);
 
-  if (!match) {
+    throw new Error(`Fake DynamoDB: unsupported comparison "${token} ${op}" in "${condition}"`);
+  };
+
+  // Every operand is evaluated (no short-circuit), so a typo anywhere in the expression throws.
+  const parseAnd = (): boolean => {
+    let value = parsePrimary();
+
+    while (peek() === "AND") {
+      next();
+      const right = parsePrimary();
+      value = value && right;
+    }
+
+    return value;
+  };
+
+  const parseOr = (): boolean => {
+    let value = parseAnd();
+
+    while (peek() === "OR") {
+      next();
+      const right = parseAnd();
+      value = value || right;
+    }
+
+    return value;
+  };
+
+  const result = parseOr();
+
+  if (position !== tokens.length) {
+    throw new Error(`Fake DynamoDB: unsupported condition "${condition}"`);
+  }
+
+  return result;
+};
+
+/** Applies `SET a = :b, …` and/or `REMOVE a, …`; returns the attributes it changed. */
+const applyUpdate = (item: Item, expression: string, input: ExpressionInput): string[] => {
+  const match = expression.match(/^(?:SET (.+?))?\s*(?:REMOVE (.+))?$/);
+
+  if (!match || (!match[1] && !match[2])) {
     throw new Error(`Fake DynamoDB: unsupported update expression "${expression}"`);
   }
 
-  return match[1].split(",").map((assignment) => {
-    const [name, value] = assignment.split("=").map((part) => part.trim());
-    const attribute = resolveName(name, input);
-    item[attribute] = resolveValue(value, input);
-    return attribute;
-  });
+  const set = (match[1] ?? "")
+    .split(",")
+    .filter((assignment) => assignment.trim())
+    .map((assignment) => {
+      const [name, value] = assignment.split("=").map((part) => part.trim());
+      const attribute = resolveName(name, input);
+      item[attribute] = resolveValue(value, input);
+      return attribute;
+    });
+  const removed = (match[2] ?? "")
+    .split(",")
+    .filter((name) => name.trim())
+    .map((name) => {
+      const attribute = resolveName(name.trim(), input);
+      delete item[attribute];
+      return attribute;
+    });
+
+  return [...set, ...removed];
 };
 
 const conditionFailed = (item: Item | undefined, returnOld: boolean) =>
@@ -107,6 +225,7 @@ export class FakeDynamoDB {
     }
 
     if (command instanceof PutItemCommand) {
+      assertAllUsed(command.input);
       const { Item: item, ConditionExpression } = command.input;
       const existing = this.items.get(this.keyOf(item!));
 
@@ -125,6 +244,7 @@ export class FakeDynamoDB {
 
     if (command instanceof QueryCommand) {
       const input = command.input;
+      assertAllUsed(input);
       const keyMatch = input.KeyConditionExpression?.match(/^userId = (:\w+)$/);
 
       if (!keyMatch) {
@@ -152,6 +272,7 @@ export class FakeDynamoDB {
 
     if (command instanceof UpdateItemCommand) {
       const input = command.input;
+      assertAllUsed(input);
       const existing = this.items.get(this.keyOf(input.Key!));
 
       if (!meetsCondition(existing, input.ConditionExpression, input)) {
@@ -160,15 +281,18 @@ export class FakeDynamoDB {
 
       const before = structuredClone(existing ?? { ...input.Key! });
       const updated = structuredClone(before);
-      const changed = applySet(updated, input.UpdateExpression!, input);
+      const changed = applyUpdate(updated, input.UpdateExpression!, input);
       this.items.set(this.keyOf(input.Key!), updated);
 
-      return input.ReturnValues === "UPDATED_OLD"
-        ? { Attributes: Object.fromEntries(changed.filter((name) => before[name]).map((name) => [name, before[name]])) }
-        : {};
+      if (input.ReturnValues === "UPDATED_OLD") {
+        return { Attributes: Object.fromEntries(changed.filter((name) => before[name]).map((name) => [name, before[name]])) };
+      }
+
+      return input.ReturnValues === "ALL_NEW" ? { Attributes: structuredClone(updated) } : {};
     }
 
     if (command instanceof DeleteItemCommand) {
+      assertAllUsed(command.input);
       const key = this.keyOf(command.input.Key!);
       const existing = this.items.get(key);
 
