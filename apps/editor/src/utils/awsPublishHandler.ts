@@ -1,10 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 
-import { DynamoDBClient, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import { awsCredentialsProvider } from "@vercel/oidc-aws-credentials-provider";
+
+// `.js` is required: Vercel runs server modules under Node's ES module loader (see awsConfig.ts).
+import {
+  createDynamoClient,
+  createS3Client,
+  readAwsAccess,
+  readRequiredEnv,
+  type AwsAccess,
+  type ServerEnv,
+} from "./awsConfig.js";
 
 export interface PublishSessionResult {
   sceneId: string;
@@ -13,68 +22,18 @@ export interface PublishSessionResult {
   shareUrl: string;
 }
 
-type AwsCredentials = NonNullable<ConstructorParameters<typeof S3Client>[0]>["credentials"];
-
-interface AwsPublishConfig {
-  region: string;
+interface AwsPublishConfig extends AwsAccess {
   bucketName: string;
   tableName: string;
-  /** Undefined means the AWS SDK's default credential chain (e.g. an `AWS_PROFILE`). */
-  credentials: AwsCredentials | undefined;
 }
 
-type AwsPublishEnv = Record<string, string | undefined>;
+type AwsPublishEnv = ServerEnv;
 
-const readRequiredEnv = (env: AwsPublishEnv, name: string): string => {
-  const value = env[name];
-
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-
-  return value;
-};
-
-/**
- * Where the server's AWS access comes from, in order:
- *
- * 1. `AWS_ROLE_ARN` (Vercel): exchange the function's Vercel OIDC token for short-lived credentials
- *    of the stage's API role. No long-lived keys on Vercel. Don't pass `audience` here: the role's
- *    trust policy expects Vercel's default audience, and setting one exchanges the token for a
- *    different audience that the trust policy then rejects.
- * 2. `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` (local `pnpm dev`): the dev-only
- *    `libre3d-dev-local` user's key from the root `.env`. Read explicitly because Vite middleware
- *    gets `.env` values from `loadEnv`, not `process.env`, where the SDK would look for them.
- * 3. Otherwise the SDK's default credential chain.
- */
-const resolveCredentials = (env: AwsPublishEnv, region: string): AwsCredentials | undefined => {
-  if (env.AWS_ROLE_ARN) {
-    return awsCredentialsProvider({ roleArn: env.AWS_ROLE_ARN, clientConfig: { region } });
-  }
-
-  if (env.AWS_ACCESS_KEY_ID && env.AWS_SECRET_ACCESS_KEY) {
-    return { accessKeyId: env.AWS_ACCESS_KEY_ID, secretAccessKey: env.AWS_SECRET_ACCESS_KEY };
-  }
-
-  return undefined;
-};
-
-const readConfig = (env: AwsPublishEnv): AwsPublishConfig => {
-  const region = readRequiredEnv(env, "AWS_REGION");
-
-  return {
-    region,
-    bucketName: readRequiredEnv(env, "S3_BUCKET_NAME"),
-    tableName: readRequiredEnv(env, "PUBLISHED_SCENES_TABLE_NAME"),
-    credentials: resolveCredentials(env, region),
-  };
-};
-
-const createS3Client = (config: AwsPublishConfig): S3Client =>
-  new S3Client({ region: config.region, credentials: config.credentials });
-
-const createDynamoClient = (config: AwsPublishConfig): DynamoDBClient =>
-  new DynamoDBClient({ region: config.region, credentials: config.credentials });
+const readConfig = (env: AwsPublishEnv): AwsPublishConfig => ({
+  ...readAwsAccess(env),
+  bucketName: readRequiredEnv(env, "S3_BUCKET_NAME"),
+  tableName: readRequiredEnv(env, "PUBLISHED_SCENES_TABLE_NAME"),
+});
 
 const trimTrailingSlashes = (value: string): string => value.replace(/\/+$/, "");
 
