@@ -45,7 +45,12 @@ const requestJson = async <T>(path: string, init: RequestInit = {}): Promise<T> 
   return body;
 };
 
+// Saves still in flight, e.g. the one the editor fires as it's left for the gallery.
+const pendingSaves = new Set<Promise<unknown>>();
+
 export const listScenes = async (): Promise<SceneSummary[]> => {
+  // Let a just-left scene's last save land first, so its card shows the right "Edited" time.
+  await Promise.allSettled([...pendingSaves]);
   const { scenes } = await requestJson<{ scenes: SceneSummary[] }>(SCENES_ENDPOINT);
 
   return scenes;
@@ -62,3 +67,23 @@ export interface OpenedScene extends SceneSummary {
 /** One scene and its saved document; `document` is null until the scene's first save. */
 export const getScene = async (sceneId: string): Promise<{ scene: OpenedScene; document: unknown }> =>
   requestJson(scenePath(sceneId));
+
+/**
+ * Saves a scene document on top of `baseRevision` and returns the new revision. Fails with a
+ * SceneApiError: 409 when the scene was saved from somewhere else since, 404 when it was deleted.
+ */
+export const saveScene = (
+  sceneId: string,
+  document: unknown,
+  baseRevision: number,
+): Promise<{ revision: number; updatedAt: string }> => {
+  const save = requestJson<{ revision: number; updatedAt: string }>(scenePath(sceneId), {
+    method: "PUT",
+    body: JSON.stringify({ document, baseRevision }),
+  });
+
+  pendingSaves.add(save);
+  void save.catch(() => undefined).finally(() => pendingSaves.delete(save));
+
+  return save;
+};

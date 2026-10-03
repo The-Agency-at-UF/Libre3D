@@ -9,6 +9,7 @@ import { ExportModal } from "./ExportModal";
 import { HamburgerMenu } from "./HamburgerMenu";
 import { FloatingToolbar } from "./FloatingToolbar";
 import { PreviewControls } from "./PreviewControls";
+import { SaveStatusIndicator } from "./SaveStatusIndicator";
 import { Button } from "./ui/Button";
 import { Link } from "./ui/Link";
 import { PageStatus } from "./ui/PageStatus";
@@ -18,6 +19,7 @@ import { useRightSidebarState } from "../hooks/useRightSidebarState";
 import { useHotkeys } from "../hooks/useHotkeys";
 import { usePreviewSession } from "../hooks/usePreviewSession";
 import { useOpenScene } from "../hooks/useOpenScene";
+import { useSceneAutosave } from "../hooks/useSceneAutosave";
 
 //import tsx utils for editor export and publish
 import { exportLiveScene, getLiveScene, createDownload } from "../utils/exportScene";
@@ -40,6 +42,8 @@ import { useEditorStore } from "../store/useEditorStore";
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__libre3dStore = useEditorStore;
 }
+
+const SIGN_OUT_SAVE_WAIT_MS = 3_000;
 
 interface EditorAppProps {
   sceneId: string;
@@ -159,6 +163,14 @@ function EditorWorkspace({ scene, accountEmail }: EditorWorkspaceProps) {
 
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
+  };
+
+  const autosave = useSceneAutosave(scene);
+
+  // Signing out leaves the app at once, so give pending edits a few seconds to save first.
+  const handleSignOut = async () => {
+    await Promise.race([autosave.flush(), new Promise((resolve) => setTimeout(resolve, SIGN_OUT_SAVE_WAIT_MS))]);
+    await signOut();
   };
 
   // A new scene, not a cleared one: with autosave, clearing would overwrite this scene for good.
@@ -307,9 +319,12 @@ function EditorWorkspace({ scene, accountEmail }: EditorWorkspaceProps) {
               <i className="ti ti-arrow-left" style={{ fontSize: "16px" }}></i>
             </button>
             
-            <span className="left-sidebar-header-title" title={scene.name}>
-              {scene.name}
-            </span>
+            <div className="left-sidebar-header-text">
+              <span className="left-sidebar-header-title" title={scene.name}>
+                {scene.name}
+              </span>
+              <SaveStatusIndicator status={autosave.status} onRetry={autosave.retry} />
+            </div>
 
             <HamburgerMenu
               onNewFile={handleNewFile}
@@ -319,7 +334,7 @@ function EditorWorkspace({ scene, accountEmail }: EditorWorkspaceProps) {
               showAxisGuides={showAxisGuides}
               onToggleAxisGuides={handleToggleAxisGuides}
               accountEmail={accountEmail}
-              onSignOut={() => void signOut()}
+              onSignOut={() => void handleSignOut()}
             />
           </div>
 
