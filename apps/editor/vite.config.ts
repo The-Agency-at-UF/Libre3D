@@ -8,16 +8,55 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
 import { createPublishSession, getPublishedScene, resolveRequestBaseUrl } from "./src/utils/awsPublishHandler";
+import { handleScenesRequest } from "./src/utils/awsSceneHandler";
 import { verifyAuth } from "./src/utils/verifyAuth";
 
 const editorConfigDir = fileURLToPath(new URL(".", import.meta.url));
 const repoRootDir = path.resolve(editorConfigDir, "../..");
 const threeModulePath = path.resolve(editorConfigDir, "node_modules/three");
 
+// `/api/scenes` or `/api/scenes/:sceneId`, ignoring any query string.
+const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*))?\/?(?:\?.*)?$/;
+
+const readRequestBody = (req: NodeJS.ReadableStream): Promise<string> =>
+  new Promise<string>((resolve, reject) => {
+    let body = "";
+    req.on("data", (chunk) => {
+      body += chunk;
+    });
+    req.on("end", () => resolve(body));
+    req.on("error", reject);
+  });
+
 const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
   name: "libre3d-aws-publish-route",
   configureServer(server) {
     server.middlewares.use(async (req, res, next) => {
+      // The dev copy of api/scenes/index.ts and api/scenes/[sceneId].ts: same handler, so the two
+      // can't drift. Everything route-specific lives in handleScenesRequest.
+      const scenesMatch = req.url?.match(SCENES_ROUTE_PATTERN);
+
+      if (scenesMatch) {
+        const method = req.method ?? "GET";
+        const body = method === "GET" || method === "DELETE" ? "" : await readRequestBody(req);
+        const rawSceneId = scenesMatch[1];
+        const result = await handleScenesRequest(
+          {
+            method,
+            sceneId: rawSceneId === undefined ? null : decodeURIComponent(rawSceneId),
+            headers: req.headers,
+            body,
+          },
+          env,
+        );
+
+        res.statusCode = result.status;
+        Object.entries(result.headers ?? {}).forEach(([name, value]) => res.setHeader(name, value));
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(result.body));
+        return;
+      }
+
       if (req.url && req.url.startsWith("/api/scene/") && req.method === "GET") {
         const sceneId = req.url.slice("/api/scene/".length);
         if (!sceneId) {
@@ -58,18 +97,7 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
         }
 
         try {
-          const bodyStr = await new Promise<string>((resolve, reject) => {
-            let body = "";
-            req.on("data", (chunk) => {
-              body += chunk;
-            });
-            req.on("end", () => {
-              resolve(body);
-            });
-            req.on("error", (err) => {
-              reject(err);
-            });
-          });
+          const bodyStr = await readRequestBody(req);
 
           let currentPublishId: string | null = null;
           if (bodyStr) {
