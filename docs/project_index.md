@@ -123,6 +123,13 @@ The pages outside the editor (landing, gallery, status screens) are built only f
 - **`sceneColor.ts`** — `getSafeColor`: normalizes a stored scene colour (which may lack the leading `#`) to a CSS/Three-safe hex. Shared by `SceneManager` (scene background, fog) and the preview surface so they can't drift on the same stored value.
 - **`publishScene.ts`** — Client-side publish flow: exports the live scene to a GLB blob, POSTs to `/api/publish` to obtain a presigned upload URL and scene id, then PUTs the blob directly to S3, returning the resulting share URL.
 
+## `apps/editor/src/testing/` — test-only helpers
+
+Used by the `*.test.ts` files (which sit next to the module they cover); nothing in the app imports these. See [testing-guide.md](testing-guide.md#automated-unit-tests).
+
+- **`browserStubs.ts`** — Just enough browser for Vitest's Node environment: in-memory `localStorage`/`sessionStorage` (a Proxy, so `Object.keys` lists stored keys), a fake `window` with a working location, history, and events, `navigator.onLine`, plus `jsonResponse` and `makeUnsignedJwt`.
+- **`fakeAws.ts`** — In-memory `FakeDynamoDB` (a user-scenes-shaped table) and `FakeS3` for server handler tests. They evaluate the condition/update expressions the handlers send and page Query/ListObjectsV2 results like AWS does.
+
 ## `apps/editor/src/styles/`
 
 - **`components.css`** — The bulk of the app's hand-written CSS (~2,000 lines): styling for the editor shell, sidebars, inspector panels, modals, toolbars, hierarchy tree, form controls, and other UI components.

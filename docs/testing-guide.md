@@ -1,6 +1,6 @@
 # Testing & Verification Guide
 
-Libre3D has a small Vitest unit suite for its pure scene-graph and transform logic. Everything else — the UI, the Three.js viewport, store actions, persistence, export — is still tested manually. This guide covers how to run the unit suite, plus checklists for different types of changes to ensure you don't break existing features.
+Libre3D has a Vitest unit suite for its scene-graph and transform logic and for the accounts → gallery → cloud-scenes pipeline (sign-in, the scene API, saving, loading, migrations). The UI, the Three.js viewport, and export are still tested manually. This guide covers how to run the unit suite, plus checklists for different types of changes to ensure you don't break existing features.
 
 ---
 
@@ -33,12 +33,25 @@ Runs a single test file.
 | `store/entityIndex.ts` | `getChildren`, `getDescendantIds`, `getAncestorIds` (including cycle guards); `filterMoveRoots` drops descendants of already-selected nodes; `canReparentEntities` rejects moving a node into itself or its own subtree and enforces the imported-model boundary |
 | `utils/entityTransforms.ts` | `getEntityWorldMatrix` composes the parent chain root-down; `solveLocalFromWorld` round-trips — reparenting under a different transformed parent leaves the world matrix unchanged (hand-picked cases plus 200 seeded random chains) |
 | `utils/pruneImportHierarchy.ts` | `pruneImportNodes` drops dead leaves, collapses single-child wrappers into their child without moving it in world space, and never removes the root, mesh nodes, bones, or multi-child groups |
+| `utils/authSession.ts` | `sanitizeReturnTo` keeps sign-in redirects same-site (`//evil`, `/evil`, the callback); the PKCE redirect (S256 challenge of the stored verifier); code redemption (state check, Cognito errors, once under StrictMode); token refresh shared between callers, signing out only on a rejected refresh; sign-out clearing the session and unsaved scene edits |
+| `utils/navigation.ts` | `getPostSignInPath` keeps a deep link through sign-in and sends anything else to the gallery; `landingPathFor`; `navigate` / `subscribeToLocation` |
+| `utils/apiFetch.ts`, `utils/verifyAuth.ts` | Bearer token on `/api/*` only, `ApiAuthError` when signed out or rejected; the server takes the user ID from the verified token's `sub`, 401s bad tokens, fails closed (503) without config, and caches one verifier per pool/client |
+| `utils/awsSceneHandler.ts` | Every `/api/scenes` route against in-memory DynamoDB/S3 (`testing/fakeAws.ts`): validation, revisions, 409 on a stale save, one document object per scene, delete sweeping its prefix, and one user never reaching another's scene |
+| `utils/sceneDocument.ts` | The document round-trips through JSON, never shares vectors with the store, refuses newer schema versions, rejects malformed documents |
+| `utils/sceneAutosave.ts` | The 2 s debounce and 10 s cap, one save in flight, backoff retries, stopping on conflict/deletion/lost session, offline waiting, `flush`, `dispose` (fake timers) |
+| `utils/sceneCache.ts`, `utils/legacyScene.ts`, `utils/sceneLibrary.ts` | Unsaved edits per user and scene, another user's never loaded; `resolveSceneToOpen`; the pre-cloud scene set aside once; the client's requests and `SceneApiError`; the gallery's list waiting for a save in flight |
+| `store/useEditorStore.ts` | The persist v17 migration (old scene set aside, preferences kept, older blobs run through every migration, written back on load); `loadScene` (defaults deep-merged, personal camera kept, undo history cleared); a scene coming back unchanged from store → document → JSON → store |
 
-**What's not covered**: React components, `SceneManager`/`CameraManager`/`ObjectManager`, store actions, persistence, and anything that needs a DOM or WebGL. Keep using the checklists below for those.
+**What's not covered**: React components and hooks (including `useSceneAutosave`'s local-copy writes and `useOpenScene`'s loading), `SceneManager`/`CameraManager`/`ObjectManager`, most store actions, export/publish, and anything that needs a DOM or WebGL. Keep using the checklists below for those.
 
 **Tests marked "expected fail"** in the output are intentional. They use `it.fails` to pin down a known limitation (a TRS transform can't represent shear, so a rotated child under a non-uniformly scaled parent drifts slightly). If one of them starts *failing*, the limitation has been fixed — remove the `.fails`.
 
-**Writing a new test**: only for pure functions that don't touch the DOM, WebGL, or the live store. Build fixture data with a local factory (see `makeEntity` in `entityIndex.test.ts`), and compare transforms as matrices within a tolerance rather than exact Euler values.
+**Writing a new test**: the suite runs in Node, with no DOM library. Build fixture data with a local factory (see `makeEntity` in `entityIndex.test.ts`), and compare transforms as matrices within a tolerance rather than exact Euler values.
+
+- **Browser modules** (anything using `localStorage`, `window`, `navigator`): install `stubBrowserGlobals()` from `src/testing/browserStubs.ts` in `beforeEach` and `vi.unstubAllGlobals()` in `afterEach`. Modules that read storage as they load (`authSession.ts`, the store) must be imported after that: `vi.resetModules()` then `await import(...)`.
+- **Server handlers**: mock `./awsConfig.js` to hand out `FakeDynamoDB` / `FakeS3` from `src/testing/fakeAws.ts`, and `./verifyAuth.js` to choose the caller. The fakes evaluate condition and update expressions, so add support there when a handler starts using a new one.
+- **The store**: allowed for persistence and `loadScene` (see `useEditorStore.test.ts`), loaded fresh per test as above. Keep the viewport (WebGL) out.
+- **Timers**: `vi.useFakeTimers()` and `vi.advanceTimersByTimeAsync` (see `sceneAutosave.test.ts`).
 
 ---
 
