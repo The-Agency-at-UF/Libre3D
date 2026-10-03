@@ -15,6 +15,8 @@ interface MenuProps {
   /** Non-interactive line above the items, e.g. the signed-in email. */
   header?: ReactNode;
   items: MenuItemConfig[];
+  /** Which edge of the trigger the dropdown lines up with; "end" for triggers at a right edge. */
+  align?: "start" | "end";
 }
 
 /*
@@ -22,7 +24,7 @@ interface MenuProps {
  * PURPOSE: A button that opens a small dropdown of actions. Closes on choosing an item, on a click
  *          outside it, or on Escape.
  */
-export function Menu({ label, trigger, header, items }: MenuProps) {
+export function Menu({ label, trigger, header, items, align = "start" }: MenuProps) {
   const [isOpen, setIsOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -66,7 +68,7 @@ export function Menu({ label, trigger, header, items }: MenuProps) {
       </button>
 
       {isOpen && (
-        <div className="ui-menu-popover" role="menu">
+        <div className={`ui-menu-popover${align === "end" ? " ui-menu-popover--end" : ""}`} role="menu">
           {header && <div className="ui-menu-header">{header}</div>}
           {items.map((item) => (
             <button

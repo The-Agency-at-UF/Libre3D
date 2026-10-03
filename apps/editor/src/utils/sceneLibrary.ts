@@ -87,3 +87,12 @@ export const saveScene = (
 
   return save;
 };
+
+/** Renames a scene. Only its row changes: the document and revision stay as they are. */
+export const renameScene = async (sceneId: string, name: string): Promise<{ name: string }> =>
+  requestJson(scenePath(sceneId), { method: "PATCH", body: JSON.stringify({ name }) });
+
+/** Deletes a scene and everything stored for it. */
+export const deleteScene = async (sceneId: string): Promise<void> => {
+  await requestJson(scenePath(sceneId), { method: "DELETE" });
+};

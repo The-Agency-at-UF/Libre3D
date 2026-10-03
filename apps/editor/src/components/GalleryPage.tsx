@@ -12,7 +12,8 @@ import { useStoredChoice } from "../hooks/useStoredChoice";
 
 import { signOut } from "../utils/authSession";
 import { HOME_PATH, navigate } from "../utils/navigation";
-import { createScene, listScenes, type SceneSummary } from "../utils/sceneLibrary";
+import { ApiAuthError } from "../utils/apiFetch";
+import { createScene, deleteScene, listScenes, renameScene, type SceneSummary } from "../utils/sceneLibrary";
 import { toggleTheme } from "../utils/theme";
 
 interface GalleryPageProps {
@@ -89,6 +90,39 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
     }
   };
 
+  const updateScenes = (update: (scenes: SceneSummary[]) => SceneSummary[]) =>
+    setGallery((current) => (current.status === "ready" ? { status: "ready", scenes: update(current.scenes) } : current));
+
+  const handleRenameScene = async (scene: SceneSummary) => {
+    const name = window.prompt("Rename scene", scene.name)?.trim();
+
+    if (!name || name === scene.name) {
+      return;
+    }
+
+    try {
+      const renamed = await renameScene(scene.sceneId, name);
+      updateScenes((scenes) => scenes.map((item) => (item.sceneId === scene.sceneId ? { ...item, name: renamed.name } : item)));
+    } catch (error) {
+      console.error("Failed to rename the scene.", error);
+      window.alert(error instanceof ApiAuthError ? error.message : "The scene could not be renamed. Try again.");
+    }
+  };
+
+  const handleDeleteScene = async (scene: SceneSummary) => {
+    if (!window.confirm(`Delete “${scene.name}”? This can't be undone.`)) {
+      return;
+    }
+
+    try {
+      await deleteScene(scene.sceneId);
+      updateScenes((scenes) => scenes.filter((item) => item.sceneId !== scene.sceneId));
+    } catch (error) {
+      console.error("Failed to delete the scene.", error);
+      window.alert(error instanceof ApiAuthError ? error.message : "The scene could not be deleted. Try again.");
+    }
+  };
+
   const sidebar = (
     <>
       <AccountMenu email={accountEmail} />
@@ -161,8 +195,19 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
           ) : (
             <ul className={`gallery-grid${viewMode === "list" ? " gallery-grid--list" : ""}`}>
               {visibleScenes.map((scene) => (
-                <li key={scene.sceneId}>
+                <li key={scene.sceneId} className="gallery-item">
                   <SceneCard scene={scene} />
+                  <div className="gallery-card-actions">
+                    <Menu
+                      label={`Actions for ${scene.name}`}
+                      align="end"
+                      trigger={<i className="ti ti-dots" aria-hidden="true" />}
+                      items={[
+                        { label: "Rename", icon: "pencil", onSelect: () => void handleRenameScene(scene) },
+                        { label: "Delete", icon: "trash", onSelect: () => void handleDeleteScene(scene) },
+                      ]}
+                    />
+                  </div>
                 </li>
               ))}
             </ul>

@@ -633,3 +633,31 @@
 .gallery-grid--list .gallery-card-icon {
   display: none;
 }
+
+/* Rename/delete menu over a card's footer. A sibling of the card link, not inside it: a button
+   can't be nested in a link. */
+.gallery-item {
+  position: relative;
+}
+
+.gallery-item .gallery-card-footer {
+  padding-right: calc(var(--space-4) + 28px);
+}
+
+.gallery-card-actions {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-3);
+  color: var(--text-secondary);
+}
+
+.gallery-grid--list .gallery-card-actions {
+  bottom: auto;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.ui-menu-popover--end {
+  left: auto;
+  right: 0;
+}

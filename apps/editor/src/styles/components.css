@@ -1019,6 +1019,28 @@
   min-width: 0;
 }
 
+/* The scene name is a button (click to rename) that swaps for an input while editing. */
+.scene-name-button {
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: text;
+}
+
+.scene-name-button:hover {
+  text-decoration: underline dotted;
+}
+
+.scene-name-input {
+  margin: -2px -4px;
+  padding: 1px 3px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg-input);
+  outline: none;
+}
+
 .save-status {
   min-width: 0;
   overflow: hidden;

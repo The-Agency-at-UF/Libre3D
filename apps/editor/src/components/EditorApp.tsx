@@ -10,6 +10,7 @@ import { HamburgerMenu } from "./HamburgerMenu";
 import { FloatingToolbar } from "./FloatingToolbar";
 import { PreviewControls } from "./PreviewControls";
 import { SaveStatusIndicator } from "./SaveStatusIndicator";
+import { SceneNameField } from "./SceneNameField";
 import { Button } from "./ui/Button";
 import { Link } from "./ui/Link";
 import { PageStatus } from "./ui/PageStatus";
@@ -323,9 +324,7 @@ function EditorWorkspace({ scene, hasRecoveredEdits, accountEmail }: EditorWorks
             </button>
             
             <div className="left-sidebar-header-text">
-              <span className="left-sidebar-header-title" title={scene.name}>
-                {scene.name}
-              </span>
+              <SceneNameField sceneId={scene.sceneId} initialName={scene.name} />
               <SaveStatusIndicator status={autosave.status} onRetry={autosave.retry} />
             </div>
 
