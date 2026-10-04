@@ -209,6 +209,7 @@ describe("failures", () => {
     ["a save from somewhere else (409)", new SceneApiError(409, "conflict"), "conflict"],
     ["a deleted scene (404)", new SceneApiError(404, "gone"), "deleted"],
     ["a lost session", new ApiAuthError("expired"), "signedOut"],
+    ["losing the editing lock to another tab (423)", new SceneApiError(423, "This scene is open somewhere else."), "openElsewhere"],
   ])("stops saving after %s, so nothing newer gets overwritten", async (_label, error, kind) => {
     saveSceneMock.mockRejectedValueOnce(error);
     const autosaver = createAutosaver();

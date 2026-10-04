@@ -88,6 +88,13 @@ Replaces the whole scene with a saved one, or with a new scene's starting conten
 - **Camera profiles**: the "personal" profile is always present; an unknown `activeProfileId` falls back to it
 - **Resets** selection, preview mode, and `currentPublishId`
 - **Clears undo history**: the editor no longer reloads the page between scenes, so Ctrl+Z must not reach into the previous one, and the load itself isn't an undoable step
+- **Works while read-only**: it writes past the read-only guard, so a view-only tab can show the latest saved scene. It leaves `readOnlyReason` as it is
+
+#### `readOnlyReason: ReadOnlyReason | null` and `setReadOnly(reason: ReadOnlyReason | null) → void`
+Why the open scene can't be edited here, or `null` when it can. `"openElsewhere"`: another tab or device holds the scene's editing lock. Set by `useOpenScene` when a scene opens and by `useSceneLock` as the lock moves.
+- **While set**, any update that would change `entities`, `sceneSettings`, `postProcessing`, or `frame` is dropped whole, whichever action sends it. Selection, cameras (`cameraProfiles`, `activeProfileId`), and editor preferences still change
+- **Entering it clears undo history** (undo writes from outside the guard, and there's nothing to undo into)
+- Not persisted and not undoable
 
 #### `selectSceneContent(state) → SceneContent`
 Not an action: a selector (exported from the store module) returning the parts of the state that are saved as the scene: `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId`. Autosave subscribes to it (with `shallow` equality) and passes it to `toSceneDocument`.
@@ -565,7 +572,7 @@ useEditorStore.subscribe(
 
 **NOT saved** (while the editor is open only):
 - selectedEntityIds, currentPublishId, isPreviewMode, previewGlbUrl
-- pendingImportCount, undo history
+- pendingImportCount, readOnlyReason, undo history
 
 ---
 

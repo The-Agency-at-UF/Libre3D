@@ -32,6 +32,8 @@ The editor is one page of several. `App.tsx` hand-routes between them (no router
 
 Scenes live in the cloud, one per row of the signed-in user's gallery. Opening `/edit/:sceneId` loads that scene into the store (`useOpenScene` → `loadScene`, which also clears undo history), and from then on edits are autosaved (`useSceneAutosave`). See [§5](#5-the-store) for what's saved where.
 
+A scene is edited in one place at a time. Opening it claims an editing lock for this tab (a 60 s lease on the scene's row, renewed every 20 s and by every save; `useSceneLock` / `utils/sceneLock.ts`). A second tab or device opens it **view only**: the store refuses edits (`readOnlyReason`), nothing autosaves, a banner offers **Take over editing**, and the view follows the other tab's saves. The server enforces it too: a save from a session that doesn't hold the lock is refused (423). When the lock comes back (the other tab closed, or Take over), the scene is reloaded from the cloud before editing resumes.
+
 ---
 
 ## 2. Three layers
@@ -205,7 +207,9 @@ addEntity("cube");
 
 A new field on an entity is saved automatically (it's part of `entities`). A new top-level piece of the scene (the animation timeline, say) goes into `SceneContent`, `selectSceneContent`, and `loadScene`, and into the document as its own section. Selection, preview state, and undo history are neither: they last only while the editor is open. Imported model/texture bytes aren't in the document at all; they stay in this browser (OPFS) and entities reference them by ID.
 
-While a scene has unsaved edits, a copy stays in localStorage (`utils/sceneCache.ts`, tagged with the user), so a closed tab or a lost connection doesn't lose them; reopening the scene restores and saves them. The full action list is in [store-api-reference.md](store-api-reference.md).
+While a scene has unsaved edits, a copy stays in localStorage (`utils/sceneCache.ts`, tagged with the user), so a closed tab or a lost connection doesn't lose them; reopening the scene restores and saves them. A view-only tab neither uses nor clears that copy: it may be another tab's edits, still being made.
+
+**Read-only.** While `readOnlyReason` is set, the store drops any update that would change `entities`, `sceneSettings`, `postProcessing`, or `frame` (the `guardSceneContent` middleware, between `persist` and the actions), and entering read-only clears undo history. That's the backstop; the UI also disables the controls that edit the scene and detaches the transform gizmo. Cameras stay free to move, since looking around is what view only is for. A new control that edits the scene needs no extra wiring to be safe, but should be disabled when `readOnlyReason` is set so it doesn't look editable. The full action list is in [store-api-reference.md](store-api-reference.md).
 
 ---
 

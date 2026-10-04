@@ -9,6 +9,7 @@ import { ExportModal } from "./ExportModal";
 import { HamburgerMenu } from "./HamburgerMenu";
 import { FloatingToolbar } from "./FloatingToolbar";
 import { PreviewControls } from "./PreviewControls";
+import { ReadOnlyBanner } from "./ReadOnlyBanner";
 import { SaveStatusIndicator } from "./SaveStatusIndicator";
 import { SceneNameField } from "./SceneNameField";
 import { Button } from "./ui/Button";
@@ -21,6 +22,7 @@ import { useHotkeys } from "../hooks/useHotkeys";
 import { usePreviewSession } from "../hooks/usePreviewSession";
 import { useOpenScene } from "../hooks/useOpenScene";
 import { useSceneAutosave } from "../hooks/useSceneAutosave";
+import { useSceneLock } from "../hooks/useSceneLock";
 
 //import tsx utils for editor export and publish
 import { exportLiveScene, getLiveScene, createDownload } from "../utils/exportScene";
@@ -31,7 +33,8 @@ import { getSafeColor } from "../utils/sceneColor";
 import { signOut } from "../utils/authSession";
 import { toggleTheme } from "../utils/theme";
 import { navigate } from "../utils/navigation";
-import { createScene, type OpenedScene } from "../utils/sceneLibrary";
+import { createScene, type LockClaim, type OpenedScene } from "../utils/sceneLibrary";
+import type { SaveStatus } from "../utils/sceneAutosave";
 
 //import tsx hook for editor store
 import { useEditorStore } from "../store/useEditorStore";
@@ -65,7 +68,12 @@ export function EditorApp({ sceneId, accountEmail }: EditorAppProps) {
       return <PageStatus label="Opening the scene…" />;
     case "ready":
       return (
-        <EditorWorkspace scene={openScene.scene} hasRecoveredEdits={openScene.hasRecoveredEdits} accountEmail={accountEmail} />
+        <EditorWorkspace
+          scene={openScene.scene}
+          lock={openScene.lock}
+          hasRecoveredEdits={openScene.hasRecoveredEdits}
+          accountEmail={accountEmail}
+        />
       );
     case "notFound":
       return (
@@ -90,11 +98,12 @@ export function EditorApp({ sceneId, accountEmail }: EditorAppProps) {
 
 interface EditorWorkspaceProps {
   scene: OpenedScene;
+  lock: LockClaim;
   hasRecoveredEdits: boolean;
   accountEmail: string | null;
 }
 
-function EditorWorkspace({ scene, hasRecoveredEdits, accountEmail }: EditorWorkspaceProps) {
+function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: EditorWorkspaceProps) {
   const entities = useEditorStore((state) => state.entities) ?? [];
   const currentPublishId = useEditorStore((state) => state.currentPublishId);
   const setCurrentPublishId = useEditorStore((state) => state.setCurrentPublishId);
@@ -169,7 +178,24 @@ function EditorWorkspace({ scene, hasRecoveredEdits, accountEmail }: EditorWorks
     window.addEventListener("pointerup", onPointerUp);
   };
 
-  const autosave = useSceneAutosave(scene, { hasRecoveredEdits });
+  // Before the autosave: the lock decides whether there's an edit session to autosave at all.
+  const sceneLock = useSceneLock({ scene, lock, hasRecoveredEdits });
+  const isViewOnly = sceneLock.editing.mode === "viewing";
+  const autosave = useSceneAutosave(scene.sceneId, sceneLock.editing.mode === "editing" ? sceneLock.editing.session : null);
+  const { reportLost } = sceneLock;
+
+  // A save refused because another tab or device took the scene over.
+  useEffect(() => {
+    if (autosave.status.kind === "openElsewhere") {
+      reportLost();
+    }
+  }, [autosave.status, reportLost]);
+
+  const saveStatus: SaveStatus = sceneLock.problem
+    ? { kind: sceneLock.problem }
+    : isViewOnly
+      ? { kind: "openElsewhere" }
+      : autosave.status;
 
   // Signing out leaves the app at once, so give pending edits a few seconds to save first.
   const handleSignOut = async () => {
@@ -325,10 +351,11 @@ function EditorWorkspace({ scene, hasRecoveredEdits, accountEmail }: EditorWorks
             
             <div className="left-sidebar-header-text">
               <SceneNameField sceneId={scene.sceneId} initialName={scene.name} />
-              <SaveStatusIndicator status={autosave.status} onRetry={autosave.retry} />
+              <SaveStatusIndicator status={saveStatus} onRetry={autosave.retry} />
             </div>
 
             <HamburgerMenu
+              canEdit={!isViewOnly}
               onNewFile={handleNewFile}
               onDuplicate={handleDuplicate}
               onResetCamera={handleResetCamera}
@@ -390,13 +417,20 @@ function EditorWorkspace({ scene, hasRecoveredEdits, accountEmail }: EditorWorks
 
         {/* Center Viewport */}
         <div className="viewport-container">
-          {/* Floating Layout Toolbar */}
-          {!isPreviewMode && (
-            <FloatingToolbar
-              isShapeDropdownOpen={sidebarUI.isShapeDropdownOpen}
-              setIsShapeDropdownOpen={sidebarUI.setIsShapeDropdownOpen}
-            />
-          )}
+          {/* Floating Layout Toolbar, or why there's none: the scene is open for editing elsewhere */}
+          {!isPreviewMode &&
+            (sceneLock.editing.mode === "viewing" ? (
+              <ReadOnlyBanner
+                heldByYou={sceneLock.editing.heldByYou}
+                isTakingOver={sceneLock.isTakingOver}
+                onTakeOver={() => void sceneLock.takeOver()}
+              />
+            ) : (
+              <FloatingToolbar
+                isShapeDropdownOpen={sidebarUI.isShapeDropdownOpen}
+                setIsShapeDropdownOpen={sidebarUI.setIsShapeDropdownOpen}
+              />
+            ))}
           
           {isPreviewMode && previewGlbUrl && previewCamera && (
             // On top of the viewport canvas, but pointer-events:none, so the

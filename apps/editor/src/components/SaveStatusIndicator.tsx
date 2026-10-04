@@ -61,6 +61,13 @@ export function SaveStatusIndicator({ status, onRetry }: SaveStatusIndicatorProp
           This scene was deleted
         </span>
       );
+    case "openElsewhere":
+      // The read-only banner over the viewport explains why and offers Take over.
+      return (
+        <span className="save-status save-status--warning" role="status">
+          View only
+        </span>
+      );
     default:
       return (
         <span className="save-status save-status--error" role="alert">

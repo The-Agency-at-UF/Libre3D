@@ -1,4 +1,4 @@
-import { create } from "zustand";
+import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
 import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
@@ -14,6 +14,12 @@ import {
 } from "../utils/entityTransforms";
 
 export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel" | "group";
+
+/**
+ * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
+ * lock (useSceneLock.ts). A viewer of a shared scene would be another reason, later.
+ */
+export type ReadOnlyReason = "openElsewhere";
 
 export type MaterialLayerType = "color" | "lighting" | "image";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
@@ -327,6 +333,12 @@ export interface EditorState {
   pendingImportCount: number;
   adjustPendingImports: (delta: number) => void;
 
+  // Why the scene can't be edited right now; null when it can. While set, updates that would change
+  // the scene's content are dropped (see guardSceneContent). Not persisted and not undoable: the
+  // editor sets it each time it opens a scene and whenever the editing lock moves.
+  readOnlyReason: ReadOnlyReason | null;
+  setReadOnly: (reason: ReadOnlyReason | null) => void;
+
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
@@ -511,11 +523,49 @@ function deepMerge(target: any, source: any): any {
   return result;
 }
 
+// What read-only mode protects: the scene's content, less its cameras. Moving the view (and picking
+// a camera) is how you look at a scene you can't edit, and nothing is saved while read-only; the
+// scene is reloaded from the cloud before editing resumes.
+const PROTECTED_SCENE_KEYS = ["entities", "sceneSettings", "postProcessing", "frame"] as const;
+
+/**
+ * Middleware between persist and the store's actions: while `readOnlyReason` is set, an update that
+ * would change the scene's content is dropped whole (nothing half-applied, nothing recorded for
+ * undo). This is the backstop behind the UI's disabled controls, since every action, hotkey, and
+ * viewport gesture writes through the `set` it hands the actions. `loadScene` and `setReadOnly`
+ * write with `api.setState`, which it doesn't touch. Undo also bypasses it (zundo writes from
+ * outside), which is why entering read-only clears the history.
+ */
+const guardSceneContent =
+  <T extends EditorState, Mps extends [StoreMutatorIdentifier, unknown][] = [], Mcs extends [StoreMutatorIdentifier, unknown][] = []>(
+    creator: StateCreator<T, Mps, Mcs>,
+  ): StateCreator<T, Mps, Mcs> =>
+  (set, get, api) => {
+    const guardedSet = ((partial: unknown, replace?: boolean) => {
+      // get() is still undefined while create() builds the initial state.
+      const state = get() as T | undefined;
+
+      if (!state?.readOnlyReason) {
+        return (set as (partial: unknown, replace?: boolean) => void)(partial, replace);
+      }
+
+      const next = (typeof partial === "function" ? partial(state) : partial) as Partial<EditorState> | null;
+
+      if (next && PROTECTED_SCENE_KEYS.some((key) => key in next && next[key] !== state[key])) {
+        return;
+      }
+
+      return (set as (partial: unknown, replace?: boolean) => void)(next, replace);
+    }) as typeof set;
+
+    return creator(guardedSet, get, api);
+  };
+
 export const useEditorStore = create<EditorState>()(
   subscribeWithSelector(
     temporal(
       persist(
-        (set, get) => ({
+        guardSceneContent((set, get, api) => ({
           entities: initialEntities.map(cloneEntity),
           selectedEntityIds: [],
           currentPublishId: null,
@@ -963,6 +1013,16 @@ export const useEditorStore = create<EditorState>()(
           previewGlbUrl: null,
           setPreviewMode: (active, url) => set({ isPreviewMode: active, previewGlbUrl: url }),
 
+          readOnlyReason: null,
+          setReadOnly: (reason) => {
+            api.setState({ readOnlyReason: reason });
+
+            if (reason) {
+              // There's nothing to undo into: the scene can't change here, and it's reloaded from
+              // the cloud before editing resumes.
+              useEditorStore.temporal.getState().clear();
+            }
+          },
           pendingImportCount: 0,
           adjustPendingImports: (delta) =>
             set((state) => ({ pendingImportCount: Math.max(0, state.pendingImportCount + delta) })),
@@ -1058,7 +1118,8 @@ export const useEditorStore = create<EditorState>()(
                 ? content.activeProfileId
                 : DEFAULT_CAMERA_PROFILE_ID;
 
-            set({
+            // Past the read-only guard: a read-only tab shows the latest saved scene through this too.
+            api.setState({
               entities: content ? content.entities.map(cloneEntity) : createStartingEntities(),
               // Deep-merged over the defaults, so a setting added since the scene was saved keeps
               // its default instead of coming back undefined.
@@ -1079,7 +1140,7 @@ export const useEditorStore = create<EditorState>()(
             useEditorStore.temporal.getState().clear();
           },
           setEditorState: (updates) => set((state) => ({ ...state, ...updates })),
-        }),
+        })),
         {
           // Since v17 this holds only editor preferences; the scene itself is saved in the cloud
           // (utils/sceneLibrary.ts) and loaded with loadScene. The key keeps its old name so v17's

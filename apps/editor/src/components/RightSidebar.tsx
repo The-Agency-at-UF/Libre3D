@@ -17,6 +17,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const entities = useEditorStore((state) => state.entities) ?? [];
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
+  const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
 
   const selectedEntities = entities.filter((e) => selectedEntityIds.includes(e.id));
 
@@ -35,17 +36,22 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
         hasSelection={selectedEntityIds.length > 0}
       />
 
-      {/* SCROLLABLE BODY */}
+      {/* SCROLLABLE BODY. View only: the panels that edit the scene are disabled; the
+          camera ones stay usable, since looking around is what view only is for. */}
       <div className="panel-body">
-        <FramePanel />
+        <fieldset className="inspector-fieldset" disabled={isReadOnly}>
+          <FramePanel />
+        </fieldset>
         <ViewportSettingsPanel />
-        <ScenePanel />
+        <fieldset className="inspector-fieldset" disabled={isReadOnly}>
+          <ScenePanel />
+        </fieldset>
 
         {selectedEntities.length > 0 ? (
-          <>
+          <fieldset className="inspector-fieldset" disabled={isReadOnly}>
             <TransformPanel selectedEntities={selectedEntities} />
             <MaterialsPanel selectedEntities={selectedEntities} />
-          </>
+          </fieldset>
         ) : (
           <CameraPanel />
         )}

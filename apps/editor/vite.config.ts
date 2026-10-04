@@ -15,8 +15,8 @@ const editorConfigDir = fileURLToPath(new URL(".", import.meta.url));
 const repoRootDir = path.resolve(editorConfigDir, "../..");
 const threeModulePath = path.resolve(editorConfigDir, "node_modules/three");
 
-// `/api/scenes` or `/api/scenes/:sceneId`, ignoring any query string.
-const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*))?\/?(?:\?.*)?$/;
+// `/api/scenes`, `/api/scenes/:sceneId`, or `/api/scenes/:sceneId/lock`, ignoring any query string.
+const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*)(?:\/(lock))?)?\/?(?:\?.*)?$/;
 
 const readRequestBody = (req: NodeJS.ReadableStream): Promise<string> =>
   new Promise<string>((resolve, reject) => {
@@ -32,18 +32,21 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
   name: "libre3d-aws-publish-route",
   configureServer(server) {
     server.middlewares.use(async (req, res, next) => {
-      // The dev copy of api/scenes/index.ts and api/scenes/[sceneId].ts: same handler, so the two
-      // can't drift. Everything route-specific lives in handleScenesRequest.
+      // The dev copy of api/scenes/index.ts, api/scenes/[sceneId]/index.ts, and
+      // api/scenes/[sceneId]/lock.ts: same handler, so the two can't drift. Everything
+      // route-specific lives in handleScenesRequest.
       const scenesMatch = req.url?.match(SCENES_ROUTE_PATTERN);
 
       if (scenesMatch) {
         const method = req.method ?? "GET";
-        const body = method === "GET" || method === "DELETE" ? "" : await readRequestBody(req);
-        const rawSceneId = scenesMatch[1];
+        const [, rawSceneId, subresource] = scenesMatch;
+        // Releasing the lock is a DELETE with a body (the session ID); deleting a scene has none.
+        const body = method === "GET" || (method === "DELETE" && !subresource) ? "" : await readRequestBody(req);
         const result = await handleScenesRequest(
           {
             method,
             sceneId: rawSceneId === undefined ? null : decodeURIComponent(rawSceneId),
+            subresource: subresource === "lock" ? "lock" : null,
             headers: req.headers,
             body,
           },

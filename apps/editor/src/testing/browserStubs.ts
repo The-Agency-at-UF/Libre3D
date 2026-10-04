@@ -1,7 +1,8 @@
 /**
  * PURPOSE: Just enough of the browser for unit tests of browser modules in Vitest's Node
  * environment: in-memory localStorage/sessionStorage, a window with a working location, history,
- * and events, and `navigator.onLine`. Test-only; nothing in the app imports this.
+ * and events, a document with events and `visibilityState`, and `navigator.onLine`. Test-only;
+ * nothing in the app imports this.
  *
  * Install with `stubBrowserGlobals()` in `beforeEach` and undo with `vi.unstubAllGlobals()` in
  * `afterEach`. Modules that read `localStorage` when they load (authSession.ts, the store) must be
@@ -91,23 +92,28 @@ export const createFakeWindow = (href = "http://localhost:5173/"): FakeWindow =>
   });
 };
 
+export type FakeDocument = EventTarget & { visibilityState: "visible" | "hidden" };
+
 export interface BrowserStubs {
   window: FakeWindow;
+  document: FakeDocument;
   localStorage: Storage;
   sessionStorage: Storage;
   navigator: { onLine: boolean };
 }
 
-/** Installs a fresh fake window, storages, and navigator as globals. */
+/** Installs a fresh fake window, document, storages, and navigator as globals. */
 export const stubBrowserGlobals = (href?: string): BrowserStubs => {
   const stubs: BrowserStubs = {
     window: createFakeWindow(href),
+    document: Object.assign(new EventTarget(), { visibilityState: "visible" as const }),
     localStorage: createMemoryStorage(),
     sessionStorage: createMemoryStorage(),
     navigator: { onLine: true },
   };
 
   vi.stubGlobal("window", stubs.window);
+  vi.stubGlobal("document", stubs.document);
   vi.stubGlobal("localStorage", stubs.localStorage);
   vi.stubGlobal("sessionStorage", stubs.sessionStorage);
   vi.stubGlobal("navigator", stubs.navigator);

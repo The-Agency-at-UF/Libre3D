@@ -36,19 +36,21 @@ Runs a single test file.
 | `utils/authSession.ts` | `sanitizeReturnTo` keeps sign-in redirects same-site (`//evil`, `/evil`, the callback); the PKCE redirect (S256 challenge of the stored verifier); code redemption (state check, Cognito errors, once under StrictMode); token refresh shared between callers, signing out only on a rejected refresh; sign-out clearing the session and unsaved scene edits |
 | `utils/navigation.ts` | `getPostSignInPath` keeps a deep link through sign-in and sends anything else to the gallery; `landingPathFor`; `navigate` / `subscribeToLocation` |
 | `utils/apiFetch.ts`, `utils/verifyAuth.ts` | Bearer token on `/api/*` only, `ApiAuthError` when signed out or rejected; the server takes the user ID from the verified token's `sub`, 401s bad tokens, fails closed (503) without config, and caches one verifier per pool/client |
-| `utils/awsSceneHandler.ts` | Every `/api/scenes` route against in-memory DynamoDB/S3 (`testing/fakeAws.ts`): validation, revisions, 409 on a stale save, one document object per scene, delete sweeping its prefix, and one user never reaching another's scene |
+| `utils/awsSceneHandler.ts` | Every `/api/scenes` route against in-memory DynamoDB/S3 (`testing/fakeAws.ts`): validation, revisions, 409 on a stale save, one document object per scene, delete sweeping its prefix, and one user never reaching another's scene. The editing lock: claiming a free, own, or lapsed lock (60 s lease), 423 while another session holds it, take-over, release only by the holder, a save refused (423) unless its session holds the lock and renewing the lease, 409 for a save from a tab older than the lock |
 | `utils/sceneDocument.ts` | The document round-trips through JSON, never shares vectors with the store, refuses newer schema versions, rejects malformed documents |
-| `utils/sceneAutosave.ts` | The 2 s debounce and 10 s cap, one save in flight, backoff retries, stopping on conflict/deletion/lost session, offline waiting, `flush`, `dispose` (fake timers) |
-| `utils/sceneCache.ts`, `utils/legacyScene.ts`, `utils/sceneLibrary.ts` | Unsaved edits per user and scene, another user's never loaded; `resolveSceneToOpen`; the pre-cloud scene set aside once; the client's requests and `SceneApiError`; the gallery's list waiting for a save in flight |
-| `store/useEditorStore.ts` | The persist v17 migration (old scene set aside, preferences kept, older blobs run through every migration, written back on load); `loadScene` (defaults deep-merged, personal camera kept, undo history cleared); a scene coming back unchanged from store → document → JSON → store |
+| `utils/sceneAutosave.ts` | The 2 s debounce and 10 s cap, one save in flight, backoff retries, stopping on conflict/deletion/lost session/lost lock (423), offline waiting, `flush`, `dispose` (fake timers) |
+| `utils/sceneLock.ts` | Renewing every 20 s while held and retrying every 10 s while held elsewhere, new revisions reported, failed requests changing nothing, stopping on a deleted scene or lost session, checking when the tab is shown again or restored from the back/forward cache, take-over (after a claim still out), a refused save counting as lost; releasing on `pagehide` only when nothing is unsaved; `releaseWhenSaved` waiting for the last saves (even one queued behind another), called off by `cancelRelease` (fake timers) |
+| `utils/editorSession.ts` | One session ID per tab, kept across a reload through sessionStorage but never left there for a duplicated tab to copy, back/forward cache, storage that throws |
+| `utils/sceneCache.ts`, `utils/legacyScene.ts`, `utils/sceneLibrary.ts` | Unsaved edits per user and scene, another user's never loaded; `resolveSceneToOpen`; the pre-cloud scene set aside once; the client's requests (saves carry the session ID; claiming, taking over, and releasing the lock) and `SceneApiError`; the gallery's list waiting for a save in flight |
+| `store/useEditorStore.ts` | The persist v17 migration (old scene set aside, preferences kept, older blobs run through every migration, written back on load); `loadScene` (defaults deep-merged, personal camera kept, undo history cleared); a scene coming back unchanged from store → document → JSON → store; read-only mode (every content-changing action dropped whole, selection/camera/preferences still allowed, `loadScene` still works, undo history cleared, not persisted) |
 
-**What's not covered**: React components and hooks (including `useSceneAutosave`'s local-copy writes and `useOpenScene`'s loading), `SceneManager`/`CameraManager`/`ObjectManager`, most store actions, export/publish, and anything that needs a DOM or WebGL. Keep using the checklists below for those.
+**What's not covered**: React components and hooks (including `useSceneAutosave`'s local-copy writes, `useOpenScene`'s loading, and `useSceneLock`'s switching between editing and viewing; see the two-tab checklist below), `SceneManager`/`CameraManager`/`ObjectManager`, most store actions, export/publish, and anything that needs a DOM or WebGL. Keep using the checklists below for those.
 
 **Tests marked "expected fail"** in the output are intentional. They use `it.fails` to pin down a known limitation (a TRS transform can't represent shear, so a rotated child under a non-uniformly scaled parent drifts slightly). If one of them starts *failing*, the limitation has been fixed — remove the `.fails`.
 
 **Writing a new test**: the suite runs in Node, with no DOM library. Build fixture data with a local factory (see `makeEntity` in `entityIndex.test.ts`), and compare transforms as matrices within a tolerance rather than exact Euler values.
 
-- **Browser modules** (anything using `localStorage`, `window`, `navigator`): install `stubBrowserGlobals()` from `src/testing/browserStubs.ts` in `beforeEach` and `vi.unstubAllGlobals()` in `afterEach`. Modules that read storage as they load (`authSession.ts`, the store) must be imported after that: `vi.resetModules()` then `await import(...)`.
+- **Browser modules** (anything using `localStorage`, `sessionStorage`, `window`, `document`, `navigator`): install `stubBrowserGlobals()` from `src/testing/browserStubs.ts` in `beforeEach` and `vi.unstubAllGlobals()` in `afterEach`. Modules that read storage as they load (`authSession.ts`, the store) must be imported after that: `vi.resetModules()` then `await import(...)`.
 - **Server handlers**: mock `./awsConfig.js` to hand out `FakeDynamoDB` / `FakeS3` from `src/testing/fakeAws.ts`, and `./verifyAuth.js` to choose the caller. The fakes evaluate condition and update expressions, so add support there when a handler starts using a new one.
 - **The store**: allowed for persistence and `loadScene` (see `useEditorStore.test.ts`), loaded fresh per test as above. Keep the viewport (WebGL) out.
 - **Timers**: `vi.useFakeTimers()` and `vi.advanceTimersByTimeAsync` (see `sceneAutosave.test.ts`).
@@ -152,6 +154,25 @@ Run this quick smoke test after ANY change to catch obvious regressions:
 - [ ] **Old state migrates** (if you bumped version, new fields have defaults)
 
 **Time**: 3-5 minutes
+
+---
+
+### Scene Lock (Two Tabs)
+
+Open the same scene in two tabs of one browser (or two browsers signed in as the same user).
+
+**In addition to smoke test**:
+
+- [ ] **Second tab is view only** (banner "View only" with Take over editing, header says View only, Frame/Scene/Transform/Materials panels disabled, no gizmo, hierarchy toggles and context-menu edits disabled)
+- [ ] **Edits are refused there** (Delete, Ctrl+D, Ctrl+Z, dropping a .glb do nothing; selecting and orbiting still work)
+- [ ] **View follows the editing tab** (edit in the first tab; the second shows it within ~10 s, keeping its camera and selection)
+- [ ] **Back to the gallery releases it** (the second tab can edit within ~10 s)
+- [ ] **Closing the tab releases it** (within ~10 s; at worst ~60 s when the release can't be sent)
+- [ ] **Reloading the editing tab keeps the lock** (no View only flash)
+- [ ] **Take over editing** (the second tab can edit at once; the first shows View only as soon as it's looked at, or within 20 s)
+- [ ] **A forced save from the view-only tab is refused** (from the console: `(await import("/src/utils/sceneLibrary.ts")).saveScene(id, doc, revision)` rejects with status 423)
+
+**Time**: 5 minutes
 
 ---
 
