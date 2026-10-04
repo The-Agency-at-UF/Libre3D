@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useEditorStore } from "../store/useEditorStore";
+import { isEffectivelyLocked } from "../store/entityIndex";
 
 interface UseHotkeysProps {
   onDuplicate?: () => void;
@@ -94,9 +95,10 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
             break;
           case "delete":
           case "backspace": {
-            const selectedIds = useEditorStore.getState().selectedEntityIds;
-            if (selectedIds.length > 0) {
-              useEditorStore.getState().removeEntity(selectedIds);
+            const { entities, selectedEntityIds } = useEditorStore.getState();
+            const deletableIds = selectedEntityIds.filter((id) => !isEffectivelyLocked(entities, id));
+            if (deletableIds.length > 0) {
+              useEditorStore.getState().removeEntity(deletableIds);
             }
             break;
           }

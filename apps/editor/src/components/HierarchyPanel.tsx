@@ -7,6 +7,8 @@ import {
   getEntityIndex,
   filterMoveRoots,
   canReparentEntities,
+  isEffectivelyLocked,
+  isLockedByAncestor,
 } from "../store/entityIndex";
 
 import { EyeIcon, LockIcon } from "./ui/Icons";
@@ -106,7 +108,7 @@ function BatchRenameDialog({ onClose }: { onClose: () => void }) {
     const updates: Record<string, string> = {};
     state.selectedEntityIds.forEach((id) => {
       const entity = state.entities.find((e) => e.id === id);
-      if (!entity || entity.locked) return;
+      if (!entity || isEffectivelyLocked(state.entities, id)) return;
       let name = entity.name;
       if (find) name = name.split(find).join(replace);
       name = `${prefix}${name}${suffix}`;
@@ -192,7 +194,7 @@ function HierarchyContextMenu({
     .filter((entity): entity is Entity => !!entity);
   const targetEntity = menu.targetId ? byId.get(menu.targetId) : undefined;
 
-  const canRename = !!targetEntity && !targetEntity.locked;
+  const canRename = !!targetEntity && !isEffectivelyLocked(entities, targetEntity.id);
 
   const moveRoots = filterMoveRoots(entities, selectedEntityIds);
   const parentIds = new Set(moveRoots.map((id) => byId.get(id)?.parentId ?? null));
@@ -202,7 +204,9 @@ function HierarchyContextMenu({
   const selectedGroups = selected.filter(
     (entity) => entity.type === "group" || (entity.type === "importedModel" && entity.id !== entity.rootEntityId),
   );
-  const deletableIds = selected.filter((entity) => !entity.locked).map((entity) => entity.id);
+  const deletableIds = selected
+    .filter((entity) => !isEffectivelyLocked(entities, entity.id))
+    .map((entity) => entity.id);
   const hasSelection = selected.length > 0;
 
   // Keep the menu on-screen when invoked near the viewport edge.
@@ -323,6 +327,8 @@ function HierarchyItem({
   const entity = useEditorStore((state) =>
     state.entities.find((e) => e.id === entityId)
   );
+  // True when a locked ancestor locks this row; its own `locked` flag is kept.
+  const inheritedLock = useEditorStore((state) => isLockedByAncestor(state.entities, entityId));
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const removeEntity = useEditorStore((state) => state.removeEntity);
   const toggleVisibility = useEditorStore((state) => state.toggleVisibility);
@@ -351,10 +357,11 @@ function HierarchyItem({
   if (!entity) return null;
 
   const isSelected = selectedEntityIds.includes(entity.id);
+  const isLocked = entity.locked || inheritedLock;
 
   const handleDoubleClick = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (entity.locked) return; // Cannot rename locked elements
+    if (isLocked) return; // Cannot rename locked elements
     onRequestRename(entity.id);
   };
 
@@ -383,7 +390,7 @@ function HierarchyItem({
 
   return (
     <div
-      className={`editor-tree-item${isSelected ? " editor-tree-item--selected" : ""}${isActive ? " editor-tree-item--active" : ""}${entity.locked ? " editor-tree-item--locked" : ""}${dropIndicator === "onto" ? " editor-tree-item--drop-onto" : ""}`}
+      className={`editor-tree-item${isSelected ? " editor-tree-item--selected" : ""}${isActive ? " editor-tree-item--active" : ""}${isLocked ? " editor-tree-item--locked" : ""}${dropIndicator === "onto" ? " editor-tree-item--drop-onto" : ""}`}
       style={{ paddingLeft: `${ROW_INDENT_BASE_REM + visualDepth * ROW_INDENT_STEP_REM}rem` }}
       data-entity-id={entity.id}
       onContextMenu={(e) => onRowContextMenu(entity.id, e)}
@@ -462,21 +469,23 @@ function HierarchyItem({
             <EyeIcon visible={entity.visible} />
           </button>
           <button
-            className={`hierarchy-action-btn${entity.locked ? " active-locked" : ""}`}
+            className={`hierarchy-action-btn${entity.locked ? " active-locked" : inheritedLock ? " inherited-locked" : ""}`}
             type="button"
-            aria-label={entity.locked ? "Unlock entity" : "Lock entity"}
+            aria-label={entity.locked ? "Unlock entity" : inheritedLock ? "Locked by parent" : "Lock entity"}
+            title={inheritedLock && !entity.locked ? "Locked by parent — unlock the parent to edit" : undefined}
+            disabled={inheritedLock && !entity.locked}
             onClick={(e) => {
               e.stopPropagation();
               toggleLock(entity.id);
             }}
           >
-            <LockIcon locked={entity.locked} />
+            <LockIcon locked={isLocked} />
           </button>
           <button
             className="editor-tree-delete"
             type="button"
             aria-label={`Delete ${entity.name}`}
-            disabled={entity.locked}
+            disabled={isLocked}
             onClick={(event) => {
               event.stopPropagation();
               removeEntity([entity.id]);
@@ -845,7 +854,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const handleRowDragStart = (id: string, event: React.DragEvent) => {
     const state = useEditorStore.getState();
     const entity = state.entities.find((e) => e.id === id);
-    if (!entity || entity.locked) {
+    if (!entity || isEffectivelyLocked(state.entities, id)) {
       event.preventDefault();
       return;
     }
@@ -855,8 +864,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     let ids: string[];
     if (state.selectedEntityIds.includes(id)) {
       ids = filterMoveRoots(state.entities, state.selectedEntityIds).filter((rootId) => {
-        const root = state.entities.find((e) => e.id === rootId);
-        return !!root && !root.locked;
+        return !isEffectivelyLocked(state.entities, rootId);
       });
     } else {
       selectEntity(id, false);
@@ -1029,8 +1037,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       }
       case "F2": {
         if (!activeId) return;
-        const entity = entities.find((e) => e.id === activeId);
-        if (!entity || entity.locked) return;
+        if (!entities.some((e) => e.id === activeId) || isEffectivelyLocked(entities, activeId)) return;
         event.preventDefault();
         setRenamingId(activeId);
         break;

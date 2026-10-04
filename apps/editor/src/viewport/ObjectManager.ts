@@ -8,6 +8,7 @@ import {
   type ImageSlot,
 } from "../store/useEditorStore";
 import { useEditorStore } from "../store/useEditorStore";
+import { isEffectivelyLocked } from "../store/entityIndex";
 import { loadModelAsset } from "../utils/modelAssetStore";
 import { loadTextureAsset } from "../utils/textureAssetStore";
 import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
@@ -681,7 +682,14 @@ export class ObjectManager {
     }
   }
 
-  private syncEntityToSceneObject(obj: THREE.Object3D, entity: Entity, isBeingDragged: boolean): void {
+  // `entities` resolves inherited locks (a locked ancestor locks this object
+  // too); callers outside syncMeshes read it fresh from the store.
+  private syncEntityToSceneObject(
+    obj: THREE.Object3D,
+    entity: Entity,
+    isBeingDragged: boolean,
+    entities: Entity[] = useEditorStore.getState().entities,
+  ): void {
     if (!isBeingDragged) {
       obj.position.set(...entity.position);
       obj.rotation.set(...entity.rotation);
@@ -692,7 +700,7 @@ export class ObjectManager {
       if (obj instanceof THREE.DirectionalLight) aimDirectionalLight(obj);
     }
     obj.visible = entity.visible;
-    obj.userData.locked = entity.locked;
+    obj.userData.locked = isEffectivelyLocked(entities, entity.id);
 
     // Imported meshes are THREE.Mesh instances too, and now carry derived
     // materialLayers (see backfillMaterialLayers) — so this drives their material
@@ -806,7 +814,7 @@ export class ObjectManager {
         const obj = this.createSceneObject(entity);
         obj.userData.entityId = entity.id;
         obj.userData.entityType = entity.type;
-        obj.userData.locked = entity.locked;
+        obj.userData.locked = isEffectivelyLocked(entities, entity.id);
         // Created flat on the scene; the applyParenting pass below moves it
         // under its store parent once every sibling object exists (parents can
         // appear later in the entities array than their children).
@@ -818,7 +826,7 @@ export class ObjectManager {
       }
 
       const skipSync = !!isBeingDragged;
-      this.syncEntityToSceneObject(existingObj, entity, skipSync);
+      this.syncEntityToSceneObject(existingObj, entity, skipSync, entities);
     }
 
     // Identify stale objects
