@@ -84,7 +84,7 @@ export const collectAssetRefs = (entities: unknown): AssetRef[] => {
     }
   }
 
-  return [...refs.values()];
+  return Array.from(refs.values());
 };
 
 /** The content addresses among the assets the entities reference (old random IDs left out). */
