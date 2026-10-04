@@ -29,6 +29,17 @@ export class PublishAuthError extends Error {
   }
 }
 
+// The publish endpoints answer failures with `{ error }`. Keep that message so a failed publish
+// says why (bad AWS credentials, missing table, ...) instead of a generic status.
+const readServerError = async (response: Response): Promise<string | null> => {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === "string" && body.error ? body.error : null;
+  } catch {
+    return null;
+  }
+};
+
 const readPublishSession = async (
   currentPublishId: string | null,
   publishToken: string,
@@ -48,7 +59,10 @@ const readPublishSession = async (
   }
 
   if (!response.ok) {
-    throw new Error("Failed to create a publish session.");
+    const serverError = await readServerError(response);
+    throw new Error(
+      `Failed to create a publish session (HTTP ${response.status})${serverError ? `: ${serverError}` : "."}`,
+    );
   }
 
   return (await response.json()) as PublishSceneResponse;
