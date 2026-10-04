@@ -287,6 +287,50 @@ describe("imported assets", () => {
     autosaver.dispose();
   });
 
+  it("waits for another autosaver's save of the same scene, then builds on its revision", async () => {
+    // React StrictMode's remount, or a new edit session after getting the lock back: the old
+    // autosaver's last save (uploads first, so seconds long) is still out when the new one saves.
+    let finishUploads: () => void = () => undefined;
+    saveSceneMock.mockImplementation(async () => ({ revision: revision + 1, updatedAt: "t" }));
+    const first = createAutosaver({ prepareSave: () => new Promise<void>((resolve) => (finishUploads = resolve)) });
+    first.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+    void first.saveNow();
+    first.dispose();
+
+    const second = createAutosaver();
+    documentVersion = 2;
+    second.markChanged();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(saveSceneMock).not.toHaveBeenCalled();
+
+    finishUploads();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(saveSceneMock.mock.calls).toEqual([
+      ["scene-1", { version: 1 }, 1],
+      ["scene-1", { version: 2 }, 2],
+    ]);
+    expect(lastStatus()).toBe("saved");
+    second.dispose();
+  });
+
+  it("doesn't wait for a save of another scene", async () => {
+    succeedWith(2);
+    succeedWith(5);
+    const slow = createAutosaver({ sceneId: "scene-2", prepareSave: () => new Promise<void>(() => undefined) });
+    slow.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    const autosaver = createAutosaver();
+    autosaver.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(saveSceneMock).toHaveBeenCalledWith("scene-1", { version: 1 }, 1);
+    slow.dispose();
+    autosaver.dispose();
+  });
+
   it("shows upload progress", async () => {
     succeedWith(2);
     const autosaver = createAutosaver({

@@ -6,12 +6,12 @@
  * OUTPUT: Saves through `saveScene`, and a `SaveStatus` for the editor's indicator.
  *
  * Timing: a save goes out 2 s after the last edit, or after 10 s of continuous editing at the
- * latest (dragging a slider never pauses for 2 s). One save is in flight at a time; edits made
- * during it are saved right after. Failures retry with backoff, and immediately when the browser
- * comes back online. A conflict (saved from somewhere else), a deleted scene, a lost session, or
- * losing the editing lock (another tab or device took the scene over) stops this autosaver for good:
- * retrying those would fail the same way, or overwrite someone's newer save. Getting the lock back
- * starts a new autosaver (useSceneLock.ts).
+ * latest (dragging a slider never pauses for 2 s). One save of a scene is in flight at a time, even
+ * across autosavers; edits made during it are saved right after. Failures retry with backoff, and
+ * immediately when the browser comes back online. A conflict (saved from somewhere else), a
+ * deleted scene, a lost session, or losing the editing lock (another tab or device took the scene
+ * over) stops this autosaver for good: retrying those would fail the same way, or overwrite
+ * someone's newer save. Getting the lock back starts a new autosaver (useSceneLock.ts).
  *
  * Imported assets: `prepareSave` runs before each save with the document about to go out, and the
  * save waits for it (uploading the assets the document uses, see assetTransfers.ts), so a saved
@@ -60,6 +60,12 @@ const DEBOUNCE_MS = 2_000;
 const MAX_WAIT_MS = 10_000;
 const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000];
 
+// The save in flight for each scene, whichever autosaver started it. Another autosaver for the same
+// scene (React StrictMode's remount, or a new edit session after getting the lock back) waits for
+// it, so it never builds on the revision that save is about to replace (a 409). Uploading assets
+// first makes that window seconds long.
+const savesInFlight = new Map<string, Promise<void>>();
+
 export class SceneAutosaver {
   private readonly options: SceneAutosaverOptions;
   private isDirty = false;
@@ -107,6 +113,12 @@ export class SceneAutosaver {
       return this.inFlight.then(() => this.saveNow());
     }
 
+    const othersSave = savesInFlight.get(this.options.sceneId);
+
+    if (othersSave) {
+      return othersSave.then(() => this.saveNow());
+    }
+
     if (!navigator.onLine) {
       this.options.onStatus({ kind: "offline" });
       return Promise.resolve();
@@ -124,17 +136,25 @@ export class SceneAutosaver {
         }
       }) ?? Promise.resolve();
 
-    this.inFlight = prepared
-      .then(() => saveScene(this.options.sceneId, document, this.options.readRevision()))
+    const { sceneId } = this.options;
+    const save = prepared
+      .then(() => saveScene(sceneId, document, this.options.readRevision()))
       .then(
         (result) => this.handleSaved(result.revision),
         (error: unknown) => this.handleFailed(error),
       )
       .finally(() => {
         this.inFlight = null;
+
+        if (savesInFlight.get(sceneId) === save) {
+          savesInFlight.delete(sceneId);
+        }
       });
 
-    return this.inFlight;
+    this.inFlight = save;
+    savesInFlight.set(sceneId, save);
+
+    return save;
   }
 
   /** Saves everything pending; true if nothing is left unsaved afterwards. */
