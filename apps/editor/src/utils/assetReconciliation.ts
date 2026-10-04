@@ -3,9 +3,13 @@ import { deleteModelAsset, listModelAssetIds } from "./modelAssetStore";
 import { deleteTextureAsset, listTextureAssetIds } from "./textureAssetStore";
 
 // NOT WIRED UP since scenes moved to the cloud (persist v17): it only knows the
-// open scene's entities, so it would delete every other scene's imported assets,
-// which exist only in this browser until PR 5. PR 5 replaces it once local
-// assets are a cache of cloud copies.
+// open scene's entities, so it would delete every other scene's imported assets.
+// Since cloud assets, local copies are a cache: a missing one is downloaded again
+// when needed (assetTransfers.ts), so deleting is safe for any hash the cloud has.
+// What's left before turning a sweep back on: choosing when to evict (age, or a
+// storage budget), and keeping what isn't in the cloud yet: assets referenced by
+// unsaved edits (sceneCache.ts, any user), files younger than a grace period (an
+// import under way in another tab), and old random IDs (never uploaded).
 //
 // Ran once per app load (wired via useEditorStore's onRehydrateStorage) to free
 // OPFS storage for model/texture assets no entity references anymore. Deletion
