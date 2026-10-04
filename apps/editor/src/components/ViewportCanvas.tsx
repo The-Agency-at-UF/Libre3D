@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
 import { useEditorStore } from "../store/useEditorStore";
+import { filterMoveRoots } from "../store/entityIndex";
 import { SceneManager } from "../viewport/SceneManager";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
@@ -123,9 +124,20 @@ export function ViewportCanvas() {
   }, [scene]);
 
   // -- Multi-select Drag Handlers --
+  // Only the selection's move roots are driven by the proxy. A selected
+  // descendant of another selected entity already follows its parent through
+  // the scene graph; writing it too would solve its local transform against the
+  // parent's pre-update matrix and then move it again when the parent syncs —
+  // an overshoot that compounds per nesting level (visible as skinned meshes
+  // smearing when box-select grabs a whole bone chain).
   useEffect(() => {
     const tc = transformControlsRef.current;
     if (!tc) return;
+
+    const getDragRootIds = () => {
+      const { entities, selectedEntityIds } = useEditorStore.getState();
+      return filterMoveRoots(entities, selectedEntityIds);
+    };
 
     const onDragChange = (event: any) => {
       const isDragging = event.value;
@@ -134,7 +146,7 @@ export function ViewportCanvas() {
         initialOffsetsRef.current.clear();
         proxy.updateMatrixWorld(true);
         const proxyInverse = proxy.matrixWorld.clone().invert();
-        useEditorStore.getState().selectedEntityIds.forEach(id => {
+        getDragRootIds().forEach(id => {
           const obj = objectManager.getObject(id);
           if (obj) {
             obj.updateMatrixWorld(true);
@@ -151,7 +163,7 @@ export function ViewportCanvas() {
         const updates: Record<string, any> = {};
         proxy.updateMatrixWorld(true);
         const proxyMat = proxy.matrixWorld;
-        useEditorStore.getState().selectedEntityIds.forEach(id => {
+        getDragRootIds().forEach(id => {
           const localMat = initialOffsetsRef.current.get(id);
           const obj = objectManager.getObject(id);
           if (localMat && obj) {
