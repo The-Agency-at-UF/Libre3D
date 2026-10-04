@@ -301,6 +301,30 @@ describe("AssetDownloader", () => {
     expect(fetchBlob).toHaveBeenCalledOnce();
   });
 
+  it("still counts a download it joined that ends while it's asking for the rest", async () => {
+    const files = await cloudFiles("shared model", "other texture");
+    const [shared, other] = [...files.keys()];
+    const { downloader, fetchBlob, requestDownloads } = setUpDownloads(files);
+    let finishShared: () => void = () => undefined;
+    const sharedGate = new Promise<void>((resolve) => (finishShared = resolve));
+    fetchBlob.mockImplementationOnce(async () => {
+      await sharedGate;
+      return files.get(shared)!;
+    });
+
+    const opening = downloader.download("scene-1", [model(shared)]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The second caller joins the shared download, then asks for its other asset; the shared one
+    // lands meanwhile.
+    requestDownloads.mockImplementationOnce(async (_sceneId, hashes) => {
+      finishShared();
+      await opening;
+      return { downloads: hashes.map((hash) => ({ hash, url: `https://s3.test/${hash}` })), unavailable: [] };
+    });
+
+    await expect(downloader.download("scene-1", [model(shared), texture(other)])).resolves.toEqual([]);
+  });
+
   it("reports progress as files done and bytes so far", async () => {
     const files = await cloudFiles("12345", "1234567890");
     const progress: DownloadProgress[] = [];

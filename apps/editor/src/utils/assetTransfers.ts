@@ -98,7 +98,7 @@ interface AssetUploaderOptions {
   put?: typeof putAsset;
 }
 
-// The server's limit per uploads request.
+// The server's limit per uploads or downloads request.
 const MAX_ASSETS_PER_REQUEST = 100;
 const PARALLEL_UPLOADS = 3;
 
@@ -331,13 +331,17 @@ export class AssetDownloader {
 
     report();
 
-    // Already on their way for someone else: wait for those rather than fetch them twice.
-    const joined = absent.filter((ref) => this.inFlight.has(ref.id));
-    const toRequest = absent.filter((ref) => !this.inFlight.has(ref.id));
+    // Already on their way for someone else: wait for those rather than fetch them twice. Taken
+    // now, since a download leaves inFlight as soon as it ends.
+    const joined = absent.flatMap((ref) => {
+      const download = this.inFlight.get(ref.id);
+      return download ? [{ ref, download }] : [];
+    });
+    const toRequest = absent.filter((ref) => !joined.some((entry) => entry.ref.id === ref.id));
     const tickets: Array<{ ref: AssetRef; url: string }> = [];
 
-    for (let start = 0; start < toRequest.length; start += 100) {
-      const batch = toRequest.slice(start, start + 100);
+    for (let start = 0; start < toRequest.length; start += MAX_ASSETS_PER_REQUEST) {
+      const batch = toRequest.slice(start, start + MAX_ASSETS_PER_REQUEST);
 
       try {
         const answer = await this.requestDownloads(
@@ -370,7 +374,7 @@ export class AssetDownloader {
     };
 
     await Promise.all([
-      ...joined.map((ref) => settle(ref.id, this.inFlight.get(ref.id)!)),
+      ...joined.map(({ ref, download }) => settle(ref.id, download)),
       ...Array.from({ length: Math.min(PARALLEL_DOWNLOADS, tickets.length) }, downloadNext),
     ]);
 
