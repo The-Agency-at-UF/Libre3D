@@ -18,8 +18,8 @@ import * as THREE from "three";
 // Uniforms are refreshed in onBeforeRender from whichever camera is rendering,
 // so perspective ↔ orthographic swaps through cameraRef need no extra wiring.
 
-const BASE_CELL_SIZE = 1;
-const MIN_PIXELS_BETWEEN_LINES = 8;
+const BASE_CELL_SIZE = 2;
+const MIN_PIXELS_BETWEEN_LINES = 4;
 // Fade-out distance = camera height × this, clamped below.
 const FADE_DISTANCE_PER_HEIGHT = 60;
 const MIN_FADE_DISTANCE = 30;
@@ -45,15 +45,19 @@ const fragmentShader = /* glsl */ `
 
   varying vec3 vWorldPosition;
 
-  const float MINOR_STRENGTH = 0.45;
-  const float MAJOR_STRENGTH = 1.0;
+  // Full strength renders lines at exactly uLineColor, matching the old
+  // GridHelper; lower these to make every grid level fainter.
+  const float MINOR_STRENGTH = 0.7;
+  const float MAJOR_STRENGTH = 0.7;
   const float AXIS_HALF_WIDTH_PX = 1.5;
 
   // Coverage (0..1) of the nearest line of a grid with the given cell size.
-  // dudv = world units per pixel along x and z.
+  // dudv = world units per pixel along x and z. Solid within 0.25px of the
+  // line, then a 1px falloff, so a line always lights at least one pixel at
+  // full colour (like a 1px GL line) instead of splitting into two dim ones.
   float gridCoverage(vec2 p, float cell, vec2 dudv) {
     vec2 distPx = abs(mod(p + 0.5 * cell, cell) - 0.5 * cell) / dudv;
-    return 1.0 - min(min(distPx.x, distPx.y), 1.0);
+    return 1.0 - clamp(min(distPx.x, distPx.y) - 0.25, 0.0, 1.0);
   }
 
   float gridLog10(float x) {
@@ -104,7 +108,10 @@ const fragmentShader = /* glsl */ `
   }
 `;
 
-export class InfiniteGrid extends THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial> {
+export class InfiniteGrid extends THREE.Mesh<
+  THREE.PlaneGeometry,
+  THREE.ShaderMaterial
+> {
   // Reused every frame so the render loop never allocates.
   private readonly cameraWorldPosition = new THREE.Vector3();
 
@@ -126,6 +133,10 @@ export class InfiniteGrid extends THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMa
       },
       transparent: true,
       depthWrite: false,
+      // Editor UI, not scene content: skip the renderer's tone mapping
+      // (neutral, exposure 1.3), which shifts dark slate colours darker and
+      // bluer. Colours then render as the exact hex values below.
+      toneMapped: false,
       side: THREE.DoubleSide, // still visible when orbiting below the floor
     });
 
@@ -144,8 +155,14 @@ export class InfiniteGrid extends THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMa
 
   // Runs after the scene's matrices are updated but before this mesh's
   // modelViewMatrix is computed, so updating the matrix here applies this frame.
-  override onBeforeRender(_renderer: THREE.WebGLRenderer, _scene: THREE.Scene, camera: THREE.Camera): void {
-    const cameraPosition = this.cameraWorldPosition.setFromMatrixPosition(camera.matrixWorld);
+  override onBeforeRender(
+    _renderer: THREE.WebGLRenderer,
+    _scene: THREE.Scene,
+    camera: THREE.Camera,
+  ): void {
+    const cameraPosition = this.cameraWorldPosition.setFromMatrixPosition(
+      camera.matrixWorld,
+    );
     const uniforms = this.material.uniforms;
 
     let halfSize: number;
@@ -154,7 +171,9 @@ export class InfiniteGrid extends THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMa
     if (camera instanceof THREE.OrthographicCamera) {
       // Cover the whole (zoomed) view; ortho has no horizon to hide, so the
       // fade only needs to hide the quad's edge.
-      const visibleExtent = Math.max(camera.right - camera.left, camera.top - camera.bottom) / camera.zoom;
+      const visibleExtent =
+        Math.max(camera.right - camera.left, camera.top - camera.bottom) /
+        camera.zoom;
       halfSize = Math.max(camera.far, visibleExtent * 2);
       fadeDistance = halfSize * 0.95;
     } else {
@@ -162,7 +181,10 @@ export class InfiniteGrid extends THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMa
       halfSize = far;
       fadeDistance = Math.min(
         far * 0.95,
-        Math.max(Math.abs(cameraPosition.y) * FADE_DISTANCE_PER_HEIGHT, MIN_FADE_DISTANCE),
+        Math.max(
+          Math.abs(cameraPosition.y) * FADE_DISTANCE_PER_HEIGHT,
+          MIN_FADE_DISTANCE,
+        ),
       );
     }
 
