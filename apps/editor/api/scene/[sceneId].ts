@@ -2,8 +2,9 @@
  * PURPOSE: Vercel serverless entry point for `GET /api/scene/:sceneId`.
  *
  * INPUT: The `sceneId` path segment from a published share link.
- * OUTPUT: `{ cloudAssetUrl }` pointing at the published GLB, which `PublicViewer` hands to
- *         `<model-viewer>`; 404 when the scene is not in DynamoDB.
+ * OUTPUT: `{ cloudAssetUrl, bgColor }` — the published GLB, which `PublicViewer` hands to
+ *         `<model-viewer>`, and the scene background (null for older publishes); 404 when the
+ *         scene is not in DynamoDB.
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
@@ -33,7 +34,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
       return;
     }
 
-    res.status(200).json({ cloudAssetUrl: sceneData.assetUrl });
+    res.status(200).json({ cloudAssetUrl: sceneData.assetUrl, bgColor: sceneData.bgColor });
   } catch (error) {
     console.error("Scene lookup handler error:", error);
 

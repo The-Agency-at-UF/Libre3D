@@ -251,8 +251,12 @@ function EditorApp() {
     liveScene: THREE.Scene,
     publishId: string | null,
   ): Promise<PublishSceneResult | null> => {
+    // Read at publish time (not from the render closure) so a colour picked just before
+    // clicking Share is what gets published.
+    const bgColor = getSafeColor(useEditorStore.getState().sceneSettings.bgColor);
+
     try {
-      return await publishLiveScene(liveScene, publishId, readPublishToken());
+      return await publishLiveScene(liveScene, publishId, readPublishToken(), bgColor);
     } catch (error) {
       if (!(error instanceof PublishAuthError)) {
         throw error;
@@ -265,7 +269,7 @@ function EditorApp() {
       }
 
       try {
-        const retryResult = await publishLiveScene(liveScene, publishId, enteredToken);
+        const retryResult = await publishLiveScene(liveScene, publishId, enteredToken, bgColor);
         writePublishToken(enteredToken);
         return retryResult;
       } catch (retryError) {

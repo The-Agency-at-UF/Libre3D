@@ -1,7 +1,8 @@
 /**
  * PURPOSE: Vercel serverless entry point for `POST /api/publish`.
  *
- * INPUT: An optional JSON body of `{ currentPublishId }` so republishing reuses an existing sceneId.
+ * INPUT: An optional JSON body of `{ currentPublishId, bgColor }`: the id lets republishing reuse an
+ *        existing sceneId, and the colour is stored for the share page (glTF can't carry it).
  * OUTPUT: The publish session (`sceneId`, `assetKey`, presigned `uploadUrl`, `shareUrl`) the editor
  *         needs to upload the exported GLB straight to S3.
  *
@@ -13,31 +14,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 import { createPublishSession, resolveRequestBaseUrl } from "../src/utils/awsPublishHandler";
 import { authorizePublishRequest } from "../src/utils/publishAuth";
-
-const readCurrentPublishId = (body: unknown): string | null => {
-  if (!body) {
-    return null;
-  }
-
-  // Vercel parses JSON bodies for us, but a client sending another content type leaves a string.
-  let parsed: unknown = body;
-
-  if (typeof body === "string") {
-    try {
-      parsed = JSON.parse(body);
-    } catch {
-      return null;
-    }
-  }
-
-  if (typeof parsed !== "object" || parsed === null) {
-    return null;
-  }
-
-  const currentPublishId = (parsed as { currentPublishId?: unknown }).currentPublishId;
-
-  return typeof currentPublishId === "string" && currentPublishId.trim() ? currentPublishId : null;
-};
+import { parsePublishRequestBody } from "../src/utils/publishedSceneStyle";
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
   if (req.method !== "POST") {
@@ -54,10 +31,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse): 
   }
 
   try {
+    const { currentPublishId, bgColor } = parsePublishRequestBody(req.body);
     const session = await createPublishSession(
       process.env,
-      readCurrentPublishId(req.body),
+      currentPublishId,
       resolveRequestBaseUrl(req.headers, process.env),
+      bgColor,
     );
 
     res.status(200).json(session);

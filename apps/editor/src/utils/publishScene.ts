@@ -1,6 +1,7 @@
 import type * as THREE from "three";
 
 import { createSceneExportBlob } from "./exportScene";
+import { normalizePublishedBgColor } from "./publishedSceneStyle";
 
 export interface PublishSceneResponse {
   sceneId: string;
@@ -31,6 +32,7 @@ export class PublishAuthError extends Error {
 const readPublishSession = async (
   currentPublishId: string | null,
   publishToken: string,
+  bgColor: string | null,
 ): Promise<PublishSceneResponse> => {
   const response = await fetch(PUBLISH_ENDPOINT, {
     method: "POST",
@@ -38,7 +40,7 @@ const readPublishSession = async (
       "Content-Type": "application/json",
       [PUBLISH_TOKEN_HEADER]: publishToken,
     },
-    body: JSON.stringify({ currentPublishId }),
+    body: JSON.stringify({ currentPublishId, bgColor }),
   });
 
   if (response.status === 401) {
@@ -66,10 +68,15 @@ const uploadSceneBlob = async (uploadUrl: string, blob: Blob): Promise<void> => 
   }
 };
 
+/**
+ * `bgColor` is the editor's scene background. The GLB can't carry it (glTF has no background), so
+ * it is sent alongside and stored on the publish record for the share page to apply.
+ */
 export const publishLiveScene = async (
   scene: THREE.Scene,
   currentPublishId: string | null,
   publishToken: string,
+  bgColor: string,
 ): Promise<PublishSceneResult | null> => {
   const sceneBlob = await createSceneExportBlob(scene, "glb");
 
@@ -77,7 +84,7 @@ export const publishLiveScene = async (
     return null;
   }
 
-  const session = await readPublishSession(currentPublishId, publishToken);
+  const session = await readPublishSession(currentPublishId, publishToken, normalizePublishedBgColor(bgColor));
   await uploadSceneBlob(session.uploadUrl, sceneBlob);
 
   return {

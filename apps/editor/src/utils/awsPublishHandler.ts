@@ -5,6 +5,8 @@ import { DynamoDBClient, PutItemCommand, GetItemCommand } from "@aws-sdk/client-
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
+import { normalizePublishedBgColor } from "./publishedSceneStyle";
+
 export interface PublishSessionResult {
   sceneId: string;
   assetKey: string;
@@ -98,10 +100,17 @@ const createShareUrl = (baseUrl: string, sceneId: string): string => `${trimTrai
 const createAssetUrl = (config: AwsPublishConfig, assetKey: string): string =>
   `https://${config.bucketName}.s3.${config.region}.amazonaws.com/${assetKey}`;
 
+export interface PublishedScene {
+  assetUrl: string;
+  /** Scene background, or null for scenes published before it was stored. */
+  bgColor: string | null;
+}
+
 export const createPublishSession = async (
   env: AwsPublishEnv,
   currentPublishId: string | null | undefined,
   baseUrl: string,
+  bgColor: string | null = null,
 ): Promise<PublishSessionResult> => {
   const config = readConfig(env);
   const s3Client = createS3Client(config);
@@ -129,6 +138,8 @@ export const createPublishSession = async (
         assetUrl: { S: assetUrl },
         shareUrl: { S: createShareUrl(baseUrl, sceneId) },
         createdAt: { S: new Date().toISOString() },
+        // glTF can't hold a background colour, so it rides on the record (see publishedSceneStyle).
+        ...(bgColor ? { bgColor: { S: bgColor } } : {}),
       },
     }),
   );
@@ -144,7 +155,7 @@ export const createPublishSession = async (
 export const getPublishedScene = async (
   sceneId: string,
   env: AwsPublishEnv,
-): Promise<{ assetUrl: string } | null> => {
+): Promise<PublishedScene | null> => {
   try {
     const config = readConfig(env);
     const dynamoClient = createDynamoClient(config);
@@ -164,6 +175,7 @@ export const getPublishedScene = async (
 
     return {
       assetUrl: response.Item.assetUrl.S,
+      bgColor: normalizePublishedBgColor(response.Item.bgColor?.S),
     };
   } catch (error) {
     console.error("Failed to retrieve scene from DynamoDB:", error);

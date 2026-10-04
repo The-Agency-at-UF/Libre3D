@@ -9,6 +9,7 @@ import react from "@vitejs/plugin-react";
 
 import { createPublishSession, getPublishedScene, resolveRequestBaseUrl } from "./src/utils/awsPublishHandler";
 import { authorizePublishRequest } from "./src/utils/publishAuth";
+import { parsePublishRequestBody } from "./src/utils/publishedSceneStyle";
 
 const editorConfigDir = fileURLToPath(new URL(".", import.meta.url));
 const repoRootDir = path.resolve(editorConfigDir, "../..");
@@ -36,7 +37,7 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
           }
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ cloudAssetUrl: sceneData.assetUrl }));
+          res.end(JSON.stringify({ cloudAssetUrl: sceneData.assetUrl, bgColor: sceneData.bgColor }));
         } catch (error) {
           console.error("Vite Backend Error:", error);
           const message = error instanceof Error ? error.message : "Unable to retrieve scene.";
@@ -71,17 +72,14 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
             });
           });
 
-          let currentPublishId: string | null = null;
-          if (bodyStr) {
-            try {
-              const parsed = JSON.parse(bodyStr);
-              currentPublishId = parsed.currentPublishId || null;
-            } catch {
-              // Ignore invalid JSON
-            }
-          }
+          const { currentPublishId, bgColor } = parsePublishRequestBody(bodyStr);
 
-          const session = await createPublishSession(env, currentPublishId, resolveRequestBaseUrl(req.headers, env));
+          const session = await createPublishSession(
+            env,
+            currentPublishId,
+            resolveRequestBaseUrl(req.headers, env),
+            bgColor,
+          );
 
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json");
