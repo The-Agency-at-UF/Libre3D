@@ -76,9 +76,13 @@ export const listScenes = async (): Promise<SceneSummary[]> => {
 export const createScene = async (options: { name?: string; document?: unknown } = {}): Promise<SceneSummary> =>
   requestJson<SceneSummary>(SCENES_ENDPOINT, { method: "POST", body: JSON.stringify(options) });
 
-/** A scene's row as the editor needs it: the summary plus the revision its next save builds on. */
+/**
+ * A scene's row as the editor needs it: the summary, the revision its next save builds on, and the
+ * imported assets its saved document uses (all in the cloud, so never uploaded again).
+ */
 export interface OpenedScene extends SceneSummary {
   revision: number;
+  assetHashes: string[];
 }
 
 /** One scene and its saved document; `document` is null until the scene's first save. */
@@ -149,6 +153,29 @@ export const releaseSceneLock = async (sceneId: string, { keepalive = false } = 
     keepalive,
     body: JSON.stringify({ sessionId: getEditorSessionId() }),
   });
+};
+
+/** A presigned PUT for one asset, and the headers it must be sent with (they're signed). */
+export interface AssetUploadTicket {
+  hash: string;
+  url: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * Presigned PUTs for the assets the cloud doesn't have yet; the rest get no ticket. Only works while
+ * this tab holds the scene's editing lock (SceneApiError 423 otherwise; 413 for a file over the cap).
+ */
+export const requestAssetUploads = async (
+  sceneId: string,
+  assets: Array<{ hash: string; size: number; kind: "model" | "texture" }>,
+): Promise<AssetUploadTicket[]> => {
+  const { uploads } = await requestJson<{ uploads: AssetUploadTicket[] }>(`${scenePath(sceneId)}/assets/uploads`, {
+    method: "POST",
+    body: JSON.stringify({ sessionId: getEditorSessionId(), assets }),
+  });
+
+  return uploads;
 };
 
 /** Renames a scene. Only its row changes: the document and revision stay as they are. */

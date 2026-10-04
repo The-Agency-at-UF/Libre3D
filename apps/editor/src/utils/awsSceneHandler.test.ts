@@ -683,16 +683,19 @@ describe("saving a scene's assets", () => {
     expect(objectsOf("alice", sceneId)).toHaveLength(1);
   });
 
-  it("saves once the assets are in the cloud, and records them on the row", async () => {
+  it("saves once the assets are in the cloud, records them on the row, and tells the editor on open", async () => {
     const sceneId = await createLockedScene();
     storeAsset(MODEL);
     storeAsset(TEXTURE);
+    await expect(call("GET", { sceneId })).resolves.toMatchObject({ body: { scene: { assetHashes: [] } } });
 
     await expect(saveDocument(sceneId, documentUsing("doc", { models: [MODEL], textures: [TEXTURE, MODEL] }), 0)).resolves.toMatchObject({
       status: 200,
       body: { revision: 1 },
     });
     expect(assetHashesOf(sceneId)).toEqual([MODEL, TEXTURE]);
+    // The editor never uploads these again.
+    await expect(call("GET", { sceneId })).resolves.toMatchObject({ body: { scene: { assetHashes: [MODEL, TEXTURE] } } });
   });
 
   it("checks only the assets that are new since the last save", async () => {

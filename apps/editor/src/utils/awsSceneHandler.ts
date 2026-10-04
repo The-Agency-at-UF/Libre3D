@@ -435,7 +435,8 @@ const getScene = async (config: SceneConfig, userId: string, sceneId: string): P
   }
 
   return json(200, {
-    scene: { ...toSummary(item), revision: Number(item.revision?.N ?? "0") },
+    // assetHashes: the editor never uploads these again.
+    scene: { ...toSummary(item), revision: Number(item.revision?.N ?? "0"), assetHashes: Array.from(readAssetHashes(item)) },
     document,
   });
 };

@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { shallow } from "zustand/shallow";
 
 import { selectSceneContent, useEditorStore } from "../store/useEditorStore";
+import { AssetUploader } from "../utils/assetTransfers";
 import { getAuthSnapshot } from "../utils/authSession";
+import { collectAssetRefs } from "../utils/sceneAssets";
 import { SceneAutosaver, type SaveStatus } from "../utils/sceneAutosave";
 import { clearSceneCache, writeSceneCache } from "../utils/sceneCache";
-import { toSceneDocument } from "../utils/sceneDocument";
+import { toSceneDocument, type SceneDocument } from "../utils/sceneDocument";
 
 // How often unsaved edits are copied to this browser's cache while editing continues.
 const CACHE_WRITE_INTERVAL_MS = 500;
@@ -19,6 +21,8 @@ export interface EditSession {
   revision: number;
   /** The scene was loaded from this browser's copy of unsaved edits: save them right away. */
   hasRecoveredEdits: boolean;
+  /** The imported assets the cloud copy uses (`OpenedScene.assetHashes`): never uploaded again. */
+  assetHashes: string[];
 }
 
 /**
@@ -27,6 +31,7 @@ export interface EditSession {
  * store counts as an edit. With no session (read-only) nothing is saved or cached. Until an edit is
  * saved, a copy stays in this browser (sceneCache.ts) so a closed tab, lost connection, or lost lock
  * can't lose it. Leaving the editor saves right away; closing the tab with unsaved edits asks first.
+ * Each save first uploads the imported assets its document uses that the cloud doesn't have yet.
  *
  * Returns the save status for the indicator, `retry` (save now), and `flush` (save everything and
  * report whether that worked, e.g. before signing out).
@@ -54,6 +59,7 @@ export function useSceneAutosave(sceneId: string, session: EditSession | null) {
     const auth = getAuthSnapshot();
     const ownerId = auth.status === "signedIn" ? auth.userId : null;
     const readDocument = () => toSceneDocument(selectSceneContent(useEditorStore.getState()));
+    const uploader = new AssetUploader({ sceneId, confirmed: session.assetHashes });
     let cacheTimer: ReturnType<typeof setTimeout> | null = null;
 
     const writeCacheNow = () => {
@@ -76,6 +82,8 @@ export function useSceneAutosave(sceneId: string, session: EditSession | null) {
       sceneId,
       readRevision: () => revisionRef.current,
       readDocument,
+      prepareSave: (document, report) => uploader.upload(collectAssetRefs((document as SceneDocument).scene.entities), report),
+      onMissingAssets: (hashes) => uploader.reportMissing(hashes),
       onStatus: setStatus,
       onSaved: (revision, hasPendingEdits) => {
         revisionRef.current = revision;

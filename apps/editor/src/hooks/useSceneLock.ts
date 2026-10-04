@@ -49,7 +49,7 @@ export function useSceneLock({ scene, lock, hasRecoveredEdits }: UseSceneLockOpt
   const { sceneId } = scene;
   const [editing, setEditingState] = useState<EditingState>(() =>
     lock.held
-      ? { mode: "editing", session: { revision: scene.revision, hasRecoveredEdits } }
+      ? { mode: "editing", session: { revision: scene.revision, hasRecoveredEdits, assetHashes: scene.assetHashes } }
       : { mode: "viewing", heldByYou: lock.heldByYou },
   );
   const [problem, setProblem] = useState<"deleted" | "signedOut" | null>(null);
@@ -129,7 +129,14 @@ export function useSceneLock({ scene, lock, hasRecoveredEdits }: UseSceneLockOpt
         showScene(toShow.content);
         useEditorStore.getState().setReadOnly(null);
         shownRevisionRef.current = toShow.scene.revision;
-        setEditing({ mode: "editing", session: { revision: toShow.scene.revision, hasRecoveredEdits: toShow.hasRecoveredEdits } });
+        setEditing({
+          mode: "editing",
+          session: {
+            revision: toShow.scene.revision,
+            hasRecoveredEdits: toShow.hasRecoveredEdits,
+            assetHashes: toShow.scene.assetHashes,
+          },
+        });
       } finally {
         isReloadingRef.current = false;
       }

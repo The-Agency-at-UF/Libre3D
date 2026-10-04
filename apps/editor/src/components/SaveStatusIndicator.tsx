@@ -7,10 +7,20 @@ interface SaveStatusIndicatorProps {
 
 const formatTime = (date: Date): string => date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
 
+const MEGABYTE = 1024 * 1024;
+
+// "1.2 of 4.8 MB", "12 of 48 MB": decimals chosen by the total, so the numbers don't jump format.
+const formatUploadedMegabytes = (loaded: number, total: number): string => {
+  const decimals = total < 10 * MEGABYTE ? 1 : 0;
+
+  return `${(loaded / MEGABYTE).toFixed(decimals)} of ${(total / MEGABYTE).toFixed(decimals)} MB`;
+};
+
 /*
  * BLOCK: SaveStatusIndicator (React Component)
  * PURPOSE: One line under the scene name saying whether the scene is saved: "Saved", "Saving…",
- *          offline, or what went wrong and what to do about it.
+ *          "Uploading…" (imported files, before the save), offline, or what went wrong and what to
+ *          do about it.
  */
 export function SaveStatusIndicator({ status, onRetry }: SaveStatusIndicatorProps) {
   switch (status.kind) {
@@ -24,6 +34,13 @@ export function SaveStatusIndicator({ status, onRetry }: SaveStatusIndicatorProp
       return (
         <span className="save-status" role="status">
           Saving…
+        </span>
+      );
+    case "uploading":
+      return (
+        <span className="save-status" role="status" title="Imported models and textures are saved with the scene">
+          Uploading… {status.total > 0 ? Math.floor((status.loaded / status.total) * 100) : 0}%
+          {status.total >= MEGABYTE && ` (${formatUploadedMegabytes(status.loaded, status.total)})`}
         </span>
       );
     case "offline":

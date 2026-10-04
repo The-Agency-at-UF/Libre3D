@@ -12,13 +12,21 @@
  * losing the editing lock (another tab or device took the scene over) stops this autosaver for good:
  * retrying those would fail the same way, or overwrite someone's newer save. Getting the lock back
  * starts a new autosaver (useSceneLock.ts).
+ *
+ * Imported assets: `prepareSave` runs before each save with the document about to go out, and the
+ * save waits for it (uploading the assets the document uses, see assetTransfers.ts), so a saved
+ * scene never names an asset the cloud doesn't have. A save the server refuses for a missing asset
+ * (422) reports it (`onMissingAssets`) and tries again.
  */
 import { ApiAuthError } from "./apiFetch";
+import { AssetTransferError, AssetUnavailableError, type TransferProgress } from "./assetTransfers";
 import { SceneApiError, saveScene } from "./sceneLibrary";
 
 export type SaveStatus =
   | { kind: "saved"; savedAt: Date | null }
   | { kind: "saving" }
+  /** Uploading imported assets before saving: bytes so far, across the batch. */
+  | { kind: "uploading"; loaded: number; total: number }
   | { kind: "offline" }
   | { kind: "error"; message: string; willRetry: boolean }
   | { kind: "conflict" }
@@ -39,6 +47,13 @@ interface SceneAutosaverOptions {
   onStatus: (status: SaveStatus) => void;
   /** After every successful save; `hasPendingEdits` when edits made during it still need saving. */
   onSaved: (revision: number, hasPendingEdits: boolean) => void;
+  /**
+   * Before each save, with the document about to be saved: uploads the assets it uses. The save
+   * goes out once this resolves; a rejection fails the save. `report` shows upload progress.
+   */
+  prepareSave?: (document: unknown, report: (progress: TransferProgress) => void) => Promise<void>;
+  /** A save was refused because the cloud doesn't have these assets (422). */
+  onMissingAssets?: (hashes: string[]) => void;
 }
 
 const DEBOUNCE_MS = 2_000;
@@ -101,7 +116,16 @@ export class SceneAutosaver {
     this.firstChangeAt = 0;
     this.options.onStatus({ kind: "saving" });
 
-    this.inFlight = saveScene(this.options.sceneId, this.options.readDocument(), this.options.readRevision())
+    const document = this.options.readDocument();
+    const prepared =
+      this.options.prepareSave?.(document, (progress) => {
+        if (!this.isStopped) {
+          this.options.onStatus({ kind: "uploading", ...progress });
+        }
+      }) ?? Promise.resolve();
+
+    this.inFlight = prepared
+      .then(() => saveScene(this.options.sceneId, document, this.options.readRevision()))
       .then(
         (result) => this.handleSaved(result.revision),
         (error: unknown) => this.handleFailed(error),
@@ -169,6 +193,29 @@ export class SceneAutosaver {
     if (error instanceof SceneApiError && error.status === 413) {
       // Retrying sends the same too-large document; the next edit (e.g. deleting something) tries again.
       this.options.onStatus({ kind: "error", message: error.message, willRetry: false });
+      return;
+    }
+
+    if (error instanceof SceneApiError && error.status === 422) {
+      // The cloud lacks assets the document uses: upload them and save again. Backing off, in case
+      // it keeps disagreeing.
+      const missing = Array.isArray(error.details.missingAssets) ? error.details.missingAssets : [];
+      this.options.onMissingAssets?.(missing.filter((hash): hash is string => typeof hash === "string"));
+      this.options.onStatus({ kind: "saving" });
+      this.schedule(RETRY_DELAYS_MS[Math.min(this.retryCount, RETRY_DELAYS_MS.length - 1)]);
+      this.retryCount += 1;
+      return;
+    }
+
+    // Retrying would fail the same way. The next edit (removing the object, say) tries again.
+    if (error instanceof AssetUnavailableError) {
+      this.options.onStatus({ kind: "error", message: "An imported file is missing, so the scene can't be saved", willRetry: false });
+      return;
+    }
+
+    if (error instanceof AssetTransferError && error.status === 400) {
+      // BadDigest: this browser's copy doesn't match its hash any more.
+      this.options.onStatus({ kind: "error", message: "An imported file is damaged in this browser", willRetry: false });
       return;
     }
 
