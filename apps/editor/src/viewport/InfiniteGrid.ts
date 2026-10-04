@@ -21,8 +21,45 @@ import * as THREE from "three";
 const BASE_CELL_SIZE = 2;
 const MIN_PIXELS_BETWEEN_LINES = 4;
 // Fade-out distance = camera height × this, clamped below.
-const FADE_DISTANCE_PER_HEIGHT = 60;
-const MIN_FADE_DISTANCE = 30;
+export const FADE_DISTANCE_PER_HEIGHT = 60;
+export const MIN_FADE_DISTANCE = 30;
+// Fraction of the quad's half-size / the far plane the fade must finish by,
+// so the quad's edge (or the far-plane cut) is never visible.
+export const FADE_EDGE_RATIO = 0.95;
+
+export interface GridExtent {
+  /** Half the quad's side length, in world units. */
+  halfSize: number;
+  /** Horizontal distance from the camera at which the grid has fully faded. */
+  fadeDistance: number;
+}
+
+// Pure sizing logic behind InfiniteGrid.onBeforeRender, split out so it can be
+// unit-tested without WebGL. Writes into `target` (and returns it) so the
+// per-frame call doesn't allocate.
+export function computeGridExtent(
+  camera: THREE.Camera,
+  cameraWorldPosition: THREE.Vector3,
+  target: GridExtent = { halfSize: 0, fadeDistance: 0 },
+): GridExtent {
+  if (camera instanceof THREE.OrthographicCamera) {
+    // Cover the whole (zoomed) view; ortho has no horizon to hide, so the
+    // fade only needs to hide the quad's edge.
+    const visibleExtent =
+      Math.max(camera.right - camera.left, camera.top - camera.bottom) / camera.zoom;
+    target.halfSize = Math.max(camera.far, visibleExtent * 2);
+    target.fadeDistance = target.halfSize * FADE_EDGE_RATIO;
+    return target;
+  }
+
+  const far = (camera as THREE.PerspectiveCamera).far ?? 1000;
+  target.halfSize = far;
+  target.fadeDistance = Math.min(
+    far * FADE_EDGE_RATIO,
+    Math.max(Math.abs(cameraWorldPosition.y) * FADE_DISTANCE_PER_HEIGHT, MIN_FADE_DISTANCE),
+  );
+  return target;
+}
 
 const vertexShader = /* glsl */ `
   varying vec3 vWorldPosition;
@@ -114,6 +151,7 @@ export class InfiniteGrid extends THREE.Mesh<
 > {
   // Reused every frame so the render loop never allocates.
   private readonly cameraWorldPosition = new THREE.Vector3();
+  private readonly extent: GridExtent = { halfSize: 0, fadeDistance: 0 };
 
   constructor() {
     const geometry = new THREE.PlaneGeometry(2, 2);
@@ -165,28 +203,7 @@ export class InfiniteGrid extends THREE.Mesh<
     );
     const uniforms = this.material.uniforms;
 
-    let halfSize: number;
-    let fadeDistance: number;
-
-    if (camera instanceof THREE.OrthographicCamera) {
-      // Cover the whole (zoomed) view; ortho has no horizon to hide, so the
-      // fade only needs to hide the quad's edge.
-      const visibleExtent =
-        Math.max(camera.right - camera.left, camera.top - camera.bottom) /
-        camera.zoom;
-      halfSize = Math.max(camera.far, visibleExtent * 2);
-      fadeDistance = halfSize * 0.95;
-    } else {
-      const far = (camera as THREE.PerspectiveCamera).far ?? 1000;
-      halfSize = far;
-      fadeDistance = Math.min(
-        far * 0.95,
-        Math.max(
-          Math.abs(cameraPosition.y) * FADE_DISTANCE_PER_HEIGHT,
-          MIN_FADE_DISTANCE,
-        ),
-      );
-    }
+    const { halfSize, fadeDistance } = computeGridExtent(camera, cameraPosition, this.extent);
 
     this.position.set(cameraPosition.x, 0, cameraPosition.z);
     this.scale.set(halfSize, 1, halfSize);
