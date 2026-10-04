@@ -1,13 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { AssetTransferError, AssetUnavailableError, AssetUploader, type TransferProgress } from "./assetTransfers";
-import type { AssetRef } from "./sceneAssets";
+import {
+  AssetDownloader,
+  AssetTransferError,
+  AssetUnavailableError,
+  AssetUploader,
+  type DownloadProgress,
+  type TransferProgress,
+} from "./assetTransfers";
+import { hashAsset, type AssetRef } from "./sceneAssets";
 import { SceneApiError, type AssetUploadTicket } from "./sceneLibrary";
 
 // Everything the uploader touches is injected; keep the real modules (and storage) out.
 vi.mock("./apiFetch", () => ({ apiFetch: vi.fn(), ApiAuthError: class ApiAuthError extends Error {} }));
-vi.mock("./modelAssetStore", () => ({ loadModelAsset: vi.fn() }));
-vi.mock("./textureAssetStore", () => ({ loadTextureAsset: vi.fn() }));
+vi.mock("./modelAssetStore", () => ({ loadModelAsset: vi.fn(), hasModelAsset: vi.fn(), saveModelAsset: vi.fn() }));
+vi.mock("./textureAssetStore", () => ({ loadTextureAsset: vi.fn(), hasTextureAsset: vi.fn(), saveTextureAsset: vi.fn() }));
 
 const MODEL = "a".repeat(64);
 const TEXTURE = "b".repeat(64);
@@ -187,5 +194,121 @@ describe("AssetUploader", () => {
     await uploader.upload([model(MODEL)]);
 
     expect(requestUploads).not.toHaveBeenCalled();
+  });
+});
+
+describe("AssetDownloader", () => {
+  /** Files in the cloud, addressed by their real hashes. */
+  const cloudFiles = async (...contents: string[]) => {
+    const files = new Map<string, Blob>();
+    for (const content of contents) {
+      const blob = new Blob([content]);
+      files.set(await hashAsset(blob), blob);
+    }
+    return files;
+  };
+
+  const setUpDownloads = (files: Map<string, Blob>, { local = [] as string[], unavailable = [] as string[] } = {}) => {
+    const stored = new Map<string, Blob>(local.map((hash) => [hash, new Blob(["here"])]));
+    const fetched: string[] = [];
+    const requestDownloads = vi.fn(async (_sceneId: string, hashes: string[]) => ({
+      downloads: hashes.filter((hash) => files.has(hash) && !unavailable.includes(hash)).map((hash) => ({ hash, url: `https://s3.test/${hash}` })),
+      unavailable: hashes.filter((hash) => !files.has(hash) || unavailable.includes(hash)),
+    }));
+    const fetchBlob = vi.fn(async (url: string, onProgress: (loaded: number) => void) => {
+      const hash = url.split("/").pop()!;
+      fetched.push(hash);
+      const blob = files.get(hash)!;
+      onProgress(blob.size);
+      return blob;
+    });
+    const downloader = new AssetDownloader({
+      hasLocal: async (ref) => stored.has(ref.id),
+      saveLocal: async (ref, blob) => {
+        stored.set(ref.id, blob);
+      },
+      requestDownloads,
+      fetchBlob,
+    });
+
+    return { downloader, stored, fetched, requestDownloads, fetchBlob };
+  };
+
+  it("downloads only what this browser lacks and stores it under its hash", async () => {
+    const files = await cloudFiles("model bytes", "texture bytes");
+    const [modelHash, textureHash] = [...files.keys()];
+    const { downloader, stored, fetched, requestDownloads } = setUpDownloads(files, { local: [textureHash] });
+
+    await expect(downloader.download("scene-1", [model(modelHash), texture(textureHash), model("asset-old")])).resolves.toEqual([]);
+
+    expect(requestDownloads).toHaveBeenCalledWith("scene-1", [modelHash]);
+    expect(fetched).toEqual([modelHash]);
+    expect(await stored.get(modelHash)!.text()).toBe("model bytes");
+  });
+
+  it("asks nothing when this browser has everything", async () => {
+    const files = await cloudFiles("model bytes");
+    const { downloader, requestDownloads } = setUpDownloads(files, { local: [...files.keys()] });
+
+    await expect(downloader.download("scene-1", [model([...files.keys()][0])])).resolves.toEqual([]);
+    expect(requestDownloads).not.toHaveBeenCalled();
+  });
+
+  it("reports what it couldn't get: not the scene's, failed, or not matching its hash", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const files = await cloudFiles("unlisted", "fails", "tampered", "fine");
+    const [unlisted, fails, tampered, fine] = [...files.keys()];
+    const { downloader, stored, fetchBlob } = setUpDownloads(files, { unavailable: [unlisted] });
+    fetchBlob.mockImplementation(async (url) => {
+      const hash = url.split("/").pop()!;
+      if (hash === fails) throw new AssetTransferError(403, "expired");
+      return hash === tampered ? new Blob(["something else"]) : files.get(hash)!;
+    });
+
+    const missing = await downloader.download("scene-1", [unlisted, fails, tampered, fine].map(texture));
+
+    expect(missing.sort()).toEqual([unlisted, fails, tampered].sort());
+    expect([...stored.keys()]).toEqual([fine]);
+  });
+
+  it("counts everything as missing when the request fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const files = await cloudFiles("a", "b");
+    const { downloader, requestDownloads } = setUpDownloads(files);
+    requestDownloads.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    await expect(downloader.download("scene-1", [...files.keys()].map(model))).resolves.toHaveLength(2);
+  });
+
+  it("fetches an asset once however many ask for it at the same time", async () => {
+    const files = await cloudFiles("shared model");
+    const [hash] = [...files.keys()];
+    const { downloader, fetchBlob } = setUpDownloads(files);
+    let finish: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (finish = resolve));
+    fetchBlob.mockImplementation(async () => {
+      await gate;
+      return files.get(hash)!;
+    });
+
+    // The scene opening, and the viewport hydrating the same model.
+    const opening = downloader.download("scene-1", [model(hash)]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const hydrating = downloader.download("scene-1", [model(hash)]);
+    finish();
+
+    await expect(Promise.all([opening, hydrating])).resolves.toEqual([[], []]);
+    expect(fetchBlob).toHaveBeenCalledOnce();
+  });
+
+  it("reports progress as files done and bytes so far", async () => {
+    const files = await cloudFiles("12345", "1234567890");
+    const progress: DownloadProgress[] = [];
+    const { downloader } = setUpDownloads(files);
+
+    await downloader.download("scene-1", [...files.keys()].map(texture), (update) => progress.push(update));
+
+    expect(progress[0]).toEqual({ files: 2, filesDone: 0, loaded: 0 });
+    expect(progress.at(-1)).toEqual({ files: 2, filesDone: 2, loaded: 15 });
   });
 });

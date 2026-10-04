@@ -8,8 +8,7 @@ import {
   type ImageSlot,
 } from "../store/useEditorStore";
 import { useEditorStore } from "../store/useEditorStore";
-import { loadModelAsset } from "../utils/modelAssetStore";
-import { loadTextureAsset } from "../utils/textureAssetStore";
+import { loadModelForScene, loadTextureForScene } from "../utils/assetTransfers";
 import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
 import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";
 import { pruneImportNodes, type PrunableNode } from "../utils/pruneImportHierarchy";
@@ -51,8 +50,8 @@ export class ObjectManager {
   private scene: THREE.Scene;
   private meshMap: Map<string, THREE.Object3D>;
 
-  // Session cache of textures rebuilt from the OPFS texture store, keyed by
-  // ImageLayer.textureAssetId. Loaded lazily (and once) the first time an empty
+  // Session cache of textures rebuilt from the texture store (downloaded first
+  // if this browser doesn't have the image), keyed by ImageLayer.textureAssetId. Loaded lazily (and once) the first time an empty
   // material slot actually needs one — a rebuild after a lighting-model change,
   // or an Image layer re-enabled — never re-decoded per sync. loadingTextures
   // guards against firing a second load for an id already in flight.
@@ -185,7 +184,7 @@ export class ObjectManager {
     const id = layer.textureAssetId;
     if (!this.loadingTextures.has(id)) {
       this.loadingTextures.add(id);
-      loadTextureAsset(id)
+      loadTextureForScene(id)
         .then(async (blob) => {
           if (!blob) return;
           const texture = await buildTextureFromLayer(blob, layer);
@@ -507,9 +506,9 @@ export class ObjectManager {
         return;
       }
 
-      const buffer = await loadModelAsset(assetId);
+      const buffer = await loadModelForScene(assetId);
       if (!buffer) {
-        console.error(`[Libre3D] Imported model asset "${assetId}" was not found in storage.`);
+        console.error(`[Libre3D] Imported model asset "${assetId}" was found neither in this browser nor in the cloud.`);
         this.showImportedModelError(group);
         this.hydratingRootIds.delete(rootEntityId);
         return;
@@ -863,9 +862,9 @@ export class ObjectManager {
 
       let gltf: GLTF | null | undefined = takeParsedModel(rootEntity.assetId);
       if (!gltf) {
-        const buffer = await loadModelAsset(rootEntity.assetId);
+        const buffer = await loadModelForScene(rootEntity.assetId);
         if (!buffer) {
-          console.error(`[Libre3D] Imported model asset "${rootEntity.assetId}" was not found in storage.`);
+          console.error(`[Libre3D] Imported model asset "${rootEntity.assetId}" was found neither in this browser nor in the cloud.`);
           return;
         }
         const loader = await createConfiguredGltfLoader();

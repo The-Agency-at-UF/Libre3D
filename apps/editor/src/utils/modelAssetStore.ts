@@ -4,7 +4,7 @@
 //
 // Storage strategy (OPFS first, IndexedDB fallback) and the reasoning behind it
 // live in createAssetStore.ts; this module only supplies the model-specific names
-// and the ArrayBuffer decode. The four exported functions keep their original
+// and the ArrayBuffer decode. The exported functions keep their original
 // signatures -- callers are unchanged.
 
 import { createAssetStore } from "./createAssetStore";
@@ -24,6 +24,10 @@ export function saveModelAsset(assetId: string, data: ArrayBuffer): Promise<void
 
 export function loadModelAsset(assetId: string): Promise<ArrayBuffer | null> {
   return store.load(assetId);
+}
+
+export function hasModelAsset(assetId: string): Promise<boolean> {
+  return store.has(assetId);
 }
 
 export function deleteModelAsset(assetId: string): Promise<void> {

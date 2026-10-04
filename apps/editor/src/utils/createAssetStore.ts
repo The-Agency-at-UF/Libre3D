@@ -60,6 +60,7 @@ export interface AssetStoreConfig<T extends AssetPayload> {
 export interface AssetStore<T extends AssetPayload> {
   save(id: string, data: T): Promise<void>;
   load(id: string): Promise<T | null>;
+  has(id: string): Promise<boolean>;
   remove(id: string): Promise<void>;
   listIds(): Promise<string[]>;
 }
@@ -190,6 +191,15 @@ export function createAssetStore<T extends AssetPayload>(
     return result ?? null;
   }
 
+  async function hasIdb(id: string): Promise<boolean> {
+    const db = await openIdb();
+    const result = await runTransaction<boolean>(db, "readonly", (store, setResult) => {
+      const request = store.count(id);
+      request.onsuccess = () => setResult(request.result > 0);
+    });
+    return result ?? false;
+  }
+
   async function removeIdb(id: string): Promise<void> {
     const db = await openIdb();
     await runTransaction<void>(db, "readwrite", (store) => {
@@ -252,6 +262,22 @@ export function createAssetStore<T extends AssetPayload>(
       }
 
       return await loadIdb(id);
+    },
+
+    // Whether the asset is stored, without reading it (opening a scene checks every asset it uses
+    // before deciding what to download). Same rules as load(): an empty file doesn't count.
+    async has(id: string): Promise<boolean> {
+      if (supportsOpfs()) {
+        try {
+          const dir = await getDir(false);
+          const fileHandle = await dir.getFileHandle(id, { create: false });
+          if ((await fileHandle.getFile()).size > 0) return true;
+        } catch (error) {
+          if (!isNotFound(error) && !isMissingWritable(error)) throw error;
+        }
+      }
+
+      return await hasIdb(id);
     },
 
     async remove(id: string): Promise<void> {

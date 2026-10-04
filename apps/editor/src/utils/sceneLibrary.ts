@@ -178,6 +178,16 @@ export const requestAssetUploads = async (
   return uploads;
 };
 
+/**
+ * Presigned GETs for assets the scene's saved document uses; `unavailable` lists the requested ones
+ * it doesn't. Doesn't need the editing lock.
+ */
+export const requestAssetDownloads = async (
+  sceneId: string,
+  hashes: string[],
+): Promise<{ downloads: Array<{ hash: string; url: string }>; unavailable: string[] }> =>
+  requestJson(`${scenePath(sceneId)}/assets/downloads`, { method: "POST", body: JSON.stringify({ hashes }) });
+
 /** Renames a scene. Only its row changes: the document and revision stay as they are. */
 export const renameScene = async (sceneId: string, name: string): Promise<{ name: string }> =>
   requestJson(scenePath(sceneId), { method: "PATCH", body: JSON.stringify({ name }) });
