@@ -130,6 +130,12 @@ const assetHashesOf = (sceneId: string, userId = "alice") => dynamo.getItem(user
 
 const objectsOf = (userId: string, sceneId: string) => s3.keysUnder(`users/${userId}/scenes/${sceneId}.`);
 
+/** The smallest thing that looks like a JPEG file: its start marker, then any bytes. */
+const jpeg = (extraBytes = 16) => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(extraBytes)]).toString("base64");
+
+const putThumbnail = (sceneId: string, image: unknown = jpeg(), { session = TAB_A, as = "alice" } = {}) =>
+  call("PUT", { sceneId, subresource: "thumbnail", as, body: { sessionId: session, image } });
+
 beforeEach(() => {
   dynamo = new FakeDynamoDB();
   s3 = new FakeS3();
@@ -153,6 +159,7 @@ describe("routing and auth", () => {
     ["a scene's lock", "00000000-0000-4000-8000-000000000000", true, "GET", "POST, DELETE"],
     ["a scene's asset uploads", "00000000-0000-4000-8000-000000000000", false, "GET", "POST", "assets/uploads"],
     ["a scene's asset downloads", "00000000-0000-4000-8000-000000000000", false, "PUT", "POST", "assets/downloads"],
+    ["a scene's thumbnail", "00000000-0000-4000-8000-000000000000", false, "POST", "PUT", "thumbnail"],
   ])("answers an unsupported method on %s with 405 and Allow", async (_label, sceneId, lock, method, allow, subresource) => {
     const response = await call(method, { sceneId, lock, subresource });
 
@@ -354,7 +361,7 @@ describe("open, rename, delete", () => {
     const otherSceneId = await createLockedScene();
     await save(sceneId, "doc", 0);
     await save(otherSceneId, "other", 0);
-    s3.objects.set(`users/alice/scenes/${sceneId}.thumb.webp`, "thumbnail");
+    s3.objects.set(`users/alice/scenes/${sceneId}.thumb.jpg`, "thumbnail");
     s3.objects.set(`users/alice/scenes/${sceneId}.stray-1.json`, "{}");
 
     await expect(call("DELETE", { sceneId })).resolves.toMatchObject({ status: 200 });
@@ -789,5 +796,58 @@ describe("asset downloads", () => {
     }
 
     expect(presigner.signed).toEqual([]);
+  });
+});
+
+describe("thumbnails", () => {
+  it("stores the lock holder's picture under the scene's prefix, renews the lease, and leaves the revision and updatedAt", async () => {
+    const sceneId = await createLockedScene();
+    await save(sceneId, "doc", 0);
+    vi.setSystemTime(new Date("2026-10-03T12:00:30.000Z"));
+
+    await expect(putThumbnail(sceneId)).resolves.toMatchObject({ status: 200 });
+
+    const key = `users/alice/scenes/${sceneId}.thumb.jpg`;
+    expect(s3.info.get(key)).toMatchObject({ contentType: "image/jpeg" });
+    expect(dynamo.getItem("alice", sceneId)).toMatchObject({
+      thumbnailKey: { S: key },
+      revision: { N: "1" },
+      updatedAt: { S: "2026-10-03T12:00:00.000Z" },
+    });
+    expect(lockExpiresAt(sceneId)).toBe(Date.parse("2026-10-03T12:01:30.000Z"));
+  });
+
+  it("refuses a session without the lock (423), leaving the row without a picture", async () => {
+    const sceneId = await createLockedScene();
+
+    await expect(putThumbnail(sceneId, jpeg(), { session: TAB_B })).resolves.toMatchObject({ status: 423, body: { heldByYou: true } });
+    expect(dynamo.getItem("alice", sceneId)).not.toHaveProperty("thumbnailKey");
+  });
+
+  it("answers 404 for a scene deleted meanwhile, without leaving the picture behind", async () => {
+    await expect(putThumbnail("00000000-0000-4000-8000-000000000000")).resolves.toMatchObject({ status: 404 });
+    expect(s3.objects.size).toBe(0);
+  });
+
+  it("rejects anything but a JPEG (400), one over 256 kB (413), and a request without a session ID (400)", async () => {
+    const sceneId = await createLockedScene();
+
+    const png = Buffer.concat([Buffer.from([0x89]), Buffer.from("PNG"), Buffer.alloc(16)]).toString("base64");
+
+    for (const image of [null, 42, "", png]) {
+      await expect(putThumbnail(sceneId, image)).resolves.toMatchObject({ status: 400 });
+    }
+
+    await expect(putThumbnail(sceneId, jpeg(256 * 1024))).resolves.toMatchObject({ status: 413 });
+    await expect(call("PUT", { sceneId, subresource: "thumbnail", body: { image: jpeg() } })).resolves.toMatchObject({ status: 400 });
+    expect(s3.objects.size).toBe(0);
+  });
+
+  it("is deleted with the scene", async () => {
+    const sceneId = await createLockedScene();
+    await putThumbnail(sceneId);
+
+    await expect(call("DELETE", { sceneId })).resolves.toMatchObject({ status: 200 });
+    expect(objectsOf("alice", sceneId)).toEqual([]);
   });
 });

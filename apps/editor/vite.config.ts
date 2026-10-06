@@ -15,14 +15,14 @@ const repoRootDir = path.resolve(editorConfigDir, "../..");
 const threeModulePath = path.resolve(editorConfigDir, "node_modules/three");
 
 // `/api/scenes`, `/api/scenes/:sceneId`, or `/api/scenes/:sceneId/` followed by `lock`,
-// `assets/uploads`, or `assets/downloads`, ignoring any query string.
-const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*)(?:\/(lock|assets\/uploads|assets\/downloads))?)?\/?(?:\?.*)?$/;
+// `assets/uploads`, `assets/downloads`, or `thumbnail`, ignoring any query string.
+const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*)(?:\/(lock|assets\/uploads|assets\/downloads|thumbnail))?)?\/?(?:\?.*)?$/;
 // `/api/scene/:publishId` (the public viewer) and `/api/publish`.
 const PUBLISHED_SCENE_ROUTE_PATTERN = /^\/api\/scene\/([^/?]*)\/?(?:\?.*)?$/;
 const PUBLISH_ROUTE_PATTERN = /^\/api\/publish\/?(?:\?.*)?$/;
 
 const readSubresource = (value: string | undefined): SceneSubresource | null =>
-  value === "lock" || value === "assets/uploads" || value === "assets/downloads" ? value : null;
+  value === "lock" || value === "assets/uploads" || value === "assets/downloads" || value === "thumbnail" ? value : null;
 
 const readRequestBody = (req: NodeJS.ReadableStream): Promise<string> =>
   new Promise<string>((resolve, reject) => {
@@ -39,8 +39,9 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
   configureServer(server) {
     server.middlewares.use(async (req, res, next) => {
       // The dev copy of api/scenes/index.ts, api/scenes/[sceneId]/index.ts,
-      // api/scenes/[sceneId]/lock.ts, and api/scenes/[sceneId]/assets/[action].ts: same handler,
-      // so the two can't drift. Everything route-specific lives in handleScenesRequest.
+      // api/scenes/[sceneId]/lock.ts, api/scenes/[sceneId]/assets/[action].ts, and
+      // api/scenes/[sceneId]/thumbnail.ts: same handler, so the two can't drift. Everything
+      // route-specific lives in handleScenesRequest.
       const scenesMatch = req.url?.match(SCENES_ROUTE_PATTERN);
 
       if (scenesMatch) {

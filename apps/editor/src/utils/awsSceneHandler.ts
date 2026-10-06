@@ -19,6 +19,8 @@
  *                                            PUTs for the assets the cloud doesn't have yet; 423
  *                                            unless that editor session holds the lock
  *   POST   /api/scenes/:id/assets/downloads  `{ hashes }`: presigned GETs for the scene's assets
+ *   PUT    /api/scenes/:id/thumbnail  `{ sessionId, image }` (base64 JPEG): the gallery picture; 423
+ *                                     unless that editor session holds the lock
  *
  * The lock is a lease on the row (`lockHolder`, `lockUserId`, `lockExpiresAt`): one editor session
  * (a browser tab) holds it for 60 s at a time and renews it while open; saves renew it too. Only the
@@ -76,7 +78,7 @@ import { MAX_ASSET_BYTES, assetHashToBase64, collectAssetHashes, isAssetHash, ty
 import { verifyAuth } from "./verifyAuth.js";
 
 /** What follows `/api/scenes/:sceneId/`, if anything. */
-export type SceneSubresource = "lock" | "assets/uploads" | "assets/downloads";
+export type SceneSubresource = "lock" | "assets/uploads" | "assets/downloads" | "thumbnail";
 
 export interface SceneApiRequest {
   method: string;
@@ -132,6 +134,8 @@ const MAX_ASSETS_PER_REQUEST = 100;
 // Per scene. Each new one costs a HEAD on the save that adds it, and they're all listed on the row.
 const MAX_SCENE_ASSETS = 500;
 const ASSET_CONTENT_TYPES: Record<AssetKind, string> = { model: "model/gltf-binary", texture: "image/png" };
+// A 480×270 JPEG is tens of kB; this only stops something that isn't a thumbnail.
+const MAX_THUMBNAIL_BYTES = 256 * 1024;
 
 export const json = (status: number, body: unknown, headers?: Record<string, string>): SceneApiResponse => ({
   status,
@@ -222,14 +226,16 @@ const checkDocument = (value: unknown): DocumentCheck => {
 
 // ---- Storage helpers ------------------------------------------------------------------------
 
-// Everything stored for one scene starts with this prefix (document versions, later the
-// thumbnail), so deleting a scene is one prefix sweep. Its published copy lives elsewhere (publishedGlbKey).
+// Everything stored for one scene starts with this prefix (document versions, the thumbnail), so
+// deleting a scene is one prefix sweep. Its published copy lives elsewhere (publishedGlbKey).
 const sceneObjectPrefix = (userId: string, sceneId: string): string => `users/${userId}/scenes/${sceneId}.`;
 
 // Each save writes a new object and then points the row at it, so a save that loses the revision
 // race never overwrites the winner's document (see saveScene).
 const newDocumentKey = (userId: string, sceneId: string): string =>
   `${sceneObjectPrefix(userId, sceneId)}${randomUUID()}.json`;
+
+const thumbnailKey = (userId: string, sceneId: string): string => `${sceneObjectPrefix(userId, sceneId)}thumb.jpg`;
 
 /** Where a published scene's GLB lives. Outside `users/`: the public viewer reads it by publish ID. */
 export const publishedGlbKey = (publishId: string): string => `scenes/${publishId}.glb`;
@@ -917,6 +923,68 @@ const prepareDownloads = async (
   return json(200, { downloads, unavailable: hashes.filter((hash) => !available.has(hash)) });
 };
 
+// JPEG files start with the SOI marker and the first segment's marker: FF D8 FF.
+const isJpeg = (bytes: Buffer): boolean => bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+
+const saveThumbnail = async (
+  config: SceneConfig,
+  userId: string,
+  sceneId: string,
+  body: Record<string, unknown>,
+): Promise<SceneApiResponse> => {
+  const sessionId = readSessionId(body.sessionId);
+
+  if (!sessionId) {
+    return errorResponse(400, "sessionId must be this editor session's ID.");
+  }
+
+  const image = typeof body.image === "string" ? Buffer.from(body.image, "base64") : null;
+
+  if (!image || !isJpeg(image)) {
+    return errorResponse(400, "image must be a base64 JPEG picture.");
+  }
+
+  if (image.length > MAX_THUMBNAIL_BYTES) {
+    return errorResponse(413, "This thumbnail is too large.");
+  }
+
+  // One fixed key per scene, replaced each time. Written first so the row never points at a picture
+  // that isn't there; a tab without the lock (refused just below) only replaces this user's own
+  // picture of their own scene.
+  const key = thumbnailKey(userId, sceneId);
+  await config.s3.send(
+    new PutObjectCommand({ Bucket: config.bucketName, Key: key, Body: image, ContentType: "image/jpeg" }),
+  );
+
+  try {
+    // Like a save: lock holder only, and it renews the lease. Not an edit, so updatedAt stays.
+    await config.dynamo.send(
+      new UpdateItemCommand({
+        TableName: config.tableName,
+        Key: rowKey(userId, sceneId),
+        UpdateExpression: "SET thumbnailKey = :key, lockExpiresAt = :expires",
+        ConditionExpression: "attribute_exists(sceneId) AND lockHolder = :session",
+        ExpressionAttributeValues: { ":key": { S: key }, ":session": { S: sessionId }, ":expires": { N: lockExpiry() } },
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+      }),
+    );
+  } catch (error) {
+    if (!(error instanceof ConditionalCheckFailedException)) {
+      throw error;
+    }
+
+    if (!error.Item) {
+      // Deleted meanwhile: don't leave the picture behind the delete's sweep.
+      await deleteObjectQuietly(config, key);
+      return errorResponse(404, "Scene not found.");
+    }
+
+    return lockedResponse(error.Item, userId);
+  }
+
+  return json(200, { saved: true });
+};
+
 // ---- Dispatch -------------------------------------------------------------------------------
 
 export const handleScenesRequest = async (request: SceneApiRequest, env: ServerEnv): Promise<SceneApiResponse> => {
@@ -928,9 +996,11 @@ export const handleScenesRequest = async (request: SceneApiRequest, env: ServerE
       ? ["GET", "POST"]
       : isLock
         ? ["POST", "DELETE"]
-        : subresource
-          ? ["POST"]
-          : ["GET", "PUT", "PATCH", "DELETE"];
+        : subresource === "thumbnail"
+          ? ["PUT"]
+          : subresource
+            ? ["POST"]
+            : ["GET", "PUT", "PATCH", "DELETE"];
 
   if (!allowed.includes(method)) {
     return json(405, { error: "Method not allowed" }, { Allow: allowed.join(", ") });
@@ -966,6 +1036,10 @@ export const handleScenesRequest = async (request: SceneApiRequest, env: ServerE
 
     if (subresource === "assets/downloads") {
       return await prepareDownloads(config, auth.userId, request.sceneId, body);
+    }
+
+    if (subresource === "thumbnail") {
+      return await saveThumbnail(config, auth.userId, request.sceneId, body);
     }
 
     switch (method) {

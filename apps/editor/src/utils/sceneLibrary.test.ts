@@ -13,6 +13,7 @@ import {
   releaseSceneLock,
   renameScene,
   saveScene,
+  saveSceneThumbnail,
 } from "./sceneLibrary";
 
 vi.mock("./apiFetch", () => ({
@@ -79,6 +80,18 @@ describe("requests", () => {
     await deleteScene("s1");
     expect(lastCall()).toMatchObject({ path: "/api/scenes/s1", method: "DELETE", body: undefined });
     expect(lastCall().headers.has("Content-Type")).toBe(false);
+  });
+
+  it("sends a thumbnail as base64 with this tab's session, whatever its size", async () => {
+    apiFetchMock.mockResolvedValueOnce(jsonResponse({ saved: true }));
+    // Bigger than one 32 kB chunk of the encoder, with every byte value.
+    const bytes = Uint8Array.from({ length: 70_000 }, (_, index) => index % 256);
+
+    await saveSceneThumbnail("s1", new Blob([bytes], { type: "image/jpeg" }));
+
+    const request = lastCall();
+    expect(request).toMatchObject({ path: "/api/scenes/s1/thumbnail", method: "PUT", body: { sessionId: TAB } });
+    expect(Buffer.from(request.body.image, "base64").equals(Buffer.from(bytes))).toBe(true);
   });
 });
 
