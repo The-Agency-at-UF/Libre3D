@@ -13,7 +13,9 @@ export interface SceneSummary {
   name: string;
   /** ISO 8601 timestamp of the last save. */
   updatedAt: string;
-  /** Short-lived presigned URL for the gallery thumbnail, once scenes have one (PR 6). */
+  /** Set once the scene has been published: its share link is `shareUrlFor(publishId)`. */
+  publishId?: string;
+  /** Short-lived presigned URL for the gallery thumbnail; the list only, once the scene has one. */
   thumbnailUrl?: string;
 }
 

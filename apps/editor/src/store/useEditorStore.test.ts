@@ -51,7 +51,6 @@ describe("persist v17 migration", () => {
       {
         entities: [entity("cube-1", { position: [1, 2, 3] }), light, entity("sphere-1", { type: "sphere", name: "Sphere" })],
         selectedEntityIds: ["cube-1"],
-        currentPublishId: "publish-1",
         sceneSettings: { bgColor: "#123456" },
         projectionMode: "orthographic",
         viewportZoom: 66,
@@ -64,7 +63,7 @@ describe("persist v17 migration", () => {
 
     expect(persisted().version).toBe(17);
     expect(Object.keys(persisted().state).sort()).toEqual(PREFERENCE_KEYS);
-    expect(state).toMatchObject({ projectionMode: "orthographic", viewportZoom: 66, currentPublishId: null, selectedEntityIds: [] });
+    expect(state).toMatchObject({ projectionMode: "orthographic", viewportZoom: 66, selectedEntityIds: [] });
     // The starter scene, not the old one: scenes are opened from the cloud.
     expect(state.entities.map((e) => e.type)).toEqual(["cube", "directionalLight"]);
     expect(state.sceneSettings.bgColor).not.toBe("#123456");
@@ -111,17 +110,16 @@ describe("persist v17 migration", () => {
 });
 
 describe("loadScene", () => {
-  it("opens a new scene with the starter content and clears selection, publish link, preview, and undo history", async () => {
+  it("opens a new scene with the starter content and clears selection, preview, and undo history", async () => {
     const { useEditorStore } = await loadStore();
     useEditorStore.getState().addEntity("torus");
-    useEditorStore.getState().setCurrentPublishId("publish-1");
     useEditorStore.getState().setPreviewMode(true, "blob:preview");
 
     useEditorStore.getState().loadScene(null);
 
     const state = useEditorStore.getState();
     expect(state.entities.map((e) => e.type)).toEqual(["cube", "directionalLight"]);
-    expect(state).toMatchObject({ selectedEntityIds: [], currentPublishId: null, isPreviewMode: false, previewGlbUrl: null });
+    expect(state).toMatchObject({ selectedEntityIds: [], isPreviewMode: false, previewGlbUrl: null });
     expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
   });
 

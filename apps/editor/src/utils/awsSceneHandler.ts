@@ -39,8 +39,9 @@
  *
  * Ownership is by construction: every row is keyed by the verified token's `sub` (the user-scenes
  * partition key) and every object lives under `users/<sub>/`, so there is no way to name someone
- * else's scene. The document itself is opaque here, apart from finding its assets
- * (`collectAssetHashes`); the editor owns its shape (sceneDocument.ts).
+ * else's scene; a published copy (awsPublishHandler.ts) is found through the row's `publishId`. The
+ * document itself is opaque here, apart from finding its assets (`collectAssetHashes`); the editor
+ * owns its shape (sceneDocument.ts).
  */
 
 import { randomUUID } from "node:crypto";
@@ -98,11 +99,16 @@ interface SceneSummaryBody {
   sceneId: string;
   name: string;
   updatedAt: string;
+  /** Set once the scene has been published; its share link is `/v/<publishId>`. */
+  publishId?: string;
 }
 
-interface SceneConfig {
+export interface SceneConfig {
   bucketName: string;
+  /** user-scenes */
   tableName: string;
+  /** published-scenes: publish ID → published GLB and its owner. */
+  publishedTableName: string;
   s3: S3Client;
   dynamo: DynamoDBClient;
 }
@@ -127,21 +133,22 @@ const MAX_ASSETS_PER_REQUEST = 100;
 const MAX_SCENE_ASSETS = 500;
 const ASSET_CONTENT_TYPES: Record<AssetKind, string> = { model: "model/gltf-binary", texture: "image/png" };
 
-const json = (status: number, body: unknown, headers?: Record<string, string>): SceneApiResponse => ({
+export const json = (status: number, body: unknown, headers?: Record<string, string>): SceneApiResponse => ({
   status,
   body,
   headers,
 });
 
-const errorResponse = (status: number, error: string, extra: Record<string, unknown> = {}): SceneApiResponse =>
+export const errorResponse = (status: number, error: string, extra: Record<string, unknown> = {}): SceneApiResponse =>
   json(status, { error, ...extra });
 
-const readConfig = (env: ServerEnv): SceneConfig => {
+export const readSceneConfig = (env: ServerEnv): SceneConfig => {
   const access = readAwsAccess(env);
 
   return {
     bucketName: readRequiredEnv(env, "S3_BUCKET_NAME"),
     tableName: readRequiredEnv(env, "USER_SCENES_TABLE_NAME"),
+    publishedTableName: readRequiredEnv(env, "PUBLISHED_SCENES_TABLE_NAME"),
     s3: createS3Client(access),
     dynamo: createDynamoClient(access),
   };
@@ -149,7 +156,7 @@ const readConfig = (env: ServerEnv): SceneConfig => {
 
 // ---- Request parsing ------------------------------------------------------------------------
 
-const parseBody = (body: unknown): Record<string, unknown> => {
+export const parseBody = (body: unknown): Record<string, unknown> => {
   let parsed: unknown = body;
 
   if (typeof body === "string") {
@@ -168,6 +175,9 @@ const parseBody = (body: unknown): Record<string, unknown> => {
     ? (parsed as Record<string, unknown>)
     : {};
 };
+
+/** Scene and publish IDs are UUIDs made by the server; anything else can't name one. */
+export const isSceneId = (value: unknown): value is string => typeof value === "string" && SCENE_ID_PATTERN.test(value);
 
 const readSessionId = (value: unknown): string | null =>
   typeof value === "string" && SESSION_ID_PATTERN.test(value) ? value : null;
@@ -212,8 +222,8 @@ const checkDocument = (value: unknown): DocumentCheck => {
 
 // ---- Storage helpers ------------------------------------------------------------------------
 
-// Everything stored for one scene starts with this prefix (document versions, later the thumbnail),
-// so deleting a scene is one prefix sweep.
+// Everything stored for one scene starts with this prefix (document versions, later the
+// thumbnail), so deleting a scene is one prefix sweep. Its published copy lives elsewhere (publishedGlbKey).
 const sceneObjectPrefix = (userId: string, sceneId: string): string => `users/${userId}/scenes/${sceneId}.`;
 
 // Each save writes a new object and then points the row at it, so a save that loses the revision
@@ -221,7 +231,10 @@ const sceneObjectPrefix = (userId: string, sceneId: string): string => `users/${
 const newDocumentKey = (userId: string, sceneId: string): string =>
   `${sceneObjectPrefix(userId, sceneId)}${randomUUID()}.json`;
 
-const rowKey = (userId: string, sceneId: string): Record<string, AttributeValue> => ({
+/** Where a published scene's GLB lives. Outside `users/`: the public viewer reads it by publish ID. */
+export const publishedGlbKey = (publishId: string): string => `scenes/${publishId}.glb`;
+
+export const rowKey = (userId: string, sceneId: string): Record<string, AttributeValue> => ({
   userId: { S: userId },
   sceneId: { S: sceneId },
 });
@@ -245,6 +258,7 @@ const toSummary = (item: Record<string, AttributeValue>): SceneSummaryBody => ({
   sceneId: item.sceneId?.S ?? "",
   name: item.name?.S ?? DEFAULT_SCENE_NAME,
   updatedAt: item.updatedAt?.S ?? "",
+  publishId: item.publishId?.S,
 });
 
 const putDocument = async (config: SceneConfig, key: string, serialized: string): Promise<void> => {
@@ -338,7 +352,7 @@ const listScenes = async (config: SceneConfig, userId: string): Promise<SceneApi
         KeyConditionExpression: "userId = :userId",
         ExpressionAttributeValues: { ":userId": { S: userId } },
         ExpressionAttributeNames: { "#name": "name" },
-        ProjectionExpression: "sceneId, #name, updatedAt",
+        ProjectionExpression: "sceneId, #name, updatedAt, publishId",
         ExclusiveStartKey: exclusiveStartKey,
       }),
     );
@@ -884,12 +898,12 @@ export const handleScenesRequest = async (request: SceneApiRequest, env: ServerE
     return errorResponse(auth.status, auth.error);
   }
 
-  if (request.sceneId !== null && !SCENE_ID_PATTERN.test(request.sceneId)) {
+  if (request.sceneId !== null && !isSceneId(request.sceneId)) {
     return errorResponse(404, "Scene not found.");
   }
 
   try {
-    const config = readConfig(env);
+    const config = readSceneConfig(env);
     const body = parseBody(request.body);
 
     if (request.sceneId === null) {

@@ -280,7 +280,6 @@ export const initialFrameDefaults: FrameSettingsConfig = {
 export interface EditorState {
   entities: Entity[];
   selectedEntityIds: string[];
-  currentPublishId: string | null;
   activeProfileId: string;
   cameraProfiles: Record<string, CameraProfile>;
   setActiveProfile: (id: string) => void;
@@ -302,7 +301,6 @@ export interface EditorState {
   updateMultipleEntityTransforms: (updates: Record<string, EntityTransformUpdates>) => void;
   selectEntity: (id: string | null, multi?: boolean) => void;
   selectEntities: (ids: string[], mode?: "replace" | "add" | "subtract") => void;
-  setCurrentPublishId: (id: string | null) => void;
   toggleVisibility: (id: string) => void;
   toggleLock: (id: string) => void;
   renameEntity: (id: string, newName: string) => void;
@@ -349,7 +347,7 @@ export interface EditorState {
   // Replaces the whole scene with a saved one (null = a new scene's starting content) and clears
   // undo history, so Ctrl+Z can't reach into the previously open scene.
   loadScene: (content: StoredSceneContent | null) => void;
-  setEditorState:(updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
+  setEditorState:(updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -577,7 +575,6 @@ export const useEditorStore = create<EditorState>()(
         guardSceneContent((set, get, api) => ({
           entities: initialEntities.map(cloneEntity),
           selectedEntityIds: [],
-          currentPublishId: null,
           activeProfileId: DEFAULT_CAMERA_PROFILE_ID,
           cameraProfiles: {
             [DEFAULT_CAMERA_PROFILE_ID]: cloneCameraProfile(DEFAULT_CAMERA_PROFILE),
@@ -972,10 +969,6 @@ export const useEditorStore = create<EditorState>()(
               const remove = new Set(ids);
               return { selectedEntityIds: state.selectedEntityIds.filter((id) => !remove.has(id)) };
             }),
-          setCurrentPublishId: (id) =>
-            set({
-              currentPublishId: id,
-            }),
           toggleVisibility: (id) =>
             set((state) => ({
               entities: state.entities.map((entity) =>
@@ -1137,8 +1130,6 @@ export const useEditorStore = create<EditorState>()(
               cameraProfiles,
               activeProfileId,
               selectedEntityIds: [],
-              // A publish link belongs to the scene it was made from (owned by the server from PR 6).
-              currentPublishId: null,
               isPreviewMode: false,
               previewGlbUrl: null,
             });

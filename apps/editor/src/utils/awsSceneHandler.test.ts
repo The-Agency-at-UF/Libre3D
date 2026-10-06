@@ -31,7 +31,12 @@ vi.mock("./verifyAuth.js", () => ({
       : { authorized: false, status: 401, error: "You need to be signed in to do that." },
 }));
 
-const ENV = { AWS_REGION: "us-east-2", S3_BUCKET_NAME: "bucket", USER_SCENES_TABLE_NAME: "user-scenes" };
+const ENV = {
+  AWS_REGION: "us-east-2",
+  S3_BUCKET_NAME: "bucket",
+  USER_SCENES_TABLE_NAME: "user-scenes",
+  PUBLISHED_SCENES_TABLE_NAME: "published-scenes",
+};
 
 let dynamo: FakeDynamoDB;
 let s3: FakeS3;
