@@ -2,10 +2,10 @@
  * PURPOSE: Server-side (Node) logic for publishing a scene and for the public viewer.
  *
  * Routes:
- *   POST /api/publish        `{ sceneId }`, one of the caller's scenes (sign-in required): returns
- *                            `{ publishId, uploadUrl }`, a presigned PUT for the published GLB
- *   GET  /api/scene/:id      public: `{ cloudAssetUrl }`, a short-lived presigned GET for the GLB
- *                            published under that publish ID
+ *   POST /api/publish        `{ sceneId, bgColor? }`, one of the caller's scenes (sign-in required):
+ *                            returns `{ publishId, uploadUrl }`, a presigned PUT for the published GLB
+ *   GET  /api/scene/:id      public: `{ cloudAssetUrl, bgColor }`, a short-lived presigned GET for the
+ *                            GLB published under that publish ID, and the scene's background colour
  *
  * Ownership is by construction: the publish ID is made here, kept on the caller's own user-scenes
  * row (`publishId`), and only ever read back from there, so a client can't name someone else's
@@ -40,6 +40,7 @@ import {
   type SceneApiResponse,
   type SceneConfig,
 } from "./awsSceneHandler.js";
+import { normalizePublishedBgColor } from "./publishedSceneStyle.js";
 import { verifyAuth } from "./verifyAuth.js";
 
 export interface PublishApiRequest {
@@ -100,6 +101,9 @@ const publishScene = async (config: SceneConfig, userId: string, body: Record<st
   }
 
   const assetKey = publishedGlbKey(publishId);
+  // glTF can't hold a background colour, so it rides on the published row (see publishedSceneStyle).
+  // Anything that isn't a hex colour is dropped rather than failing the publish.
+  const bgColor = normalizePublishedBgColor(body.bgColor);
 
   try {
     await config.dynamo.send(
@@ -111,6 +115,7 @@ const publishScene = async (config: SceneConfig, userId: string, body: Record<st
           ownerId: { S: userId },
           sourceSceneId: { S: sceneId },
           updatedAt: { S: new Date().toISOString() },
+          ...(bgColor ? { bgColor: { S: bgColor } } : {}),
         },
         ConditionExpression: "attribute_not_exists(sceneId) OR ownerId = :owner",
         ExpressionAttributeValues: { ":owner": { S: userId } },
@@ -183,8 +188,12 @@ export const handlePublishedSceneRequest = async (
       expiresIn: GLB_URL_TTL_SECONDS,
     });
 
+    // Checked again on the way out: it ends up in a style on a public page. Null for scenes
+    // published before the colour was stored, which keep the viewer's default.
+    const bgColor = normalizePublishedBgColor(item?.bgColor?.S);
+
     // The URL expires, so nothing may keep this answer for later.
-    return json(200, { cloudAssetUrl }, { "Cache-Control": "no-store" });
+    return json(200, { cloudAssetUrl, bgColor }, { "Cache-Control": "no-store" });
   } catch (error) {
     console.error(`Published scene API error (${request.publishId}):`, error);
     return errorResponse(500, "Something went wrong on the server. Try again.");
