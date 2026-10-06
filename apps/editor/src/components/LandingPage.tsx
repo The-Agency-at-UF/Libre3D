@@ -4,7 +4,7 @@ import { Button } from "./ui/Button";
 import { PageLayout } from "./ui/PageLayout";
 
 import { isAuthConfigured, startSignIn } from "../utils/authSession";
-import { getPostSignInPath } from "../utils/navigation";
+import { GUEST_PATH, getPostSignInPath, navigate } from "../utils/navigation";
 
 interface LandingPageProps {
   /** Shown above the button, e.g. why a previous sign-in attempt failed. */
@@ -16,6 +16,7 @@ interface LandingPageProps {
  * PURPOSE: The signed-out home page at `/`. There is no form here on purpose: Sign in hands off to
  *          Cognito's hosted login, which owns passwords, MFA setup, and resets. Signed-out visits to
  *          a private page arrive here as `/?next=<path>` and return to that path after sign-in.
+ *          Try it without an account opens the guest editor (`/try`), which needs no sign-in.
  */
 export function LandingPage({ message }: LandingPageProps) {
   const [isRedirecting, setIsRedirecting] = useState(false);
@@ -69,7 +70,11 @@ export function LandingPage({ message }: LandingPageProps) {
           </p>
         )}
 
-        <p className="landing-note">Access is by invitation only.</p>
+        <Button onClick={() => navigate(GUEST_PATH)}>Try it without an account</Button>
+
+        <p className="landing-note">
+          Accounts are by invitation only. Without one, your scene is kept in this browser and can't be shared.
+        </p>
       </section>
     </PageLayout>
   );

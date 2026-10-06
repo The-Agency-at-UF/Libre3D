@@ -14,6 +14,9 @@ const NAVIGATE_EVENT = "libre3d-navigate";
 /** Where signed-in visitors to `/` land when no `?next` says otherwise. */
 export const HOME_PATH = "/scenes";
 
+/** The editor without an account (GuestEditorApp): one scene, kept in this browser. */
+export const GUEST_PATH = "/try";
+
 const NEXT_PARAM = "next";
 
 export const navigate = (path: string, options: { replace?: boolean } = {}): void => {
