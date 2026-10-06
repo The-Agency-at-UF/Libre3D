@@ -151,10 +151,10 @@ rm -rf node_modules && pnpm install && pnpm build
 
 ### Dev server starts but the page is blank
 
-Open DevTools and read the console. A corrupted saved scene in `localStorage` is the usual cause — reset it:
+Open DevTools and read the console. Corrupted local data is a common cause: reset the editor preferences and any unsaved local scene copies (your scenes themselves are saved in the cloud):
 
 ```javascript
-localStorage.removeItem("editor-store"); location.reload();
+Object.keys(localStorage).filter((k) => k === "libre3d-scene-state" || k.startsWith("libre3d-scene-cache:")).forEach((k) => localStorage.removeItem(k)); location.reload();
 ```
 
 Anything else, see [troubleshooting.md](troubleshooting.md).

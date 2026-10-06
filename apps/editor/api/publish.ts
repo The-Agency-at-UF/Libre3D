@@ -1,49 +1,22 @@
 /**
- * PURPOSE: Vercel serverless entry point for `POST /api/publish`.
+ * PURPOSE: Vercel serverless entry point for `POST /api/publish` (publish one of the signed-in
+ *          user's scenes: `{ sceneId }` → `{ publishId, uploadUrl }`).
  *
- * INPUT: An optional JSON body of `{ currentPublishId, bgColor }`: the id lets republishing reuse an
- *        existing sceneId, and the colour is stored for the share page (glTF can't carry it).
- * OUTPUT: The publish session (`sceneId`, `assetKey`, presigned `uploadUrl`, `shareUrl`) the editor
- *         needs to upload the exported GLB straight to S3.
- *
- * The dev server serves this same route from Vite middleware in `vite.config.ts`; both paths are
- * thin wrappers around `createPublishSession` so the two environments cannot drift.
+ * A thin adapter: auth, ownership, and validation live in `handlePublishRequest`
+ * (`src/utils/awsPublishHandler.ts`), which the Vite dev middleware in `vite.config.ts` also calls,
+ * so the two environments cannot drift.
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
-import { createPublishSession, resolveRequestBaseUrl } from "../src/utils/awsPublishHandler";
-import { authorizePublishRequest } from "../src/utils/publishAuth";
-import { parsePublishRequestBody } from "../src/utils/publishedSceneStyle";
+// The `.js` extensions are required: this package is `"type": "module"`, and on Vercel these files
+// run under Node's ES module loader, which doesn't guess extensions (Vite does, so `pnpm dev` works
+// either way). Without them the function crashes at load with ERR_MODULE_NOT_FOUND.
+import { handlePublishRequest } from "../src/utils/awsPublishHandler.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
-    res.status(405).json({ error: "Method not allowed" });
-    return;
-  }
+  const result = await handlePublishRequest({ method: req.method ?? "POST", headers: req.headers, body: req.body }, process.env);
 
-  const auth = authorizePublishRequest(req.headers, process.env);
-
-  if (!auth.authorized) {
-    res.status(auth.status).json({ error: auth.error });
-    return;
-  }
-
-  try {
-    const { currentPublishId, bgColor } = parsePublishRequestBody(req.body);
-    const session = await createPublishSession(
-      process.env,
-      currentPublishId,
-      resolveRequestBaseUrl(req.headers, process.env),
-      bgColor,
-    );
-
-    res.status(200).json(session);
-  } catch (error) {
-    console.error("Publish handler error:", error);
-
-    const message = error instanceof Error ? error.message : "Unable to create publish session.";
-    res.status(500).json({ error: message });
-  }
+  Object.entries(result.headers ?? {}).forEach(([name, value]) => res.setHeader(name, value));
+  res.status(result.status).json(result.body);
 }
