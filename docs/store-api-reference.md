@@ -118,6 +118,7 @@ Creates a single primitive entity (cube, sphere, torus, directional light, or gr
 #### `addImportedModelHierarchy(assetId: string, nodes: ImportNodeSpec[]) → string`
 Imports a GLB model hierarchy (preserves parent-child relationships).
 - **Signature**: `(assetId: string, nodes: ImportNodeSpec[]) => string`
+- **`assetId`**: the SHA-256 of the GLB's bytes, as `prepareModelImport` stores it (`utils/sceneAssets.ts`)
 - **Returns**: ID of the root imported entity
 - **Nodes format**: Array of `ImportNodeSpec` with tempId, parentTempId, name, position, rotation, scale, nodePath
 - **Behavior**: Remaps temp IDs to real IDs internally; all nodes get type "importedModel"
@@ -171,7 +172,7 @@ Toggle locked state (lock icon in hierarchy). Prevents transform via gizmo.
 
 #### `removeEntity(ids: string[]) → void`
 Delete one or more entities and all descendants.
-- **OPFS cleanup**: Deferred until next app load (so undo works)
+- **Imported assets**: Never deleted here, so undo always works. Local copies are a cache of the cloud ones (a missing one is downloaded when needed); cleaning them up is not wired up yet
 - **Selection**: Auto-clears deleted entities from selection
 
 #### `duplicateEntity(ids: string[]) → void`
@@ -362,7 +363,7 @@ Replace an entity's entire layer stack.
   type: "image";
   enabled: boolean;
   opacity: number; // 0-1
-  textureAssetId: string; // reference to OPFS asset
+  textureAssetId: string; // SHA-256 of the stored PNG (local storage and S3)
   slot: "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
   wrapS: number; // THREE.js wrap constant
   wrapT: number; // THREE.js wrap constant

@@ -346,6 +346,14 @@
   font-size: var(--font-size-sm);
 }
 
+/* Side-by-side choices under the label (e.g. Try again / Open without them). */
+.page-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
 /* Sidebar frame (SidebarLayout), used by the gallery. Fixed to the viewport like .page. */
 .page-shell {
   position: fixed;

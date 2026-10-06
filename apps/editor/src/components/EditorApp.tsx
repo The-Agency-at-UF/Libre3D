@@ -35,6 +35,7 @@ import { toggleTheme } from "../utils/theme";
 import { navigate } from "../utils/navigation";
 import { createScene, type LockClaim, type OpenedScene } from "../utils/sceneLibrary";
 import type { SaveStatus } from "../utils/sceneAutosave";
+import type { DownloadProgress } from "../utils/assetTransfers";
 
 //import tsx hook for editor store
 import { useEditorStore } from "../store/useEditorStore";
@@ -48,6 +49,13 @@ if (import.meta.env.DEV) {
 }
 
 const SIGN_OUT_SAVE_WAIT_MS = 3_000;
+
+const describeDownload = ({ files, filesDone, loaded }: DownloadProgress): string => {
+  const megabytes = loaded / (1024 * 1024);
+  const amount = megabytes >= 0.1 ? ` (${megabytes < 10 ? megabytes.toFixed(1) : Math.round(megabytes)} MB)` : "";
+
+  return `Downloading the scene's models and textures… ${filesDone} of ${files}${amount}`;
+};
 
 interface EditorAppProps {
   sceneId: string;
@@ -66,6 +74,21 @@ export function EditorApp({ sceneId, accountEmail }: EditorAppProps) {
   switch (openScene.status) {
     case "loading":
       return <PageStatus label="Opening the scene…" />;
+    case "downloading":
+      return <PageStatus label={describeDownload(openScene.progress)} />;
+    case "assetsMissing":
+      return (
+        <PageStatus
+          label={`Couldn't download ${openScene.missing} of the scene's ${openScene.files} imported models and textures.`}
+          isWorking={false}
+        >
+          <div className="page-status-actions">
+            <Button variant="primary" onClick={openScene.retry}>Try again</Button>
+            <Button onClick={openScene.openAnyway}>Open without them</Button>
+          </div>
+          <Link href="/scenes">Back to your scenes</Link>
+        </PageStatus>
+      );
     case "ready":
       return (
         <EditorWorkspace

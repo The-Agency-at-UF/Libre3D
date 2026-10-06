@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { HeadObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 
-import { FakeDynamoDB, FakeS3 } from "../testing/fakeAws";
-import { handleScenesRequest, type SceneApiResponse } from "./awsSceneHandler";
+import { FakeDynamoDB, FakePresigner, FakeS3 } from "../testing/fakeAws";
+import { handleScenesRequest, type SceneApiResponse, type SceneSubresource } from "./awsSceneHandler";
+import { assetHashToBase64 } from "./sceneAssets";
 
-const aws = vi.hoisted(() => ({ dynamo: null as unknown, s3: null as unknown }));
+const aws = vi.hoisted(() => ({ dynamo: null as unknown, s3: null as unknown, presigner: null as unknown }));
 
 vi.mock("./awsConfig.js", () => ({
   readAwsAccess: () => ({ region: "us-east-2", credentials: undefined }),
@@ -15,6 +16,10 @@ vi.mock("./awsConfig.js", () => ({
   },
   createDynamoClient: () => aws.dynamo,
   createS3Client: () => aws.s3,
+}));
+
+vi.mock("@aws-sdk/s3-request-presigner", () => ({
+  getSignedUrl: (...args: Parameters<FakePresigner["getSignedUrl"]>) => (aws.presigner as FakePresigner).getSignedUrl(...args),
 }));
 
 // The real check is covered in verifyAuth.test.ts. Here `Bearer <name>` signs in as user `<name>`,
@@ -30,17 +35,25 @@ const ENV = { AWS_REGION: "us-east-2", S3_BUCKET_NAME: "bucket", USER_SCENES_TAB
 
 let dynamo: FakeDynamoDB;
 let s3: FakeS3;
+let presigner: FakePresigner;
 
 interface Call {
   sceneId?: string | null;
   lock?: boolean;
+  subresource?: SceneSubresource;
   as?: string | null;
   body?: unknown;
 }
 
-const call = (method: string, { sceneId = null, lock = false, as = "alice", body }: Call = {}): Promise<SceneApiResponse> =>
+const call = (method: string, { sceneId = null, lock = false, subresource, as = "alice", body }: Call = {}): Promise<SceneApiResponse> =>
   handleScenesRequest(
-    { method, sceneId, subresource: lock ? "lock" : null, headers: as ? { authorization: `Bearer ${as}` } : {}, body },
+    {
+      method,
+      sceneId,
+      subresource: lock ? "lock" : (subresource ?? null),
+      headers: as ? { authorization: `Bearer ${as}` } : {},
+      body,
+    },
     ENV,
   );
 
@@ -74,13 +87,51 @@ const save = (sceneId: string, marker: string, baseRevision: number, { as = "ali
 
 const lockExpiresAt = (sceneId: string, userId = "alice") => Number(dynamo.getItem(userId, sceneId)?.lockExpiresAt?.N);
 
+// Content addresses (sceneAssets.ts). Their bytes don't matter here, only that S3 holds them under
+// their hash's checksum.
+const MODEL = "a".repeat(64);
+const TEXTURE = "b".repeat(64);
+const OTHER = "c".repeat(64);
+
+/** An asset the browser uploaded through its presigned PUT: S3 checked its bytes against the hash. */
+const storeAsset = (hash: string, { as = "alice", contentLength }: { as?: string; contentLength?: number } = {}) =>
+  s3.upload(`users/${as}/assets/${hash}`, "bytes", { checksumSha256: assetHashToBase64(hash), contentLength });
+
+/** A scene document whose entities use these models and textures. */
+const documentUsing = (marker: string, { models = [] as string[], textures = [] as string[] } = {}) => ({
+  ...sceneDocument(marker),
+  scene: {
+    entities: [
+      { id: marker },
+      ...models.map((assetId, index) => ({ id: `model-${index}`, assetId })),
+      ...textures.map((textureAssetId, index) => ({
+        id: `mesh-${index}`,
+        materialLayers: [{ type: "image", textureAssetId }],
+      })),
+    ],
+  },
+});
+
+const saveDocument = (sceneId: string, document: unknown, baseRevision: number, { as = "alice", session = TAB_A } = {}) =>
+  call("PUT", { sceneId, as, body: { document, baseRevision, sessionId: session } });
+
+const requestUploads = (sceneId: string, assets: unknown, { session = TAB_A, as = "alice" } = {}) =>
+  call("POST", { sceneId, subresource: "assets/uploads", as, body: { sessionId: session, assets } });
+
+const requestDownloads = (sceneId: string, hashes: unknown, { as = "alice" } = {}) =>
+  call("POST", { sceneId, subresource: "assets/downloads", as, body: { hashes } });
+
+const assetHashesOf = (sceneId: string, userId = "alice") => dynamo.getItem(userId, sceneId)?.assetHashes?.SS;
+
 const objectsOf = (userId: string, sceneId: string) => s3.keysUnder(`users/${userId}/scenes/${sceneId}.`);
 
 beforeEach(() => {
   dynamo = new FakeDynamoDB();
   s3 = new FakeS3();
+  presigner = new FakePresigner();
   aws.dynamo = dynamo;
   aws.s3 = s3;
+  aws.presigner = presigner;
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-10-03T12:00:00.000Z"));
 });
@@ -91,12 +142,14 @@ afterEach(() => {
 });
 
 describe("routing and auth", () => {
-  it.each([
+  it.each<[string, string | null, boolean, string, string, SceneSubresource?]>([
     ["the collection", null, false, "DELETE", "GET, POST"],
     ["a scene", "00000000-0000-4000-8000-000000000000", false, "POST", "GET, PUT, PATCH, DELETE"],
     ["a scene's lock", "00000000-0000-4000-8000-000000000000", true, "GET", "POST, DELETE"],
-  ])("answers an unsupported method on %s with 405 and Allow", async (_label, sceneId, lock, method, allow) => {
-    const response = await call(method, { sceneId, lock });
+    ["a scene's asset uploads", "00000000-0000-4000-8000-000000000000", false, "GET", "POST", "assets/uploads"],
+    ["a scene's asset downloads", "00000000-0000-4000-8000-000000000000", false, "PUT", "POST", "assets/downloads"],
+  ])("answers an unsupported method on %s with 405 and Allow", async (_label, sceneId, lock, method, allow, subresource) => {
+    const response = await call(method, { sceneId, lock, subresource });
 
     expect(response.status).toBe(405);
     expect(response.headers).toEqual({ Allow: allow });
@@ -319,7 +372,7 @@ describe("open, rename, delete", () => {
 });
 
 describe("ownership", () => {
-  it("never lets one user open, save, rename, delete, or lock another user's scene", async () => {
+  it("never lets one user open, save, rename, delete, lock, or upload to another user's scene", async () => {
     const sceneId = await createLockedScene({ name: "Alice's" });
     await save(sceneId, "alice's work", 0);
 
@@ -330,6 +383,11 @@ describe("ownership", () => {
     await expect(claim(sceneId, { as: "bob", session: TAB_B, takeOver: true })).resolves.toMatchObject({ status: 404 });
     await expect(release(sceneId, { as: "bob" })).resolves.toMatchObject({ status: 200, body: { released: false } });
     await expect(call("DELETE", { sceneId, as: "bob" })).resolves.toMatchObject({ status: 404 });
+    await expect(requestUploads(sceneId, [{ hash: MODEL, size: 10, kind: "model" }], { as: "bob" })).resolves.toMatchObject({
+      status: 404,
+    });
+    await expect(requestDownloads(sceneId, [MODEL], { as: "bob" })).resolves.toMatchObject({ status: 404 });
+    expect(presigner.signed).toEqual([]);
 
     await expect(call("GET", { sceneId })).resolves.toMatchObject({
       body: { scene: { name: "Alice's", revision: 1 }, document: sceneDocument("alice's work") },
@@ -491,5 +549,261 @@ describe("saving under the lock", () => {
 
     await expect(save(sceneId, "after a sleep", 0)).resolves.toMatchObject({ status: 200, body: { revision: 1 } });
     expect(lockExpiresAt(sceneId)).toBe(NOW + 6 * 60_000);
+  });
+});
+
+describe("asset uploads", () => {
+  const NOW = Date.parse("2026-10-03T12:00:00.000Z");
+
+  it("signs a PUT only for assets the cloud doesn't have, with size, type, and checksum as signed headers", async () => {
+    const sceneId = await createLockedScene();
+    storeAsset(TEXTURE);
+
+    const response = await requestUploads(sceneId, [
+      { hash: MODEL, size: 1234, kind: "model" },
+      { hash: TEXTURE, size: 99, kind: "texture" },
+      { hash: OTHER, size: 56, kind: "texture" },
+      { hash: MODEL, size: 1234, kind: "model" },
+    ]);
+
+    expect(response.status).toBe(200);
+    const { uploads } = response.body as { uploads: Array<{ hash: string; url: string; headers: Record<string, string> }> };
+    expect(uploads.map((upload) => upload.hash)).toEqual([MODEL, OTHER]);
+    expect(uploads[0].headers).toEqual({ "Content-Type": "model/gltf-binary", "x-amz-checksum-sha256": assetHashToBase64(MODEL) });
+    expect(uploads[1].headers).toEqual({ "Content-Type": "image/png", "x-amz-checksum-sha256": assetHashToBase64(OTHER) });
+    expect(presigner.find(uploads[0].url)).toEqual({
+      url: uploads[0].url,
+      operation: "PutObject",
+      input: {
+        Bucket: "bucket",
+        Key: `users/alice/assets/${MODEL}`,
+        ContentType: "model/gltf-binary",
+        ContentLength: 1234,
+        ChecksumSHA256: assetHashToBase64(MODEL),
+      },
+      expiresIn: 900,
+      // Without these, S3 accepts another size, and the checksum isn't checked against the body.
+      signableHeaders: ["content-length", "content-type"],
+      unhoistableHeaders: ["x-amz-checksum-sha256"],
+    });
+    expect(presigner.signed).toHaveLength(2);
+  });
+
+  it("answers with no uploads when the cloud has everything", async () => {
+    const sceneId = await createLockedScene();
+    storeAsset(MODEL);
+
+    await expect(requestUploads(sceneId, [{ hash: MODEL, size: 5, kind: "model" }])).resolves.toMatchObject({
+      status: 200,
+      body: { uploads: [] },
+    });
+  });
+
+  it("treats an object that doesn't match its address as missing, so it gets replaced", async () => {
+    const sceneId = await createLockedScene();
+    s3.upload(`users/alice/assets/${MODEL}`, "no checksum");
+    s3.upload(`users/alice/assets/${TEXTURE}`, "wrong checksum", { checksumSha256: assetHashToBase64(OTHER) });
+    storeAsset(OTHER, { contentLength: 100 * 1024 * 1024 + 1 });
+
+    const response = await requestUploads(sceneId, [
+      { hash: MODEL, size: 5, kind: "model" },
+      { hash: TEXTURE, size: 5, kind: "texture" },
+      { hash: OTHER, size: 5, kind: "texture" },
+    ]);
+
+    expect((response.body as { uploads: Array<{ hash: string }> }).uploads.map((upload) => upload.hash)).toEqual([MODEL, TEXTURE, OTHER]);
+  });
+
+  it("refuses a session without the lock (423) and a scene nobody claimed, signing nothing", async () => {
+    const sceneId = await createLockedScene();
+    const unclaimedId = await createScene();
+    const asset = [{ hash: MODEL, size: 5, kind: "model" }];
+
+    await expect(requestUploads(sceneId, asset, { session: TAB_B })).resolves.toMatchObject({
+      status: 423,
+      body: { error: "This scene is open somewhere else.", heldByYou: true },
+    });
+    await expect(requestUploads(unclaimedId, asset)).resolves.toMatchObject({ status: 423 });
+    await expect(requestUploads("00000000-0000-4000-8000-000000000000", asset)).resolves.toMatchObject({ status: 404 });
+    expect(presigner.signed).toEqual([]);
+  });
+
+  it("renews the lease, like a save", async () => {
+    const sceneId = await createLockedScene();
+    vi.setSystemTime(NOW + 45_000);
+
+    await requestUploads(sceneId, [{ hash: MODEL, size: 5, kind: "model" }]);
+
+    expect(lockExpiresAt(sceneId)).toBe(NOW + 105_000);
+  });
+
+  it.each([
+    ["no assets", []],
+    ["more than 100 assets", Array.from({ length: 101 }, () => ({ hash: MODEL, size: 5, kind: "model" }))],
+    ["an uppercase hash", [{ hash: MODEL.toUpperCase(), size: 5, kind: "model" }]],
+    ["an ID from before cloud assets", [{ hash: "asset-m1abc2-x9y8z7", size: 5, kind: "model" }]],
+    ["a path in place of a hash", [{ hash: `../${MODEL.slice(3)}`, size: 5, kind: "model" }]],
+    ["an empty file", [{ hash: MODEL, size: 0, kind: "model" }]],
+    ["a fractional size", [{ hash: MODEL, size: 1.5, kind: "model" }]],
+    ["an unknown kind", [{ hash: MODEL, size: 5, kind: "audio" }]],
+    ["something that isn't an asset", [null]],
+  ])("rejects %s with 400", async (_label, assets) => {
+    const sceneId = await createLockedScene();
+
+    await expect(requestUploads(sceneId, assets)).resolves.toMatchObject({ status: 400 });
+    expect(presigner.signed).toEqual([]);
+  });
+
+  it("rejects a file over 100 MB with 413, and a request without a session ID with 400", async () => {
+    const sceneId = await createLockedScene();
+
+    await expect(requestUploads(sceneId, [{ hash: MODEL, size: 100 * 1024 * 1024 + 1, kind: "model" }])).resolves.toMatchObject({
+      status: 413,
+      body: { hash: MODEL },
+    });
+    await expect(
+      call("POST", { sceneId, subresource: "assets/uploads", body: { assets: [{ hash: MODEL, size: 5, kind: "model" }] } }),
+    ).resolves.toMatchObject({ status: 400 });
+    expect(presigner.signed).toEqual([]);
+  });
+});
+
+describe("saving a scene's assets", () => {
+  it("refuses a save naming an asset the cloud doesn't have (422, listing it), leaving the scene as it was", async () => {
+    const sceneId = await createLockedScene();
+    await save(sceneId, "kept", 0);
+    storeAsset(MODEL);
+
+    await expect(saveDocument(sceneId, documentUsing("new", { models: [MODEL], textures: [TEXTURE] }), 1)).resolves.toEqual({
+      status: 422,
+      body: { error: "Some of this scene's imported files haven't been uploaded yet.", missingAssets: [TEXTURE] },
+      headers: undefined,
+    });
+    await expect(call("GET", { sceneId })).resolves.toMatchObject({ body: { scene: { revision: 1 }, document: sceneDocument("kept") } });
+    expect(objectsOf("alice", sceneId)).toHaveLength(1);
+  });
+
+  it("saves once the assets are in the cloud, records them on the row, and tells the editor on open", async () => {
+    const sceneId = await createLockedScene();
+    storeAsset(MODEL);
+    storeAsset(TEXTURE);
+    await expect(call("GET", { sceneId })).resolves.toMatchObject({ body: { scene: { assetHashes: [] } } });
+
+    await expect(saveDocument(sceneId, documentUsing("doc", { models: [MODEL], textures: [TEXTURE, MODEL] }), 0)).resolves.toMatchObject({
+      status: 200,
+      body: { revision: 1 },
+    });
+    expect(assetHashesOf(sceneId)).toEqual([MODEL, TEXTURE]);
+    // The editor never uploads these again.
+    await expect(call("GET", { sceneId })).resolves.toMatchObject({ body: { scene: { assetHashes: [MODEL, TEXTURE] } } });
+  });
+
+  it("checks only the assets that are new since the last save", async () => {
+    const sceneId = await createLockedScene();
+    storeAsset(MODEL);
+    await saveDocument(sceneId, documentUsing("first", { models: [MODEL] }), 0);
+    const heads = vi.spyOn(s3, "send");
+
+    await expect(saveDocument(sceneId, documentUsing("second", { models: [MODEL] }), 1)).resolves.toMatchObject({ status: 200 });
+    expect(heads.mock.calls.filter(([command]) => command instanceof HeadObjectCommand)).toHaveLength(0);
+
+    await expect(saveDocument(sceneId, documentUsing("third", { models: [MODEL, OTHER] }), 2)).resolves.toMatchObject({
+      status: 422,
+      body: { missingAssets: [OTHER] },
+    });
+  });
+
+  it("drops the row's asset list once the scene uses none, and leaves IDs from before cloud assets alone", async () => {
+    const sceneId = await createLockedScene();
+    storeAsset(MODEL);
+    await saveDocument(sceneId, documentUsing("with", { models: [MODEL] }), 0);
+
+    await expect(saveDocument(sceneId, documentUsing("old ids", { models: ["asset-old"], textures: ["texture-old"] }), 1)).resolves.toMatchObject({
+      status: 200,
+    });
+    expect(dynamo.getItem("alice", sceneId)).not.toHaveProperty("assetHashes");
+  });
+
+  it("tells a tab without the lock it's read-only before looking at assets", async () => {
+    const sceneId = await createLockedScene();
+    const sends = vi.spyOn(s3, "send");
+
+    await expect(saveDocument(sceneId, documentUsing("x", { models: [MODEL] }), 0, { session: TAB_B })).resolves.toMatchObject({
+      status: 423,
+    });
+    expect(sends).not.toHaveBeenCalled();
+  });
+
+  it("rejects a scene using more than 500 assets with 413", async () => {
+    const sceneId = await createLockedScene();
+    const hashes = Array.from({ length: 501 }, (_unused, index) => index.toString(16).padStart(64, "0"));
+
+    await expect(saveDocument(sceneId, documentUsing("big", { models: hashes }), 0)).resolves.toMatchObject({ status: 413 });
+  });
+
+  it("applies the same rule to a scene created with a document", async () => {
+    await expect(call("POST", { body: { document: documentUsing("legacy", { models: [MODEL] }) } })).resolves.toMatchObject({
+      status: 422,
+      body: { missingAssets: [MODEL] },
+    });
+    expect(dynamo.items.size).toBe(0);
+    expect(s3.keysUnder("users/alice/scenes/")).toEqual([]);
+
+    storeAsset(MODEL);
+    const sceneId = await createScene({ document: documentUsing("legacy", { models: [MODEL] }) });
+    expect(assetHashesOf(sceneId)).toEqual([MODEL]);
+  });
+
+  it("keeps a scene's assets when the scene is deleted: other scenes may use them", async () => {
+    const sceneId = await createLockedScene();
+    storeAsset(MODEL);
+    await saveDocument(sceneId, documentUsing("doc", { models: [MODEL] }), 0);
+
+    await call("DELETE", { sceneId });
+
+    expect(s3.keysUnder("users/alice/assets/")).toEqual([`users/alice/assets/${MODEL}`]);
+  });
+});
+
+describe("asset downloads", () => {
+  it("signs a GET for each requested asset the scene's saved document uses, and lists the rest as unavailable", async () => {
+    const sceneId = await createLockedScene();
+    storeAsset(MODEL);
+    storeAsset(TEXTURE);
+    // TEXTURE is Alice's, but this scene doesn't use it.
+    await saveDocument(sceneId, documentUsing("doc", { models: [MODEL] }), 0);
+
+    const response = await requestDownloads(sceneId, [MODEL, TEXTURE, MODEL]);
+
+    expect(response.status).toBe(200);
+    const body = response.body as { downloads: Array<{ hash: string; url: string }>; unavailable: string[] };
+    expect(body.downloads.map((download) => download.hash)).toEqual([MODEL]);
+    expect(body.unavailable).toEqual([TEXTURE]);
+    expect(presigner.find(body.downloads[0].url)).toMatchObject({
+      operation: "GetObject",
+      input: { Bucket: "bucket", Key: `users/alice/assets/${MODEL}` },
+      expiresIn: 900,
+    });
+  });
+
+  it("doesn't need the lock: view-only tabs download too", async () => {
+    const sceneId = await createLockedScene();
+    storeAsset(MODEL);
+    await saveDocument(sceneId, documentUsing("doc", { models: [MODEL] }), 0);
+    await claim(sceneId, { session: TAB_B });
+
+    await expect(requestDownloads(sceneId, [MODEL])).resolves.toMatchObject({ status: 200, body: { unavailable: [] } });
+  });
+
+  it("answers 404 for a missing scene, and 400 for a malformed list", async () => {
+    const sceneId = await createLockedScene();
+
+    await expect(requestDownloads("00000000-0000-4000-8000-000000000000", [MODEL])).resolves.toMatchObject({ status: 404 });
+
+    for (const hashes of [[], undefined, ["asset-old"], [MODEL.toUpperCase()], Array.from({ length: 101 }, () => MODEL)]) {
+      await expect(requestDownloads(sceneId, hashes)).resolves.toMatchObject({ status: 400 });
+    }
+
+    expect(presigner.signed).toEqual([]);
   });
 });

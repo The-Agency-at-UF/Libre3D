@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 
 import { useEditorStore } from "../store/useEditorStore";
 import { ApiAuthError } from "../utils/apiFetch";
+import { downloadSceneAssets, setSceneForAssetDownloads, type DownloadProgress } from "../utils/assetTransfers";
 import { getAuthSnapshot } from "../utils/authSession";
+import { collectAssetRefs, isAssetHash } from "../utils/sceneAssets";
 import { clearSceneCache, readSceneCache, resolveSceneToOpen } from "../utils/sceneCache";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { cancelRelease } from "../utils/sceneLock";
@@ -10,6 +12,10 @@ import { SceneApiError, claimSceneLock, getScene, type LockClaim, type OpenedSce
 
 export type OpenSceneState =
   | { status: "loading" }
+  /** Fetching the imported models and textures the scene uses that this browser doesn't have. */
+  | { status: "downloading"; progress: DownloadProgress }
+  /** Some couldn't be fetched: try again, or open the scene without them. */
+  | { status: "assetsMissing"; missing: number; files: number; retry: () => void; openAnyway: () => void }
   | { status: "ready"; scene: OpenedScene; hasRecoveredEdits: boolean; lock: LockClaim }
   | { status: "notFound" }
   | { status: "newer" }
@@ -96,8 +102,10 @@ const claimForOpening = async (sceneId: string): Promise<LockClaim> => {
  * claims its editing lock, and reports how that went. A tab that gets the lock opens the scene for
  * editing, with this browser's unsaved edits to it if they're still current (`hasRecoveredEdits`:
  * they're saved right away). One that doesn't opens the cloud copy read-only (`readOnlyReason`).
- * The editor shows the viewport only once this is `ready`, so the managers never build whatever
- * scene the store held before.
+ * Before the scene loads, the imported models and textures it uses that this browser doesn't have
+ * are downloaded (`downloading`); if some can't be, the editor asks whether to try again or open the
+ * scene without them (`assetsMissing`). The editor shows the viewport only once this is `ready`, so
+ * the managers never build whatever scene the store held before.
  */
 export function useOpenScene(sceneId: string): OpenSceneState {
   const [state, setState] = useState<OpenSceneState>({ status: "loading" });
@@ -106,6 +114,8 @@ export function useOpenScene(sceneId: string): OpenSceneState {
     // Ignore a response for a scene that was left before it arrived.
     let active = true;
     setState({ status: "loading" });
+    // Assets missing later on (after an undo, or another tab's import) are downloaded for this scene.
+    setSceneForAssetDownloads(sceneId);
 
     void (async () => {
       let toShow: SceneToShow;
@@ -131,6 +141,40 @@ export function useOpenScene(sceneId: string): OpenSceneState {
         return;
       }
 
+      // The viewport builds the scene from this browser's storage: fetch what it lacks first.
+      const refs = collectAssetRefs(toShow.content?.entities);
+      const files = refs.filter((ref) => isAssetHash(ref.id)).length;
+      const download = () =>
+        downloadSceneAssets(sceneId, refs, (progress) => {
+          if (active) {
+            setState({ status: "downloading", progress });
+          }
+        });
+      let missing = await download();
+
+      while (missing.length > 0 && active) {
+        const choice = await new Promise<"retry" | "openAnyway">((resolve) => {
+          setState({
+            status: "assetsMissing",
+            missing: missing.length,
+            files,
+            retry: () => resolve("retry"),
+            openAnyway: () => resolve("openAnyway"),
+          });
+        });
+
+        if (choice === "openAnyway") {
+          // The objects stay empty; saving keeps their references, so nothing is lost.
+          break;
+        }
+
+        missing = await download();
+      }
+
+      if (!active) {
+        return;
+      }
+
       const store = useEditorStore.getState();
       store.loadScene(toShow.content);
       store.setReadOnly(lock.held ? null : "openElsewhere");
@@ -139,6 +183,7 @@ export function useOpenScene(sceneId: string): OpenSceneState {
 
     return () => {
       active = false;
+      setSceneForAssetDownloads(null);
     };
   }, [sceneId]);
 

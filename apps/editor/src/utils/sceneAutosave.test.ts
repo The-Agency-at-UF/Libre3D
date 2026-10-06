@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 
 import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
 import { ApiAuthError } from "./apiFetch";
+import { AssetTransferError, AssetUnavailableError } from "./assetTransfers";
 import { SceneAutosaver, type SaveStatus } from "./sceneAutosave";
 import { SceneApiError, saveScene } from "./sceneLibrary";
 
@@ -9,6 +10,9 @@ vi.mock("./apiFetch", () => ({
   apiFetch: vi.fn(),
   ApiAuthError: class ApiAuthError extends Error {},
 }));
+
+vi.mock("./modelAssetStore", () => ({ loadModelAsset: vi.fn() }));
+vi.mock("./textureAssetStore", () => ({ loadTextureAsset: vi.fn() }));
 
 vi.mock("./sceneLibrary", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./sceneLibrary")>()),
@@ -25,7 +29,7 @@ let onSaved: Mock<(revision: number, hasPendingEdits: boolean) => void>;
 
 const lastStatus = () => statuses.at(-1)?.kind;
 
-const createAutosaver = () =>
+const createAutosaver = (options: Partial<ConstructorParameters<typeof SceneAutosaver>[0]> = {}) =>
   new SceneAutosaver({
     sceneId: "scene-1",
     readRevision: () => revision,
@@ -36,6 +40,7 @@ const createAutosaver = () =>
       revision = savedRevision;
       onSaved(savedRevision, hasPendingEdits);
     },
+    ...options,
   });
 
 /** A save the test resolves or rejects when it chooses. */
@@ -243,6 +248,174 @@ describe("failures", () => {
     autosaver.markChanged();
     await vi.advanceTimersByTimeAsync(2_000);
     expect(saveSceneMock).toHaveBeenCalledTimes(2);
+    expect(lastStatus()).toBe("saved");
+    autosaver.dispose();
+  });
+});
+
+describe("imported assets", () => {
+  it("uploads a document's assets first and saves once they land; edits made meanwhile go out after", async () => {
+    let finishUploads: () => void = () => undefined;
+    const prepareSave = vi
+      .fn<(document: unknown) => Promise<void>>()
+      .mockImplementationOnce(() => new Promise<void>((resolve) => (finishUploads = resolve)))
+      .mockResolvedValue(undefined);
+    saveSceneMock.mockImplementation(async () => ({ revision: revision + 1, updatedAt: "t" }));
+    const autosaver = createAutosaver({ prepareSave });
+
+    autosaver.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(prepareSave).toHaveBeenCalledWith({ version: 1 }, expect.any(Function));
+    expect(saveSceneMock).not.toHaveBeenCalled();
+    expect(autosaver.hasUnsavedWork).toBe(true);
+
+    documentVersion = 2;
+    autosaver.markChanged();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(saveSceneMock).not.toHaveBeenCalled();
+
+    finishUploads();
+    await vi.advanceTimersByTimeAsync(2_000);
+    // First the document whose assets were uploaded, not the newer one; then the newer one, after
+    // its own uploads.
+    expect(saveSceneMock.mock.calls).toEqual([
+      ["scene-1", { version: 1 }, 1],
+      ["scene-1", { version: 2 }, 2],
+    ]);
+    expect(prepareSave).toHaveBeenLastCalledWith({ version: 2 }, expect.any(Function));
+    expect(lastStatus()).toBe("saved");
+    autosaver.dispose();
+  });
+
+  it("waits for another autosaver's save of the same scene, then builds on its revision", async () => {
+    // React StrictMode's remount, or a new edit session after getting the lock back: the old
+    // autosaver's last save (uploads first, so seconds long) is still out when the new one saves.
+    let finishUploads: () => void = () => undefined;
+    saveSceneMock.mockImplementation(async () => ({ revision: revision + 1, updatedAt: "t" }));
+    const first = createAutosaver({ prepareSave: () => new Promise<void>((resolve) => (finishUploads = resolve)) });
+    first.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+    void first.saveNow();
+    first.dispose();
+
+    const second = createAutosaver();
+    documentVersion = 2;
+    second.markChanged();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(saveSceneMock).not.toHaveBeenCalled();
+
+    finishUploads();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(saveSceneMock.mock.calls).toEqual([
+      ["scene-1", { version: 1 }, 1],
+      ["scene-1", { version: 2 }, 2],
+    ]);
+    expect(lastStatus()).toBe("saved");
+    second.dispose();
+  });
+
+  it("doesn't wait for a save of another scene", async () => {
+    succeedWith(2);
+    succeedWith(5);
+    const slow = createAutosaver({ sceneId: "scene-2", prepareSave: () => new Promise<void>(() => undefined) });
+    slow.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    const autosaver = createAutosaver();
+    autosaver.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(saveSceneMock).toHaveBeenCalledWith("scene-1", { version: 1 }, 1);
+    slow.dispose();
+    autosaver.dispose();
+  });
+
+  it("shows upload progress", async () => {
+    succeedWith(2);
+    const autosaver = createAutosaver({
+      prepareSave: async (_document, report) => {
+        report({ loaded: 0, total: 10 });
+        report({ loaded: 10, total: 10 });
+      },
+    });
+
+    autosaver.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(statuses).toContainEqual({ kind: "uploading", loaded: 0, total: 10 });
+    expect(statuses).toContainEqual({ kind: "uploading", loaded: 10, total: 10 });
+    expect(lastStatus()).toBe("saved");
+    autosaver.dispose();
+  });
+
+  it("stops like a refused save when the uploads request is refused for the lock (423)", async () => {
+    const autosaver = createAutosaver({
+      prepareSave: () => Promise.reject(new SceneApiError(423, "This scene is open somewhere else.")),
+    });
+
+    autosaver.markChanged();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(lastStatus()).toBe("openElsewhere");
+    expect(saveSceneMock).not.toHaveBeenCalled();
+    autosaver.dispose();
+  });
+
+  it("retries a failed upload with backoff", async () => {
+    succeedWith(2);
+    const prepareSave = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new AssetTransferError(0, "interrupted"))
+      .mockResolvedValue(undefined);
+    const autosaver = createAutosaver({ prepareSave });
+
+    autosaver.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(statuses.at(-1)).toEqual({ kind: "error", message: "Couldn't save", willRetry: true });
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(saveSceneMock).toHaveBeenCalledOnce();
+    expect(lastStatus()).toBe("saved");
+    autosaver.dispose();
+  });
+
+  it("reports the assets a save was refused for (422) and saves again", async () => {
+    saveSceneMock.mockRejectedValueOnce(new SceneApiError(422, "not uploaded", { missingAssets: ["a".repeat(64)] }));
+    succeedWith(2);
+    const onMissingAssets = vi.fn();
+    const prepareSave = vi.fn(async () => undefined);
+    const autosaver = createAutosaver({ prepareSave, onMissingAssets });
+
+    autosaver.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(onMissingAssets).toHaveBeenCalledWith(["a".repeat(64)]);
+    expect(lastStatus()).toBe("saving");
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(prepareSave).toHaveBeenCalledTimes(2);
+    expect(saveSceneMock).toHaveBeenCalledTimes(2);
+    expect(lastStatus()).toBe("saved");
+    autosaver.dispose();
+  });
+
+  it.each([
+    ["an asset missing everywhere", new AssetUnavailableError(["a".repeat(64)]), "An imported file is missing, so the scene can't be saved"],
+    ["a local copy that doesn't match its hash (400)", new AssetTransferError(400, "BadDigest"), "An imported file is damaged in this browser"],
+  ])("doesn't retry %s, but tries again after the next edit", async (_label, error, message) => {
+    succeedWith(2);
+    const prepareSave = vi.fn<() => Promise<void>>().mockRejectedValueOnce(error).mockResolvedValue(undefined);
+    const autosaver = createAutosaver({ prepareSave });
+
+    autosaver.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(statuses.at(-1)).toEqual({ kind: "error", message, willRetry: false });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(prepareSave).toHaveBeenCalledOnce();
+
+    autosaver.markChanged();
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(lastStatus()).toBe("saved");
     autosaver.dispose();
   });

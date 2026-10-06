@@ -36,15 +36,17 @@ Runs a single test file.
 | `utils/authSession.ts` | `sanitizeReturnTo` keeps sign-in redirects same-site (`//evil`, `/evil`, the callback); the PKCE redirect (S256 challenge of the stored verifier); code redemption (state check, Cognito errors, once under StrictMode); token refresh shared between callers, signing out only on a rejected refresh; sign-out clearing the session and unsaved scene edits |
 | `utils/navigation.ts` | `getPostSignInPath` keeps a deep link through sign-in and sends anything else to the gallery; `landingPathFor`; `navigate` / `subscribeToLocation` |
 | `utils/apiFetch.ts`, `utils/verifyAuth.ts` | Bearer token on `/api/*` only, `ApiAuthError` when signed out or rejected; the server takes the user ID from the verified token's `sub`, 401s bad tokens, fails closed (503) without config, and caches one verifier per pool/client |
-| `utils/awsSceneHandler.ts` | Every `/api/scenes` route against in-memory DynamoDB/S3 (`testing/fakeAws.ts`): validation, revisions, 409 on a stale save, one document object per scene, delete sweeping its prefix, and one user never reaching another's scene. The editing lock: claiming a free, own, or lapsed lock (60 s lease), 423 while another session holds it, take-over, release only by the holder, a save refused (423) unless its session holds the lock and renewing the lease, 409 for a save from a tab older than the lock |
+| `utils/awsSceneHandler.ts` | Every `/api/scenes` route against in-memory DynamoDB/S3 (`testing/fakeAws.ts`): validation, revisions, 409 on a stale save, one document object per scene, delete sweeping its prefix, and one user never reaching another's scene. The editing lock: claiming a free, own, or lapsed lock (60 s lease), 423 while another session holds it, take-over, release only by the holder, a save refused (423) unless its session holds the lock and renewing the lease, 409 for a save from a tab older than the lock. Imported assets: uploads signed only for the lock holder and only for hashes S3 lacks (size, type, and checksum as signed headers; an object not matching its address counts as missing), malformed requests and files over 100 MB refused, downloads limited to the scene's recorded `assetHashes`, a save naming a missing asset refused (422) and checked only for new assets, assets kept when a scene is deleted |
 | `utils/sceneDocument.ts` | The document round-trips through JSON, never shares vectors with the store, refuses newer schema versions, rejects malformed documents |
-| `utils/sceneAutosave.ts` | The 2 s debounce and 10 s cap, one save in flight, backoff retries, stopping on conflict/deletion/lost session/lost lock (423), offline waiting, `flush`, `dispose` (fake timers) |
+| `utils/sceneAutosave.ts` | The 2 s debounce and 10 s cap, one save in flight (also across two autosavers of one scene), backoff retries, stopping on conflict/deletion/lost session/lost lock (423), offline waiting, `flush`, `dispose`; saving only after the document's uploads land, upload progress, a refused uploads request, retrying a failed upload, re-uploading after a 422, not retrying a missing or damaged asset (fake timers) |
+| `utils/sceneAssets.ts` | SHA-256 test vectors, the base64 form S3 takes, telling hashes from older IDs, finding a scene's assets in malformed input |
+| `utils/assetTransfers.ts` | `AssetUploader`: only unconfirmed hashes, once; batches of 100; at most 3 at once; progress; retrying only what failed; an asset missing everywhere. `AssetDownloader`: only what's missing, hash-checked, unavailable or failed ones reported, one download per hash for concurrent callers, progress |
 | `utils/sceneLock.ts` | Renewing every 20 s while held and retrying every 10 s while held elsewhere, new revisions reported, failed requests changing nothing, stopping on a deleted scene or lost session, checking when the tab is shown again or restored from the back/forward cache, take-over (after a claim still out), a refused save counting as lost; releasing on `pagehide` only when nothing is unsaved; `releaseWhenSaved` waiting for the last saves (even one queued behind another), called off by `cancelRelease` (fake timers) |
 | `utils/editorSession.ts` | One session ID per tab, kept across a reload through sessionStorage but never left there for a duplicated tab to copy, back/forward cache, storage that throws |
 | `utils/sceneCache.ts`, `utils/legacyScene.ts`, `utils/sceneLibrary.ts` | Unsaved edits per user and scene, another user's never loaded; `resolveSceneToOpen`; the pre-cloud scene set aside once; the client's requests (saves carry the session ID; claiming, taking over, and releasing the lock) and `SceneApiError`; the gallery's list waiting for a save in flight |
 | `store/useEditorStore.ts` | The persist v17 migration (old scene set aside, preferences kept, older blobs run through every migration, written back on load); `loadScene` (defaults deep-merged, personal camera kept, undo history cleared); a scene coming back unchanged from store → document → JSON → store; read-only mode (every content-changing action dropped whole, selection/camera/preferences still allowed, `loadScene` still works, undo history cleared, not persisted) |
 
-**What's not covered**: React components and hooks (including `useSceneAutosave`'s local-copy writes, `useOpenScene`'s loading, and `useSceneLock`'s switching between editing and viewing; see the two-tab checklist below), `SceneManager`/`CameraManager`/`ObjectManager`, most store actions, export/publish, and anything that needs a DOM or WebGL. Keep using the checklists below for those.
+**What's not covered**: React components and hooks (including `useSceneAutosave`'s local-copy writes, `useOpenScene`'s loading and asset downloads, and `useSceneLock`'s switching between editing and viewing; see the two-tab and imported-assets checklists below), the browser transfers themselves (`putAsset`'s XHR, `fetchAssetBlob`) and OPFS/IndexedDB, `SceneManager`/`CameraManager`/`ObjectManager`, most store actions, export/publish, and anything that needs a DOM or WebGL. Keep using the checklists below for those.
 
 **Tests marked "expected fail"** in the output are intentional. They use `it.fails` to pin down a known limitation (a TRS transform can't represent shear, so a rotated child under a non-uniformly scaled parent drifts slightly). If one of them starts *failing*, the limitation has been fixed — remove the `.fails`.
 
@@ -173,6 +175,24 @@ Open the same scene in two tabs of one browser (or two browsers signed in as the
 - [ ] **A forced save from the view-only tab is refused** (from the console: `(await import("/src/utils/sceneLibrary.ts")).saveScene(id, doc, revision)` rejects with status 423)
 
 **Time**: 5 minutes
+
+---
+
+### Imported Assets (Cloud)
+
+Use a GLB with textures. "Clean storage" means another browser or profile, or deleting the scene's assets in the console: `(await import("/src/utils/modelAssetStore.ts")).deleteModelAsset(id)` (and `textureAssetStore`'s `deleteTextureAsset`).
+
+**In addition to smoke test**:
+
+- [ ] **Import uploads before saving** (the header goes Uploading… N% → Saved; the objects appear under `users/<sub>/assets/<hash>` in S3)
+- [ ] **Opens elsewhere** (clean storage: "Downloading the scene's models and textures…", then the model and textures appear)
+- [ ] **Nothing uploads twice** (the same GLB again, here or in another scene: no `assets/uploads` request, or one answered with no uploads)
+- [ ] **A failed download offers a way out** (block `amazonaws.com` in DevTools → Network: Try again works once unblocked; Open without them shows the scene with the model empty, and saving keeps it)
+- [ ] **View only never uploads** (second tab: no `assets/uploads` requests while it follows the first tab's import; a forced `requestAssetUploads` from the console is refused with 423)
+- [ ] **Too large is refused at import** (a .glb over 100 MB)
+- [ ] **Offline during an upload** (the header says offline; the save resumes when back online)
+
+**Time**: 10 minutes
 
 ---
 

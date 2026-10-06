@@ -32,6 +32,8 @@ The editor is one page of several. `App.tsx` hand-routes between them (no router
 
 Scenes live in the cloud, one per row of the signed-in user's gallery. Opening `/edit/:sceneId` loads that scene into the store (`useOpenScene` → `loadScene`, which also clears undo history), and from then on edits are autosaved (`useSceneAutosave`). See [§5](#5-the-store) for what's saved where.
 
+Imported models and textures go to the cloud too, but not inside the scene document: an entity's `assetId` (and an image layer's `textureAssetId`) is the SHA-256 of the asset's bytes (`utils/sceneAssets.ts`), which live in this browser's storage (OPFS, or IndexedDB) and in S3 at `users/<sub>/assets/<hash>`. Each autosave first uploads the assets its document uses that the cloud doesn't have yet, straight to S3 with presigned URLs, and the server refuses a save that names an asset it doesn't hold (`utils/assetTransfers.ts`). Opening a scene downloads what this browser lacks before the viewport builds it. So this browser's storage is a cache of the cloud copies, and a scene opens complete on any device.
+
 A scene is edited in one place at a time. Opening it claims an editing lock for this tab (a 60 s lease on the scene's row, renewed every 20 s and by every save; `useSceneLock` / `utils/sceneLock.ts`). A second tab or device opens it **view only**: the store refuses edits (`readOnlyReason`), nothing autosaves, a banner offers **Take over editing**, and the view follows the other tab's saves. The server enforces it too: a save from a session that doesn't hold the lock is refused (423). When the lock comes back (the other tab closed, or Take over), the scene is reloaded from the cloud before editing resumes.
 
 ---
@@ -205,7 +207,7 @@ addEntity("cube");
 | **The scene** | `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId` (`selectSceneContent`) | autosave, to the cloud per scene (`/api/scenes/:id`) | a versioned scene document, `utils/sceneDocument.ts` |
 | **Editor preferences** | transform tool and space, projection, HUD, zoom | `persist`, to this browser's localStorage | persist's own `version` + `migrate` |
 
-A new field on an entity is saved automatically (it's part of `entities`). A new top-level piece of the scene (the animation timeline, say) goes into `SceneContent`, `selectSceneContent`, and `loadScene`, and into the document as its own section. Selection, preview state, and undo history are neither: they last only while the editor is open. Imported model/texture bytes aren't in the document at all; they stay in this browser (OPFS) and entities reference them by ID.
+A new field on an entity is saved automatically (it's part of `entities`). A new top-level piece of the scene (the animation timeline, say) goes into `SceneContent`, `selectSceneContent`, and `loadScene`, and into the document as its own section. Selection, preview state, and undo history are neither: they last only while the editor is open. Imported model/texture bytes aren't in the document at all: entities reference them by content hash, and they're uploaded before the save that first uses them (see [§1](#1-the-editor-region-by-region)).
 
 While a scene has unsaved edits, a copy stays in localStorage (`utils/sceneCache.ts`, tagged with the user), so a closed tab or a lost connection doesn't lose them; reopening the scene restores and saves them. A view-only tab neither uses nor clears that copy: it may be another tab's edits, still being made.
 

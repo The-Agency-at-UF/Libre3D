@@ -8,15 +8,19 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
 import { createPublishSession, getPublishedScene, resolveRequestBaseUrl } from "./src/utils/awsPublishHandler";
-import { handleScenesRequest } from "./src/utils/awsSceneHandler";
+import { handleScenesRequest, type SceneSubresource } from "./src/utils/awsSceneHandler";
 import { verifyAuth } from "./src/utils/verifyAuth";
 
 const editorConfigDir = fileURLToPath(new URL(".", import.meta.url));
 const repoRootDir = path.resolve(editorConfigDir, "../..");
 const threeModulePath = path.resolve(editorConfigDir, "node_modules/three");
 
-// `/api/scenes`, `/api/scenes/:sceneId`, or `/api/scenes/:sceneId/lock`, ignoring any query string.
-const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*)(?:\/(lock))?)?\/?(?:\?.*)?$/;
+// `/api/scenes`, `/api/scenes/:sceneId`, or `/api/scenes/:sceneId/` followed by `lock`,
+// `assets/uploads`, or `assets/downloads`, ignoring any query string.
+const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*)(?:\/(lock|assets\/uploads|assets\/downloads))?)?\/?(?:\?.*)?$/;
+
+const readSubresource = (value: string | undefined): SceneSubresource | null =>
+  value === "lock" || value === "assets/uploads" || value === "assets/downloads" ? value : null;
 
 const readRequestBody = (req: NodeJS.ReadableStream): Promise<string> =>
   new Promise<string>((resolve, reject) => {
@@ -32,9 +36,10 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
   name: "libre3d-aws-publish-route",
   configureServer(server) {
     server.middlewares.use(async (req, res, next) => {
-      // The dev copy of api/scenes/index.ts, api/scenes/[sceneId]/index.ts, and
-      // api/scenes/[sceneId]/lock.ts: same handler, so the two can't drift. Everything
-      // route-specific lives in handleScenesRequest.
+      // The dev copy of api/scenes/index.ts, api/scenes/[sceneId]/index.ts,
+      // api/scenes/[sceneId]/lock.ts, and api/scenes/[sceneId]/assets/[action].ts: same
+      // handler, so the two can't drift. Everything route-specific lives in
+      // handleScenesRequest.
       const scenesMatch = req.url?.match(SCENES_ROUTE_PATTERN);
 
       if (scenesMatch) {
@@ -46,7 +51,7 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
           {
             method,
             sceneId: rawSceneId === undefined ? null : decodeURIComponent(rawSceneId),
-            subresource: subresource === "lock" ? "lock" : null,
+            subresource: readSubresource(subresource),
             headers: req.headers,
             body,
           },

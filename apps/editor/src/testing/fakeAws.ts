@@ -7,6 +7,10 @@
  * AND / OR with parentheses; `SET a = :b, …` and `REMOVE a, …`) rather than matching on them, so a
  * wrong condition fails a test instead of passing a fake.
  * Query and ListObjectsV2 return small pages so the handlers' pagination loops run.
+ *
+ * `FakePresigner` stands in for `getSignedUrl` (`@aws-sdk/s3-request-presigner`): it records what
+ * each URL was signed for, so tests can check the key, size, checksum, and signing options without
+ * real credentials. A test plays the browser's presigned PUT with `FakeS3.upload`.
  */
 import {
   ConditionalCheckFailedException,
@@ -21,8 +25,10 @@ import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   NoSuchKey,
+  NotFound,
   PutObjectCommand,
 } from "@aws-sdk/client-s3";
 
@@ -308,14 +314,35 @@ export class FakeDynamoDB {
   }
 }
 
-/** One bucket: object keys to bodies. */
+/** What S3 keeps about an object besides its body. */
+export interface FakeObjectInfo {
+  contentType?: string;
+  /** Base64 SHA-256 the object was uploaded with (`x-amz-checksum-sha256`). */
+  checksumSha256?: string;
+  /** Overrides the body's length, so a test can stand in for a huge file without making one. */
+  contentLength?: number;
+}
+
+/** One bucket: object keys to bodies (and, in `info`, what HeadObject reports about them). */
 export class FakeS3 {
   readonly objects = new Map<string, string>();
+  readonly info = new Map<string, FakeObjectInfo>();
   /** Thrown by the next `send` of this command type, once. */
   failNext: { command: new (...args: never[]) => unknown; error: Error } | null = null;
 
   keysUnder(prefix: string): string[] {
     return [...this.objects.keys()].filter((key) => key.startsWith(prefix)).sort();
+  }
+
+  /** Stores an object the way a browser's presigned PUT would, bypassing the API. */
+  upload(key: string, body: string, info: FakeObjectInfo = {}): void {
+    this.objects.set(key, body);
+    this.info.set(key, info);
+  }
+
+  private remove(key: string): void {
+    this.objects.delete(key);
+    this.info.delete(key);
   }
 
   async send(command: unknown): Promise<unknown> {
@@ -326,7 +353,8 @@ export class FakeS3 {
     }
 
     if (command instanceof PutObjectCommand) {
-      this.objects.set(command.input.Key!, String(command.input.Body));
+      const { Key, Body, ContentType, ChecksumSHA256 } = command.input;
+      this.upload(Key!, String(Body), { contentType: ContentType, checksumSha256: ChecksumSHA256 });
       return {};
     }
 
@@ -340,8 +368,26 @@ export class FakeS3 {
       return { Body: { transformToString: async () => body } };
     }
 
+    if (command instanceof HeadObjectCommand) {
+      const body = this.objects.get(command.input.Key!);
+
+      if (body === undefined) {
+        // What S3 answers when the caller may list the bucket; without ListBucket it would be 403.
+        throw new NotFound({ message: "Not Found", $metadata: { httpStatusCode: 404 } });
+      }
+
+      const info = this.info.get(command.input.Key!) ?? {};
+
+      return {
+        ContentLength: info.contentLength ?? Buffer.byteLength(body, "utf8"),
+        ContentType: info.contentType,
+        // Like S3, the stored checksum is only reported when asked for.
+        ChecksumSHA256: command.input.ChecksumMode === "ENABLED" ? info.checksumSha256 : undefined,
+      };
+    }
+
     if (command instanceof DeleteObjectCommand) {
-      this.objects.delete(command.input.Key!);
+      this.remove(command.input.Key!);
       return {};
     }
 
@@ -359,10 +405,67 @@ export class FakeS3 {
     }
 
     if (command instanceof DeleteObjectsCommand) {
-      command.input.Delete?.Objects?.forEach((object) => this.objects.delete(object.Key!));
+      command.input.Delete?.Objects?.forEach((object) => this.remove(object.Key!));
       return {};
     }
 
     throw new Error(`Fake S3: unsupported command ${(command as object).constructor.name}`);
+  }
+}
+
+/** One URL handed out by `FakePresigner.getSignedUrl`. */
+export interface FakeSignedUrl {
+  url: string;
+  /** `PutObject` or `GetObject`. */
+  operation: string;
+  /** The command's input: Bucket, Key, ContentLength, ChecksumSHA256, … */
+  input: Record<string, unknown>;
+  expiresIn?: number;
+  signableHeaders?: string[];
+  unhoistableHeaders?: string[];
+}
+
+interface PresignOptions {
+  expiresIn?: number;
+  signableHeaders?: Set<string>;
+  unhoistableHeaders?: Set<string>;
+}
+
+/** Records every presigned URL instead of signing it. Each URL is unique and maps back to its record. */
+export class FakePresigner {
+  readonly signed: FakeSignedUrl[] = [];
+
+  readonly getSignedUrl = async (_client: unknown, command: unknown, options: PresignOptions = {}): Promise<string> => {
+    const operation =
+      command instanceof PutObjectCommand ? "PutObject" : command instanceof GetObjectCommand ? "GetObject" : null;
+
+    if (!operation) {
+      throw new Error(`Fake presigner: unsupported command ${(command as object).constructor.name}`);
+    }
+
+    const input = { ...(command as PutObjectCommand | GetObjectCommand).input } as Record<string, unknown>;
+    const url = `https://${String(input.Bucket)}.s3.test/${String(input.Key)}?op=${operation}&n=${this.signed.length}`;
+
+    this.signed.push({
+      url,
+      operation,
+      input,
+      expiresIn: options.expiresIn,
+      signableHeaders: options.signableHeaders ? [...options.signableHeaders] : undefined,
+      unhoistableHeaders: options.unhoistableHeaders ? [...options.unhoistableHeaders] : undefined,
+    });
+
+    return url;
+  };
+
+  /** The record behind a URL a handler returned. */
+  find(url: string): FakeSignedUrl {
+    const record = this.signed.find((entry) => entry.url === url);
+
+    if (!record) {
+      throw new Error(`Fake presigner: ${url} wasn't signed here`);
+    }
+
+    return record;
   }
 }

@@ -15,6 +15,10 @@
  *   POST   /api/scenes/:id/lock   claim or renew the editing lock `{ sessionId, takeOver? }`; 423 when
  *                                  another session holds it
  *   DELETE /api/scenes/:id/lock   release it `{ sessionId }` (a no-op unless that session holds it)
+ *   POST   /api/scenes/:id/assets/uploads    `{ sessionId, assets: [{ hash, size, kind }] }`: presigned
+ *                                            PUTs for the assets the cloud doesn't have yet; 423
+ *                                            unless that editor session holds the lock
+ *   POST   /api/scenes/:id/assets/downloads  `{ hashes }`: presigned GETs for the scene's assets
  *
  * The lock is a lease on the row (`lockHolder`, `lockUserId`, `lockExpiresAt`): one editor session
  * (a browser tab) holds it for 60 s at a time and renews it while open; saves renew it too. Only the
@@ -26,9 +30,17 @@
  * middleware are thin adapters around `handleScenesRequest`, so routing, validation, and
  * responses live only here and the two environments cannot drift.
  *
+ * Imported models and textures are content-addressed (sceneAssets.ts): `users/<sub>/assets/<hash>`,
+ * shared by every scene of that user that uses them, so deleting a scene leaves them. The browser
+ * uploads and downloads them directly with presigned URLs; each PUT is signed with the hash, so S3
+ * refuses bytes that don't match their address. A save may only name assets the cloud has (422
+ * otherwise), so a saved scene always opens complete elsewhere. The row lists the assets its
+ * document uses (`assetHashes`): later saves check only new ones, and downloads are limited to them.
+ *
  * Ownership is by construction: every row is keyed by the verified token's `sub` (the user-scenes
  * partition key) and every object lives under `users/<sub>/`, so there is no way to name someone
- * else's scene. The document itself is opaque here; the editor owns its shape (sceneDocument.ts).
+ * else's scene. The document itself is opaque here, apart from finding its assets
+ * (`collectAssetHashes`); the editor owns its shape (sceneDocument.ts).
  */
 
 import { randomUUID } from "node:crypto";
@@ -48,22 +60,29 @@ import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
+  HeadObjectCommand,
   ListObjectsV2Command,
   NoSuchKey,
+  NotFound,
   PutObjectCommand,
   type S3Client,
 } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 // `.js` is required: Vercel runs server modules under Node's ES module loader (see awsConfig.ts).
 import { createDynamoClient, createS3Client, readAwsAccess, readRequiredEnv, type ServerEnv } from "./awsConfig.js";
+import { MAX_ASSET_BYTES, assetHashToBase64, collectAssetHashes, isAssetHash, type AssetKind } from "./sceneAssets.js";
 import { verifyAuth } from "./verifyAuth.js";
+
+/** What follows `/api/scenes/:sceneId/`, if anything. */
+export type SceneSubresource = "lock" | "assets/uploads" | "assets/downloads";
 
 export interface SceneApiRequest {
   method: string;
   /** The `:sceneId` path segment, or null for the collection (`/api/scenes`). */
   sceneId: string | null;
-  /** `lock` for `/api/scenes/:sceneId/lock`; absent for the scene itself. */
-  subresource?: "lock" | null;
+  /** `lock` for `/api/scenes/:sceneId/lock`, and so on; absent for the scene itself. */
+  subresource?: SceneSubresource | null;
   headers: IncomingHttpHeaders;
   /** Parsed JSON (Vercel) or the raw string (Vite middleware); either is accepted. */
   body: unknown;
@@ -100,6 +119,13 @@ const SESSION_ID_PATTERN = SCENE_ID_PATTERN;
 // couldn't release frees the scene within a minute.
 const LOCK_LEASE_MS = 60_000;
 const LOCKED_MESSAGE = "This scene is open somewhere else.";
+// How long a presigned asset URL works. The editor asks for a new one if an upload waits longer.
+const ASSET_URL_TTL_SECONDS = 900;
+// Per uploads/downloads request; the editor asks in batches.
+const MAX_ASSETS_PER_REQUEST = 100;
+// Per scene. Each new one costs a HEAD on the save that adds it, and they're all listed on the row.
+const MAX_SCENE_ASSETS = 500;
+const ASSET_CONTENT_TYPES: Record<AssetKind, string> = { model: "model/gltf-binary", texture: "image/png" };
 
 const json = (status: number, body: unknown, headers?: Record<string, string>): SceneApiResponse => ({
   status,
@@ -200,6 +226,11 @@ const rowKey = (userId: string, sceneId: string): Record<string, AttributeValue>
   sceneId: { S: sceneId },
 });
 
+const assetKey = (userId: string, hash: string): string => `users/${userId}/assets/${hash}`;
+
+/** The assets the row's document uses, as recorded by the save that wrote it. */
+const readAssetHashes = (item: Record<string, AttributeValue> | undefined): Set<string> => new Set(item?.assetHashes?.SS ?? []);
+
 // 423 Locked: another editor session holds the scene. `heldByYou` is false only once scenes can be
 // shared; today every row belongs to one user, so it's always one of their own tabs or devices.
 const lockedResponse = (item: Record<string, AttributeValue>, userId: string): SceneApiResponse =>
@@ -234,6 +265,64 @@ const deleteObjectQuietly = async (config: SceneConfig, key: string): Promise<vo
     // Only costs storage: nothing points at this object any more.
     console.warn(`Could not delete unreferenced scene object ${key}:`, error);
   }
+};
+
+// Whether the cloud has this asset intact: uploaded through a URL signed with its hash (so S3
+// checked the bytes against it) and within the size cap. Anything else at the key counts as
+// missing, so the next upload replaces it.
+const isAssetStored = async (config: SceneConfig, userId: string, hash: string): Promise<boolean> => {
+  try {
+    const head = await config.s3.send(
+      new HeadObjectCommand({ Bucket: config.bucketName, Key: assetKey(userId, hash), ChecksumMode: "ENABLED" }),
+    );
+
+    return head.ChecksumSHA256 === assetHashToBase64(hash) && (head.ContentLength ?? Infinity) <= MAX_ASSET_BYTES;
+  } catch (error) {
+    // A 404 needs the role's ListBucket; without it S3 answers 403, which throws here instead.
+    if (error instanceof NotFound) {
+      return false;
+    }
+
+    throw error;
+  }
+};
+
+const findMissingAssets = async (config: SceneConfig, userId: string, hashes: string[]): Promise<string[]> => {
+  const stored = await Promise.all(hashes.map((hash) => isAssetStored(config, userId, hash)));
+
+  return hashes.filter((_hash, index) => !stored[index]);
+};
+
+type AssetCheck = { ok: true; hashes: string[] } | { ok: false; response: SceneApiResponse };
+
+// A document may only name assets the cloud has, so the scene opens complete anywhere. Those the
+// row already lists were checked by an earlier save, so only new ones are looked up.
+const checkDocumentAssets = async (
+  config: SceneConfig,
+  userId: string,
+  document: unknown,
+  known: Set<string>,
+): Promise<AssetCheck> => {
+  const hashes = collectAssetHashes((document as { scene?: { entities?: unknown } }).scene?.entities);
+
+  if (hashes.length > MAX_SCENE_ASSETS) {
+    return { ok: false, response: errorResponse(413, "This scene has too many imported files to save.") };
+  }
+
+  const missing = await findMissingAssets(
+    config,
+    userId,
+    hashes.filter((hash) => !known.has(hash)),
+  );
+
+  if (missing.length > 0) {
+    return {
+      ok: false,
+      response: errorResponse(422, "Some of this scene's imported files haven't been uploaded yet.", { missingAssets: missing }),
+    };
+  }
+
+  return { ok: true, hashes };
 };
 
 // ---- Route handlers -------------------------------------------------------------------------
@@ -289,11 +378,21 @@ const createScene = async (
       return check.response;
     }
 
+    const assets = await checkDocumentAssets(config, userId, body.document, new Set());
+
+    if (!assets.ok) {
+      return assets.response;
+    }
+
     const documentKey = newDocumentKey(userId, sceneId);
     await putDocument(config, documentKey, check.serialized);
     item.revision = { N: "1" };
     item.documentKey = { S: documentKey };
     item.schemaVersion = { N: String(check.schemaVersion) };
+
+    if (assets.hashes.length > 0) {
+      item.assetHashes = { SS: assets.hashes };
+    }
   }
 
   await config.dynamo.send(
@@ -336,7 +435,8 @@ const getScene = async (config: SceneConfig, userId: string, sceneId: string): P
   }
 
   return json(200, {
-    scene: { ...toSummary(item), revision: Number(item.revision?.N ?? "0") },
+    // assetHashes: the editor never uploads these again.
+    scene: { ...toSummary(item), revision: Number(item.revision?.N ?? "0"), assetHashes: Array.from(readAssetHashes(item)) },
     document,
   });
 };
@@ -367,16 +467,52 @@ const saveScene = async (
     return check.response;
   }
 
+  // Read the row first: a tab without the lock is told so before anything is written or looked up,
+  // and the assets earlier saves already checked needn't be checked again.
+  const { Item: current } = await config.dynamo.send(
+    new GetItemCommand({ TableName: config.tableName, Key: rowKey(userId, sceneId), ConsistentRead: true }),
+  );
+
+  if (!current) {
+    return errorResponse(404, "This scene was deleted.");
+  }
+
+  if (current.lockHolder?.S !== sessionId) {
+    return lockedResponse(current, userId);
+  }
+
+  const assets = await checkDocumentAssets(config, userId, body.document, readAssetHashes(current));
+
+  if (!assets.ok) {
+    return assets.response;
+  }
+
   // Write the new document under a fresh key first, then move the row to it only if this session
-  // still holds the lock and nobody saved in between (`revision = baseRevision`). Whichever save
-  // loses deletes its own object, so the S3 document and the row can't disagree and neither a
-  // read-only tab nor a stale one can overwrite a newer save. The lease isn't checked here: a lapsed
-  // lock nobody else claimed is still this session's, and the save renews it.
+  // still holds the lock and nobody saved in between (`revision = baseRevision`); the read above
+  // could be stale by now. Whichever save loses deletes its own object, so the S3 document and the
+  // row can't disagree and neither a read-only tab nor a stale one can overwrite a newer save. The
+  // lease isn't checked here: a lapsed lock nobody else claimed is still this session's, and the
+  // save renews it.
   const documentKey = newDocumentKey(userId, sceneId);
   await putDocument(config, documentKey, check.serialized);
 
   const now = new Date().toISOString();
   const revision = baseRevision + 1;
+  const values: Record<string, AttributeValue> = {
+    ":revision": { N: String(revision) },
+    ":base": { N: String(baseRevision) },
+    ":now": { S: now },
+    ":key": { S: documentKey },
+    ":schema": { N: String(check.schemaVersion) },
+    ":session": { S: sessionId },
+    ":expires": { N: lockExpiry() },
+  };
+
+  // A string set can't be empty, so a scene without assets has none.
+  if (assets.hashes.length > 0) {
+    values[":assets"] = { SS: assets.hashes };
+  }
+
   let previousKey: string | undefined;
 
   try {
@@ -384,19 +520,12 @@ const saveScene = async (
       new UpdateItemCommand({
         TableName: config.tableName,
         Key: rowKey(userId, sceneId),
-        UpdateExpression:
-          "SET #revision = :revision, updatedAt = :now, documentKey = :key, schemaVersion = :schema, lockExpiresAt = :expires",
+        UpdateExpression: `SET #revision = :revision, updatedAt = :now, documentKey = :key, schemaVersion = :schema, lockExpiresAt = :expires${
+          assets.hashes.length > 0 ? ", assetHashes = :assets" : " REMOVE assetHashes"
+        }`,
         ConditionExpression: "attribute_exists(sceneId) AND lockHolder = :session AND #revision = :base",
         ExpressionAttributeNames: { "#revision": "revision" },
-        ExpressionAttributeValues: {
-          ":revision": { N: String(revision) },
-          ":base": { N: String(baseRevision) },
-          ":now": { S: now },
-          ":key": { S: documentKey },
-          ":schema": { N: String(check.schemaVersion) },
-          ":session": { S: sessionId },
-          ":expires": { N: lockExpiry() },
-        },
+        ExpressionAttributeValues: values,
         ReturnValues: "UPDATED_OLD",
         ReturnValuesOnConditionCheckFailure: "ALL_OLD",
       }),
@@ -590,13 +719,185 @@ const releaseLock = async (
   return json(200, { released: true });
 };
 
+interface AssetUpload {
+  hash: string;
+  size: number;
+  kind: AssetKind;
+}
+
+type AssetUploadsCheck = { ok: true; assets: AssetUpload[] } | { ok: false; response: SceneApiResponse };
+
+const readAssetUploads = (value: unknown): AssetUploadsCheck => {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_ASSETS_PER_REQUEST) {
+    return { ok: false, response: errorResponse(400, `assets must list 1 to ${MAX_ASSETS_PER_REQUEST} files.`) };
+  }
+
+  const assets = new Map<string, AssetUpload>();
+
+  for (const entry of value) {
+    const { hash, size, kind } = (typeof entry === "object" && entry !== null ? entry : {}) as Record<string, unknown>;
+
+    if (
+      !isAssetHash(hash) ||
+      (kind !== "model" && kind !== "texture") ||
+      typeof size !== "number" ||
+      !Number.isInteger(size) ||
+      size < 1
+    ) {
+      return { ok: false, response: errorResponse(400, "Each asset needs its SHA-256 hash, its size in bytes, and its kind.") };
+    }
+
+    if (size > MAX_ASSET_BYTES) {
+      return {
+        ok: false,
+        response: errorResponse(413, `Imported files can be up to ${MAX_ASSET_BYTES / (1024 * 1024)} MB.`, { hash }),
+      };
+    }
+
+    assets.set(hash, { hash, size, kind });
+  }
+
+  return { ok: true, assets: Array.from(assets.values()) };
+};
+
+const prepareUploads = async (
+  config: SceneConfig,
+  userId: string,
+  sceneId: string,
+  body: Record<string, unknown>,
+): Promise<SceneApiResponse> => {
+  const sessionId = readSessionId(body.sessionId);
+
+  if (!sessionId) {
+    return errorResponse(400, "sessionId must be this editor session's ID.");
+  }
+
+  const request = readAssetUploads(body.assets);
+
+  if (!request.ok) {
+    return request.response;
+  }
+
+  try {
+    // Only the editor session holding the lock adds to the scene, and uploading counts as editing:
+    // it renews the lease like a save does.
+    await config.dynamo.send(
+      new UpdateItemCommand({
+        TableName: config.tableName,
+        Key: rowKey(userId, sceneId),
+        UpdateExpression: "SET lockExpiresAt = :expires",
+        ConditionExpression: "attribute_exists(sceneId) AND lockHolder = :session",
+        ExpressionAttributeValues: { ":session": { S: sessionId }, ":expires": { N: lockExpiry() } },
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+      }),
+    );
+  } catch (error) {
+    if (!(error instanceof ConditionalCheckFailedException)) {
+      throw error;
+    }
+
+    return error.Item ? lockedResponse(error.Item, userId) : errorResponse(404, "Scene not found.");
+  }
+
+  const missing = new Set(
+    await findMissingAssets(
+      config,
+      userId,
+      request.assets.map((asset) => asset.hash),
+    ),
+  );
+  const uploads = await Promise.all(
+    request.assets
+      .filter((asset) => missing.has(asset.hash))
+      .map(async (asset) => {
+        // The browser sends these headers as they are; they're part of the signature.
+        const headers = {
+          "Content-Type": ASSET_CONTENT_TYPES[asset.kind],
+          "x-amz-checksum-sha256": assetHashToBase64(asset.hash),
+        };
+        const url = await getSignedUrl(
+          config.s3,
+          new PutObjectCommand({
+            Bucket: config.bucketName,
+            Key: assetKey(userId, asset.hash),
+            ContentType: headers["Content-Type"],
+            ContentLength: asset.size,
+            ChecksumSHA256: headers["x-amz-checksum-sha256"],
+          }),
+          {
+            expiresIn: ASSET_URL_TTL_SECONDS,
+            // Size, type, and checksum all signed as headers: S3 then refuses a body of another
+            // length (403) or other bytes (400 BadDigest). With the presigner's defaults the
+            // checksum moves into the query string, where a wrong body isn't caught the same way.
+            signableHeaders: new Set(["content-length", "content-type"]),
+            unhoistableHeaders: new Set(["x-amz-checksum-sha256"]),
+          },
+        );
+
+        return { hash: asset.hash, url, headers };
+      }),
+  );
+
+  return json(200, { uploads });
+};
+
+const prepareDownloads = async (
+  config: SceneConfig,
+  userId: string,
+  sceneId: string,
+  body: Record<string, unknown>,
+): Promise<SceneApiResponse> => {
+  const requested = body.hashes;
+
+  if (
+    !Array.isArray(requested) ||
+    requested.length === 0 ||
+    requested.length > MAX_ASSETS_PER_REQUEST ||
+    !requested.every(isAssetHash)
+  ) {
+    return errorResponse(400, `hashes must list 1 to ${MAX_ASSETS_PER_REQUEST} asset hashes.`);
+  }
+
+  const { Item: item } = await config.dynamo.send(
+    new GetItemCommand({ TableName: config.tableName, Key: rowKey(userId, sceneId), ConsistentRead: true }),
+  );
+
+  if (!item) {
+    return errorResponse(404, "Scene not found.");
+  }
+
+  // Only the assets the scene's saved document uses: everything it can show, and (once scenes can
+  // be shared) exactly what someone allowed to view it may read.
+  const available = readAssetHashes(item);
+  const hashes = Array.from(new Set(requested));
+  const downloads = await Promise.all(
+    hashes
+      .filter((hash) => available.has(hash))
+      .map(async (hash) => ({
+        hash,
+        url: await getSignedUrl(config.s3, new GetObjectCommand({ Bucket: config.bucketName, Key: assetKey(userId, hash) }), {
+          expiresIn: ASSET_URL_TTL_SECONDS,
+        }),
+      })),
+  );
+
+  return json(200, { downloads, unavailable: hashes.filter((hash) => !available.has(hash)) });
+};
+
 // ---- Dispatch -------------------------------------------------------------------------------
 
 export const handleScenesRequest = async (request: SceneApiRequest, env: ServerEnv): Promise<SceneApiResponse> => {
   const method = request.method.toUpperCase();
-  const isLock = request.subresource === "lock";
+  const subresource = request.subresource ?? null;
+  const isLock = subresource === "lock";
   const allowed =
-    request.sceneId === null ? ["GET", "POST"] : isLock ? ["POST", "DELETE"] : ["GET", "PUT", "PATCH", "DELETE"];
+    request.sceneId === null
+      ? ["GET", "POST"]
+      : isLock
+        ? ["POST", "DELETE"]
+        : subresource
+          ? ["POST"]
+          : ["GET", "PUT", "PATCH", "DELETE"];
 
   if (!allowed.includes(method)) {
     return json(405, { error: "Method not allowed" }, { Allow: allowed.join(", ") });
@@ -626,6 +927,14 @@ export const handleScenesRequest = async (request: SceneApiRequest, env: ServerE
         : await releaseLock(config, auth.userId, request.sceneId, body);
     }
 
+    if (subresource === "assets/uploads") {
+      return await prepareUploads(config, auth.userId, request.sceneId, body);
+    }
+
+    if (subresource === "assets/downloads") {
+      return await prepareDownloads(config, auth.userId, request.sceneId, body);
+    }
+
     switch (method) {
       case "GET":
         return await getScene(config, auth.userId, request.sceneId);
@@ -637,7 +946,7 @@ export const handleScenesRequest = async (request: SceneApiRequest, env: ServerE
         return await deleteScene(config, auth.userId, request.sceneId);
     }
   } catch (error) {
-    console.error(`Scene API error (${method} ${request.sceneId ?? "collection"}${isLock ? "/lock" : ""}):`, error);
+    console.error(`Scene API error (${method} ${request.sceneId ?? "collection"}${subresource ? `/${subresource}` : ""}):`, error);
     return errorResponse(500, "Something went wrong on the server. Try again.");
   }
 };
