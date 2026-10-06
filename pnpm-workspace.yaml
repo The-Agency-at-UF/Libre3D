@@ -1,6 +1,9 @@
 packages:
   - "apps/*"
+  - "infra"
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - aws-cdk@2.1144.0
 overrides:
   three: "^0.178.0"

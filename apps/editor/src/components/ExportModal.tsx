@@ -1,4 +1,4 @@
-import { useEditorStore } from "../store/useEditorStore";
+import { shareUrlFor } from "../utils/navigation";
 
 export interface ExportModalProps {
   isModalOpen: boolean;
@@ -7,7 +7,8 @@ export interface ExportModalProps {
   setActiveTab: (tab: "export" | "share") => void;
   isExporting: boolean;
   isPublishing: boolean;
-  shareUrl: string | null;
+  /** The scene's publish ID once it's published; its share link is shown and can be copied. */
+  publishId: string | null;
   isCopied: boolean;
   setIsCopied: (copied: boolean) => void;
   handleExportAsset: () => Promise<void>;
@@ -22,16 +23,16 @@ export function ExportModal({
   setActiveTab,
   isExporting,
   isPublishing,
-  shareUrl,
+  publishId,
   isCopied,
   setIsCopied,
   handleExportAsset,
   handleExportJson,
   handlePublishLink,
 }: ExportModalProps) {
-  const currentPublishId = useEditorStore((state) => state.currentPublishId);
-
   if (!isModalOpen) return null;
+
+  const shareUrl = publishId ? shareUrlFor(publishId) : null;
 
   return (
     <div className="editor-modal-backdrop" role="presentation" onClick={() => setIsModalOpen(false)}>
@@ -100,7 +101,7 @@ export function ExportModal({
                 onClick={handlePublishLink}
                 disabled={isPublishing}
               >
-                {isPublishing ? "Publishing..." : currentPublishId ? "Update Published Scene" : "Publish Scene to Cloud"}
+                {isPublishing ? "Publishing..." : publishId ? "Update Published Scene" : "Publish Scene to Cloud"}
               </button>
 
               {shareUrl ? (

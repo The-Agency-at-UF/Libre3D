@@ -1,4 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "rewrites": [{ "source": "/v/:sceneId", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/scenes", "destination": "/index.html" },
+    { "source": "/edit/:sceneId", "destination": "/index.html" },
+    { "source": "/v/:sceneId", "destination": "/index.html" },
+    { "source": "/auth/callback", "destination": "/index.html" }
+  ]
 }

@@ -11,8 +11,6 @@ export interface RightSidebarState {
   setActiveTab: (val: "export" | "share") => void;
   isCopied: boolean;
   setIsCopied: (val: boolean) => void;
-  shareUrl: string | null;
-  setShareUrl: (val: string | null) => void;
   activeSidebarTab: "objects" | "assets";
   setActiveSidebarTab: (val: "objects" | "assets") => void;
   searchQuery: string;
@@ -23,15 +21,12 @@ export interface RightSidebarState {
   toggleCollapsible: (section: string) => void;
 }
 
-export function useRightSidebarState(initialPublishId: string | null): RightSidebarState {
+export function useRightSidebarState(): RightSidebarState {
   const [isExporting, setIsExporting] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"export" | "share">("export");
   const [isCopied, setIsCopied] = useState(false);
-  const [shareUrl, setShareUrl] = useState<string | null>(
-    initialPublishId ? `http://${window.location.host}/v/${initialPublishId}` : null
-  );
   const [activeSidebarTab, setActiveSidebarTab] = useState<"objects" | "assets">("objects");
   const [searchQuery, setSearchQuery] = useState("");
   const [isShapeDropdownOpen, setIsShapeDropdownOpen] = useState(false);
@@ -57,8 +52,6 @@ export function useRightSidebarState(initialPublishId: string | null): RightSide
     setActiveTab,
     isCopied,
     setIsCopied,
-    shareUrl,
-    setShareUrl,
     activeSidebarTab,
     setActiveSidebarTab,
     searchQuery,

@@ -9,7 +9,7 @@ import {
   type ImageLayer,
   type ImageSlot,
 } from "../../store/useEditorStore";
-import { loadTextureAsset } from "../../utils/textureAssetStore";
+import { loadTextureForScene } from "../../utils/assetTransfers";
 import { PanelSection } from "../ui/PanelSection";
 import { Slider } from "../ui/Slider";
 import { Select } from "../ui/Select";
@@ -46,7 +46,7 @@ function ImageLayerRow({
   useEffect(() => {
     let objectUrl: string | null = null;
     let cancelled = false;
-    loadTextureAsset(layer.textureAssetId)
+    loadTextureForScene(layer.textureAssetId)
       .then((blob) => {
         if (cancelled || !blob) return;
         objectUrl = URL.createObjectURL(blob);
