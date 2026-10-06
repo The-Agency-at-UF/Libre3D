@@ -1,55 +1,30 @@
 import type * as THREE from "three";
 
+import { apiFetch } from "./apiFetch";
 import { createSceneExportBlob } from "./exportScene";
 
-export interface PublishSceneResponse {
-  sceneId: string;
-  assetKey: string;
+interface PublishSession {
+  publishId: string;
   uploadUrl: string;
-  shareUrl: string;
-}
-
-export interface PublishSceneResult {
-  sceneId: string;
-  shareUrl: string;
 }
 
 const PUBLISH_ENDPOINT = "/api/publish";
-const PUBLISH_TOKEN_HEADER = "x-publish-token";
 
-/**
- * Raised when the publish endpoint rejects the passphrase, so the caller can prompt for a new one
- * instead of showing the generic failure alert.
- */
-export class PublishAuthError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "PublishAuthError";
-  }
-}
-
-const readPublishSession = async (
-  currentPublishId: string | null,
-  publishToken: string,
-): Promise<PublishSceneResponse> => {
-  const response = await fetch(PUBLISH_ENDPOINT, {
+// Throws ApiAuthError when signed out or the session was rejected; the caller reports that.
+const readPublishSession = async (sceneId: string): Promise<PublishSession> => {
+  const response = await apiFetch(PUBLISH_ENDPOINT, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      [PUBLISH_TOKEN_HEADER]: publishToken,
     },
-    body: JSON.stringify({ currentPublishId }),
+    body: JSON.stringify({ sceneId }),
   });
 
-  if (response.status === 401) {
-    throw new PublishAuthError("The publish passphrase was missing or incorrect.");
-  }
-
   if (!response.ok) {
-    throw new Error("Failed to create a publish session.");
+    throw new Error(`Failed to create a publish session (${response.status}).`);
   }
 
-  return (await response.json()) as PublishSceneResponse;
+  return (await response.json()) as PublishSession;
 };
 
 const uploadSceneBlob = async (uploadUrl: string, blob: Blob): Promise<void> => {
@@ -66,22 +41,20 @@ const uploadSceneBlob = async (uploadUrl: string, blob: Blob): Promise<void> => 
   }
 };
 
-export const publishLiveScene = async (
-  scene: THREE.Scene,
-  currentPublishId: string | null,
-  publishToken: string,
-): Promise<PublishSceneResult | null> => {
+/**
+ * Publishes the live scene as the given scene's public copy and returns its publish ID (share link:
+ * `shareUrlFor(publishId)`). The server picks the ID the first time and keeps it, so publishing
+ * again updates the same link. Null when there's nothing to export.
+ */
+export const publishLiveScene = async (scene: THREE.Scene, sceneId: string): Promise<{ publishId: string } | null> => {
   const sceneBlob = await createSceneExportBlob(scene, "glb");
 
   if (!sceneBlob) {
     return null;
   }
 
-  const session = await readPublishSession(currentPublishId, publishToken);
+  const session = await readPublishSession(sceneId);
   await uploadSceneBlob(session.uploadUrl, sceneBlob);
 
-  return {
-    sceneId: session.sceneId,
-    shareUrl: session.shareUrl,
-  };
+  return { publishId: session.publishId };
 };

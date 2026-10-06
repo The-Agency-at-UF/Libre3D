@@ -55,6 +55,10 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
 
         if (key === "z") {
           event.preventDefault();
+          // View only: there's no history to step through (the store drops other edits itself).
+          if (useEditorStore.getState().readOnlyReason) {
+            return;
+          }
           if (event.shiftKey) {
             useEditorStore.temporal.getState().redo();
           } else {

@@ -1,9 +1,9 @@
-import { create } from "zustand";
+import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
 import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
 import { createId } from "../utils/createId";
-import { reconcileAssetStorage } from "../utils/assetReconciliation";
+import type { SceneContent, StoredSceneContent } from "../utils/sceneDocument";
 import {
   getEntityWorldMatrix,
   solveLocalFromWorld,
@@ -13,6 +13,12 @@ import {
 } from "../utils/entityTransforms";
 
 export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel" | "group";
+
+/**
+ * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
+ * lock (useSceneLock.ts). A viewer of a shared scene would be another reason, later.
+ */
+export type ReadOnlyReason = "openElsewhere";
 
 export type MaterialLayerType = "color" | "lighting" | "image";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
@@ -274,7 +280,6 @@ export const initialFrameDefaults: FrameSettingsConfig = {
 export interface EditorState {
   entities: Entity[];
   selectedEntityIds: string[];
-  currentPublishId: string | null;
   activeProfileId: string;
   cameraProfiles: Record<string, CameraProfile>;
   setActiveProfile: (id: string) => void;
@@ -296,7 +301,6 @@ export interface EditorState {
   updateMultipleEntityTransforms: (updates: Record<string, EntityTransformUpdates>) => void;
   selectEntity: (id: string | null, multi?: boolean) => void;
   selectEntities: (ids: string[], mode?: "replace" | "add" | "subtract") => void;
-  setCurrentPublishId: (id: string | null) => void;
   toggleVisibility: (id: string) => void;
   toggleLock: (id: string) => void;
   renameEntity: (id: string, newName: string) => void;
@@ -326,6 +330,12 @@ export interface EditorState {
   pendingImportCount: number;
   adjustPendingImports: (delta: number) => void;
 
+  // Why the scene can't be edited right now; null when it can. While set, updates that would change
+  // the scene's content are dropped (see guardSceneContent). Not persisted and not undoable: the
+  // editor sets it each time it opens a scene and whenever the editing lock moves.
+  readOnlyReason: ReadOnlyReason | null;
+  setReadOnly: (reason: ReadOnlyReason | null) => void;
+
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
@@ -334,7 +344,10 @@ export interface EditorState {
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
   setEntityMaterialLayers: (entityId: string, layers: MaterialLayer[]) => void;
-  setEditorState: (updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "currentPublishId" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "setCurrentPublishId" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
+  // Replaces the whole scene with a saved one (null = a new scene's starting content) and clears
+  // undo history, so Ctrl+Z can't reach into the previously open scene.
+  loadScene: (content: StoredSceneContent | null) => void;
+  setEditorState:(updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -476,6 +489,22 @@ const cloneEntity = (entity: Entity): Entity => ({
   ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map((layer) => ({ ...layer })) } : null),
 });
 
+/** The parts of the state that are saved as the scene (see utils/sceneDocument.ts). */
+export const selectSceneContent = (state: EditorState): SceneContent => ({
+  entities: state.entities,
+  sceneSettings: state.sceneSettings,
+  postProcessing: state.postProcessing,
+  frame: state.frame,
+  cameraProfiles: state.cameraProfiles,
+  activeProfileId: state.activeProfileId,
+});
+
+// What a new scene starts with: a fresh cube (new ID) and the default light.
+const createStartingEntities = (): Entity[] => [
+  createEntity("cube"),
+  ...initialEntities.filter((entity) => entity.type === "directionalLight").map(cloneEntity),
+];
+
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
   for (const key in source) {
@@ -491,14 +520,61 @@ function deepMerge(target: any, source: any): any {
   return result;
 }
 
+// What read-only mode protects: the scene's content, less its cameras. Moving the view (and picking
+// a camera) is how you look at a scene you can't edit, and nothing is saved while read-only; the
+// scene is reloaded from the cloud before editing resumes.
+const PROTECTED_SCENE_KEYS = ["entities", "sceneSettings", "postProcessing", "frame"] as const;
+
+// What persist saves in this browser (partialize): editor preferences only. The scene is saved per
+// scene in the cloud.
+const PERSISTED_PREFERENCES = [
+  "activeTransformTool",
+  "projectionMode",
+  "transformSpace",
+  "hudOverlay",
+  "viewportZoom",
+] as const satisfies readonly (keyof EditorState)[];
+
+/**
+ * Middleware between persist and the store's actions: while `readOnlyReason` is set, an update that
+ * would change the scene's content is dropped whole (nothing half-applied, nothing recorded for
+ * undo). This is the backstop behind the UI's disabled controls, since every action, hotkey, and
+ * viewport gesture writes through the `set` it hands the actions. `loadScene` and `setReadOnly`
+ * write with `api.setState`, which it doesn't touch. Undo also bypasses it (zundo writes from
+ * outside), which is why entering read-only clears the history.
+ */
+const guardSceneContent =
+  <T extends EditorState, Mps extends [StoreMutatorIdentifier, unknown][] = [], Mcs extends [StoreMutatorIdentifier, unknown][] = []>(
+    creator: StateCreator<T, Mps, Mcs>,
+  ): StateCreator<T, Mps, Mcs> =>
+  (set, get, api) => {
+    const guardedSet = ((partial: unknown, replace?: boolean) => {
+      // get() is still undefined while create() builds the initial state.
+      const state = get() as T | undefined;
+
+      if (!state?.readOnlyReason) {
+        return (set as (partial: unknown, replace?: boolean) => void)(partial, replace);
+      }
+
+      const next = (typeof partial === "function" ? partial(state) : partial) as Partial<EditorState> | null;
+
+      if (next && PROTECTED_SCENE_KEYS.some((key) => key in next && next[key] !== state[key])) {
+        return;
+      }
+
+      return (set as (partial: unknown, replace?: boolean) => void)(next, replace);
+    }) as typeof set;
+
+    return creator(guardedSet, get, api);
+  };
+
 export const useEditorStore = create<EditorState>()(
   subscribeWithSelector(
     temporal(
       persist(
-        (set, get) => ({
+        guardSceneContent((set, get, api) => ({
           entities: initialEntities.map(cloneEntity),
           selectedEntityIds: [],
-          currentPublishId: null,
           activeProfileId: DEFAULT_CAMERA_PROFILE_ID,
           cameraProfiles: {
             [DEFAULT_CAMERA_PROFILE_ID]: cloneCameraProfile(DEFAULT_CAMERA_PROFILE),
@@ -657,12 +733,10 @@ export const useEditorStore = create<EditorState>()(
               getDescendantIds(entities, id).forEach((descId) => allIds.add(descId));
             });
 
-            // Note: this intentionally does NOT free the removed entities' OPFS
-            // model/texture assets. Deletion is deferred to the app-load
-            // reconciliation sweep (see reconcileAssetStorage) so undo works:
-            // zundo's history is in-memory and session-scoped, so nothing is
-            // freed until the next reload, by which point the persisted store
-            // already reflects whether the delete was undone.
+            // Note: this intentionally does NOT free the removed entities'
+            // model/texture assets, so undo always gets a working entity back.
+            // Local copies are a cache of the cloud ones (assetTransfers.ts);
+            // nothing evicts them yet.
             set((state) => ({
               entities: state.entities.filter((entity) => !allIds.has(entity.id)),
               selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
@@ -895,10 +969,6 @@ export const useEditorStore = create<EditorState>()(
               const remove = new Set(ids);
               return { selectedEntityIds: state.selectedEntityIds.filter((id) => !remove.has(id)) };
             }),
-          setCurrentPublishId: (id) =>
-            set({
-              currentPublishId: id,
-            }),
           toggleVisibility: (id) =>
             set((state) => ({
               entities: state.entities.map((entity) =>
@@ -953,6 +1023,16 @@ export const useEditorStore = create<EditorState>()(
           previewGlbUrl: null,
           setPreviewMode: (active, url) => set({ isPreviewMode: active, previewGlbUrl: url }),
 
+          readOnlyReason: null,
+          setReadOnly: (reason) => {
+            api.setState({ readOnlyReason: reason });
+
+            if (reason) {
+              // There's nothing to undo into: the scene can't change here, and it's reloaded from
+              // the cloud before editing resumes.
+              useEditorStore.temporal.getState().clear();
+            }
+          },
           pendingImportCount: 0,
           adjustPendingImports: (delta) =>
             set((state) => ({ pendingImportCount: Math.max(0, state.pendingImportCount + delta) })),
@@ -1037,364 +1117,62 @@ export const useEditorStore = create<EditorState>()(
                   : entity,
               ),
             })),
-          setEditorState: (updates) => set((state) => ({ ...state, ...updates })),
-        }),
-        {
-          name: "libre3d-scene-state",
-          version: 16,
-          storage: createJSONStorage(() => localStorage),
-          // Once per app load, after persisted state is available, free OPFS
-          // model/texture assets no surviving entity references. This is the
-          // "next reload" point where deferred deletion is finally safe — the
-          // persisted store already reflects any undone deletes by now.
-          // Runs once per app load, right after rehydration. The rehydrated state
-          // isn't threaded into this callback's argument through zundo's temporal
-          // wrapper (it arrives undefined), so read the freshly rehydrated entities
-          // straight off the store on the next microtask — by then create() has
-          // assigned useEditorStore and the persisted state is in place. This is
-          // the "next reload" point where freeing deferred-deleted assets is safe.
-          onRehydrateStorage: () => () => {
-            queueMicrotask(() => {
-              void reconcileAssetStorage(useEditorStore.getState().entities);
+          loadScene: (content) => {
+            const savedProfiles = Object.values(content?.cameraProfiles ?? {}).map(cloneCameraProfile);
+            const cameraProfiles: Record<string, CameraProfile> = {
+              [DEFAULT_CAMERA_PROFILE_ID]: cloneCameraProfile(DEFAULT_CAMERA_PROFILE),
+              ...Object.fromEntries(savedProfiles.map((profile) => [profile.id, profile])),
+            };
+            const activeProfileId =
+              content?.activeProfileId && cameraProfiles[content.activeProfileId]
+                ? content.activeProfileId
+                : DEFAULT_CAMERA_PROFILE_ID;
+
+            // Past the read-only guard: a read-only tab shows the latest saved scene through this too.
+            api.setState({
+              entities: content ? content.entities.map(cloneEntity) : createStartingEntities(),
+              // Deep-merged over the defaults, so a setting added since the scene was saved keeps
+              // its default instead of coming back undefined.
+              sceneSettings: deepMerge(initialSceneDefaults, content?.sceneSettings ?? {}),
+              postProcessing: deepMerge(initialPostProcessingDefaults, content?.postProcessing ?? {}),
+              frame: deepMerge(initialFrameDefaults, content?.frame ?? {}),
+              cameraProfiles,
+              activeProfileId,
+              selectedEntityIds: [],
+              isPreviewMode: false,
+              previewGlbUrl: null,
             });
+
+            // The editor no longer reloads the page between scenes, so history would otherwise
+            // carry over; the load itself also shouldn't be an undoable step.
+            useEditorStore.temporal.getState().clear();
           },
+          setEditorState: (updates) => set((state) => ({ ...state, ...updates })),
+        })),
+        {
+          // Since v17 this holds only editor preferences; the scene itself is saved in the cloud
+          // (utils/sceneLibrary.ts) and loaded with loadScene. The key keeps its name from when it
+          // held the scene.
+          name: "libre3d-scene-state",
+          version: 17,
+          storage: createJSONStorage(() => localStorage),
+          // Before v17 the scene was saved here too. Scenes live in the cloud now and nothing saved
+          // before then is kept, so an older blob keeps only the editor preferences (the fields
+          // partialize saves below, none of which ever changed shape).
           migrate: (persistedState: any, version: number) => {
-            // v16: ColorLayer gained alphaMode/alphaCutoff/doubleSided so imported
-            // materials preserve glTF alpha-blend/mask/doubleSided behavior instead of
-            // only reacting to scalar opacity (see materialLayers.ts/ObjectManager.ts).
-            // Existing imported entities already have a materialLayers array derived
-            // under the old, lossy logic -- clearing it back to undefined makes them
-            // eligible for backfillMaterialLayers again, so the next time each import
-            // hydrates it re-derives layers straight from the still-available parsed
-            // glTF material, this time capturing alphaMode/doubleSided correctly. Can't
-            // happen here at migrate() time itself (no parsed glTF data available),
-            // same reason v15's image-layer backfill is deferred.
-            if (version < 16) {
-              if (persistedState && Array.isArray(persistedState.entities)) {
-                persistedState.entities = persistedState.entities.map((entity: any) =>
-                  entity.type === "importedModel" && entity.materialLayers
-                    ? { ...entity, materialLayers: undefined }
-                    : entity,
-                );
-              }
+            if (version < 17) {
+              return Object.fromEntries(
+                PERSISTED_PREFERENCES.filter((key) => persistedState?.[key] !== undefined).map((key) => [key, persistedState[key]]),
+              );
             }
 
-            // v15: MaterialLayer gained an "image" variant so imported meshes
-            // become editable. Existing color/lighting layers stay structurally
-            // valid, so nothing is rewritten here — imported entities with
-            // materialLayers: undefined are backfilled dynamically the first time
-            // ObjectManager.hydrateImportedModel resolves them (setEntityMaterialLayers),
-            // since deriving layers needs parsed glTF data unavailable at migrate() time.
-            // The bump follows this store's convention of versioning any shape-relevant change.
-
-            if (version < 14) {
-              if (persistedState && Array.isArray(persistedState.entities)) {
-                persistedState.entities = persistedState.entities.map((entity: any) => ({
-                  ...entity,
-                  parentId: entity.parentId ?? null,
-                }));
-              }
-            }
-
-            if (version < 12) {
-              if (persistedState && Array.isArray(persistedState.entities)) {
-                persistedState.entities = persistedState.entities.map((entity: any) => {
-                  if (entity.type === "directionalLight") return entity;
-
-                  const color = entity.color ?? "#ffffff";
-                  const nextEntity = {
-                    ...entity,
-                    materialLayers: [
-                      { id: createEntityId(), type: "color", enabled: true, opacity: 1, color },
-                      {
-                        id: createEntityId(),
-                        type: "lighting",
-                        enabled: true,
-                        opacity: 1,
-                        model: "physical",
-                        roughness: 0.45,
-                        metalness: 0.08,
-                        shininess: 30,
-                        emissive: "#000000",
-                        emissiveIntensity: 1,
-                      },
-                    ],
-                  };
-                  delete nextEntity.color;
-                  return nextEntity;
-                });
-              }
-            }
-
-            if (version < 11) {
-              if (persistedState && persistedState.selectedEntityId !== undefined) {
-                persistedState.selectedEntityIds = persistedState.selectedEntityId ? [persistedState.selectedEntityId] : [];
-                delete persistedState.selectedEntityId;
-              }
-            }
-
-            if (version < 10) {
-              if (persistedState && Array.isArray(persistedState.entities)) {
-                persistedState.entities = persistedState.entities.map((entity: any) => {
-                  if (entity.type === "directionalLight" && entity.color === "#fde047") {
-                    return { ...entity, color: "#ffffff" };
-                  }
-                  return entity;
-                });
-              }
-            }
-
-            if (version < 7) {
-              // Safely initialize postProcessing with defaults
-              const postProcessing = {
-                enabled: persistedState.postProcessingEnabled !== undefined ? persistedState.postProcessingEnabled : true,
-                toneMap: persistedState.toneMap !== undefined ? persistedState.toneMap : "ACES Filmic",
-                exposure: persistedState.exposure !== undefined ? persistedState.exposure : 0.00,
-                bloom: {
-                  enabled: persistedState.bloomEnabled !== undefined ? persistedState.bloomEnabled : true,
-                  intensity: persistedState.bloomIntensity !== undefined ? persistedState.bloomIntensity : 40,
-                  threshold: persistedState.bloomThreshold !== undefined ? persistedState.bloomThreshold : 0.85,
-                  radius: persistedState.bloomRadius !== undefined ? persistedState.bloomRadius : 0.4,
-                },
-                ssao: {
-                  enabled: persistedState.ssaoEnabled !== undefined ? persistedState.ssaoEnabled : false,
-                  intensity: persistedState.ssaoIntensity !== undefined ? persistedState.ssaoIntensity : 25,
-                },
-                dof: {
-                  enabled: persistedState.dofEnabled !== undefined ? persistedState.dofEnabled : false,
-                  focusDistance: persistedState.dofFocusDist !== undefined ? persistedState.dofFocusDist : 10.0,
-                  bokeh: persistedState.dofBokeh !== undefined ? persistedState.dofBokeh : 0.30,
-                },
-                chromaticAberration: {
-                  enabled: persistedState.chromaticAberrationEnabled !== undefined ? persistedState.chromaticAberrationEnabled : false,
-                  intensity: persistedState.chromaticAberrationIntensity !== undefined ? persistedState.chromaticAberrationIntensity : 0,
-                },
-                motionBlur: {
-                  enabled: persistedState.motionBlurEnabled !== undefined ? persistedState.motionBlurEnabled : false,
-                  intensity: persistedState.motionBlurIntensity !== undefined ? persistedState.motionBlurIntensity : 0,
-                },
-                filmGrain: {
-                  enabled: persistedState.filmGrainEnabled !== undefined ? persistedState.filmGrainEnabled : false,
-                  intensity: persistedState.filmGrainIntensity !== undefined ? persistedState.filmGrainIntensity : 0,
-                },
-                vignette: {
-                  enabled: persistedState.vignetteEnabled !== undefined ? persistedState.vignetteEnabled : true,
-                  intensity: persistedState.vignetteIntensity !== undefined ? persistedState.vignetteIntensity : 15,
-                },
-                outline: {
-                  enabled: persistedState.outlineEnabled !== undefined ? persistedState.outlineEnabled : false,
-                  color: persistedState.outlineColor !== undefined ? persistedState.outlineColor : "5865F2",
-                },
-                colorGrading: {
-                  enabled: persistedState.colorGradingEnabled !== undefined ? persistedState.colorGradingEnabled : false,
-                  brightness: persistedState.colorGradingBrightness !== undefined ? persistedState.colorGradingBrightness : 0.00,
-                  contrast: persistedState.colorGradingContrast !== undefined ? persistedState.colorGradingContrast : 0.00,
-                  saturation: persistedState.colorGradingSaturation !== undefined ? persistedState.colorGradingSaturation : 0.00,
-                },
-              };
-
-              // Safely initialize sceneSettings with defaults
-              const sceneSettings = {
-                bgColor: persistedState.bgColor !== undefined ? persistedState.bgColor : "#0b1020",
-                bgAlpha: persistedState.bgAlpha !== undefined ? persistedState.bgAlpha : "100%",
-                showGrid: persistedState.showGrid !== undefined ? persistedState.showGrid : true,
-                wireframe: persistedState.wireframe !== undefined ? persistedState.wireframe : false,
-                fogEnabled: persistedState.fogEnabled !== undefined ? persistedState.fogEnabled : false,
-                lights: {
-                  intensity: persistedState.lightIntensity !== undefined ? persistedState.lightIntensity : 0.75,
-                  color: persistedState.lightColor !== undefined ? persistedState.lightColor : "#ffffff",
-                  ambientEnabled: persistedState.lightAmbientEnabled !== undefined ? persistedState.lightAmbientEnabled : true,
-                  directionalEnabled: persistedState.lightDirectionalEnabled !== undefined ? persistedState.lightDirectionalEnabled : true,
-                  shadow: persistedState.lightShadow !== undefined ? persistedState.lightShadow : "Soft",
-                },
-                physics: {
-                  enabled: persistedState.physicsEnabled !== undefined ? persistedState.physicsEnabled : false,
-                  gravityY: persistedState.gravityY !== undefined ? persistedState.gravityY : -9.8,
-                  collisionType: persistedState.collisionType !== undefined ? persistedState.collisionType : "Mesh",
-                },
-              };
-
-              persistedState.postProcessing = postProcessing;
-              persistedState.sceneSettings = sceneSettings;
-
-              // Delete deprecated keys
-              const keysToDelete = [
-                "postProcessingEnabled", "toneMap", "exposure", "bloomEnabled", "bloomIntensity", "bloomThreshold", "bloomRadius",
-                "ssaoEnabled", "ssaoIntensity", "dofEnabled", "dofFocusDist", "dofBokeh", "chromaticAberrationEnabled",
-                "chromaticAberrationIntensity", "motionBlurEnabled", "motionBlurIntensity", "filmGrainEnabled", "filmGrainIntensity",
-                "vignetteEnabled", "vignetteIntensity", "outlineEnabled", "outlineColor", "colorGradingEnabled", "colorGradingBrightness",
-                "colorGradingContrast", "colorGradingSaturation", "bgColor", "bgAlpha", "gridPlane", "showGrid", "wireframe", "fogEnabled",
-                "lightIntensity", "lightColor", "lightAmbientEnabled", "lightDirectionalEnabled", "lightShadow",
-                "physicsEnabled", "gravityY", "collisionType"
-              ];
-              keysToDelete.forEach((key) => {
-                delete persistedState[key];
-              });
-            }
-
-            if (version < 7) {
-              if (persistedState) {
-                const legacyCameraEntities = Array.isArray(persistedState.entities)
-                  ? persistedState.entities.filter((entity: any) => entity?.type === "camera")
-                  : [];
-
-                const legacyProfiles: Record<string, CameraProfile> = {};
-                legacyCameraEntities.forEach((entity: any, index: number) => {
-                  legacyProfiles[entity.id] = createCameraProfile(entity.id, {
-                    id: entity.id,
-                    name: entity.name ?? `Camera ${index + 1}`,
-                    position: entity.position ?? [0, 5, 10],
-                    target: [0, 0, 0],
-                    fov: entity.cameraProperties?.fov ?? DEFAULT_CAMERA_PROFILE.fov,
-                    near: entity.cameraProperties?.near ?? DEFAULT_CAMERA_PROFILE.near,
-                    far: entity.cameraProperties?.far ?? DEFAULT_CAMERA_PROFILE.far,
-                    zoom: entity.cameraProperties?.zoom ?? DEFAULT_CAMERA_PROFILE.zoom,
-                  });
-                });
-
-                persistedState.entities = Array.isArray(persistedState.entities)
-                  ? persistedState.entities.filter((entity: any) => entity?.type !== "camera")
-                  : persistedState.entities;
-
-                const persistedPersonalProperties = persistedState.personalCameraProperties ?? {};
-                const personalProfile = createCameraProfile(DEFAULT_CAMERA_PROFILE_ID, {
-                  ...DEFAULT_CAMERA_PROFILE,
-                  ...persistedPersonalProperties,
-                });
-
-                persistedState.cameraProfiles = {
-                  [DEFAULT_CAMERA_PROFILE_ID]: personalProfile,
-                  ...legacyProfiles,
-                  ...(persistedState.cameraProfiles ?? {}),
-                };
-                persistedState.activeProfileId = persistedState.activeProfileId ?? persistedState.activeCameraId ?? DEFAULT_CAMERA_PROFILE_ID;
-              }
-            }
-
-            if (version < 8) {
-              if (persistedState) {
-                if (persistedState.activeProfileId === undefined) {
-                  persistedState.activeProfileId = persistedState.activeCameraId ?? DEFAULT_CAMERA_PROFILE_ID;
-                }
-
-                delete persistedState.activeCameraId;
-                delete persistedState.personalCameraProperties;
-
-                if (Array.isArray(persistedState.entities)) {
-                  persistedState.entities = persistedState.entities.filter((entity: any) => entity?.type !== "camera");
-                }
-              }
-            }
-
-            if (version < 9) {
-              if (persistedState) {
-                delete persistedState.bgColor;
-                delete persistedState.gridPlane;  // legacy top-level key (pre-v6)
-
-                delete persistedState.wireframe;
-                delete persistedState.lightIntensity;
-                delete persistedState.lightColor;
-                delete persistedState.fogEnabled;
-                delete persistedState.viewport;
-                delete persistedState.resolution;
-                delete persistedState.autoZoom;
-                delete persistedState.bgAlpha;
-                delete persistedState.environment;
-                delete persistedState.lightAmbientEnabled;
-                delete persistedState.lightDirectionalEnabled;
-                delete persistedState.lightShadow;
-                delete persistedState.physicsEnabled;
-                delete persistedState.gravityY;
-                delete persistedState.collisionType;
-                delete persistedState.postProcessingEnabled;
-                delete persistedState.toneMap;
-                delete persistedState.exposure;
-                delete persistedState.bloomEnabled;
-                delete persistedState.bloomIntensity;
-                delete persistedState.bloomThreshold;
-                delete persistedState.bloomRadius;
-                delete persistedState.ssaoEnabled;
-                delete persistedState.ssaoIntensity;
-                delete persistedState.dofEnabled;
-                delete persistedState.dofFocusDist;
-                delete persistedState.dofBokeh;
-                delete persistedState.chromaticAberrationEnabled;
-                delete persistedState.chromaticAberrationIntensity;
-                delete persistedState.motionBlurEnabled;
-                delete persistedState.motionBlurIntensity;
-                delete persistedState.filmGrainEnabled;
-                delete persistedState.filmGrainIntensity;
-                delete persistedState.vignetteEnabled;
-                delete persistedState.vignetteIntensity;
-                delete persistedState.outlineEnabled;
-                delete persistedState.outlineColor;
-                delete persistedState.colorGradingEnabled;
-                delete persistedState.colorGradingBrightness;
-                delete persistedState.colorGradingContrast;
-                delete persistedState.colorGradingSaturation;
-                delete persistedState.snapping;
-                delete persistedState.snapSize;
-                delete persistedState.renderer;
-                delete persistedState.materialName;
-                delete persistedState.materialType;
-                delete persistedState.materialBaseColor;
-                delete persistedState.materialMetalness;
-                delete persistedState.materialRoughness;
-                delete persistedState.materialOpacity;
-                delete persistedState.materialSide;
-                delete persistedState.materialEmissiveColor;
-                delete persistedState.materialEmissiveIntensity;
-                delete persistedState.materialClearcoat;
-                delete persistedState.materialTransmission;
-                delete persistedState.materialIor;
-                delete persistedState.materialIridescence;
-                delete persistedState.materialLibraryTab;
-                delete persistedState.activeMaterialCard;
-              }
-            }
-
-            // v9: gridPlane → showGrid inside nested sceneSettings
-            if (version < 9) {
-              if (persistedState?.sceneSettings) {
-                if (persistedState.sceneSettings.showGrid === undefined) {
-                  // Convert old gridPlane string → boolean, default to true
-                  const gp = persistedState.sceneSettings.gridPlane;
-                  persistedState.sceneSettings.showGrid = gp !== "None";
-                }
-                // Remove the old string field — no longer used
-                delete persistedState.sceneSettings.gridPlane;
-              }
-            }
-
-            if (persistedState) {
-              persistedState.frame = persistedState.frame ?? { ...initialFrameDefaults };
-            }
-            // DIAGNOSTIC — remove after grid bug is confirmed fixed
-            console.log(
-              `[Libre3D] migrate v${version}→9: showGrid=${persistedState?.sceneSettings?.showGrid}`,
-              'sceneSettings:', persistedState?.sceneSettings
-            );
             return persistedState;
-
           },
-          partialize: (state) => ({
-            activeProfileId: state.activeProfileId,
-            cameraProfiles: state.cameraProfiles,
-            entities: state.entities,
-            selectedEntityIds: state.selectedEntityIds,
-            currentPublishId: state.currentPublishId,
-
-            activeTransformTool: state.activeTransformTool,
-            projectionMode: state.projectionMode,
-            transformSpace: state.transformSpace,
-
-            sceneSettings: state.sceneSettings,
-            postProcessing: state.postProcessing,
-            frame: state.frame,
-
-            hudOverlay: state.hudOverlay,
-            viewportZoom: state.viewportZoom,
-          }),
+          partialize: (state) =>
+            Object.fromEntries(PERSISTED_PREFERENCES.map((key) => [key, state[key]])) as Pick<
+              EditorState,
+              (typeof PERSISTED_PREFERENCES)[number]
+            >,
           // Deep-merge nested objects (sceneSettings, postProcessing, etc.) so that
           // new fields added to initialSceneDefaults always survive old saves that
           // are missing those keys.  Without this, Zustand's default shallow merge
@@ -1415,3 +1193,13 @@ export const useEditorStore = create<EditorState>()(
     )
   )
 );
+
+// zundo wraps set() to snapshot partialize(get()) first, and get() is still undefined while create()
+// runs, so persist's first hydration throws right after building the loaded state. The store still
+// starts from that state (persist returns it), but a migrated state is never written back and
+// hasHydrated() stays false: until something else is set, every load migrates again. Hydrating
+// again now that the store exists writes the migration back once. The load is not an undoable step.
+if (!useEditorStore.persist.hasHydrated()) {
+  void useEditorStore.persist.rehydrate();
+  useEditorStore.temporal.getState().clear();
+}
