@@ -323,8 +323,11 @@ function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: Edito
     sidebarUI.setIsPublishing(true);
 
     try {
+      // Read at publish time (not from the render closure) so a colour picked just before
+      // clicking Share is what gets published.
+      const bgColor = getSafeColor(useEditorStore.getState().sceneSettings.bgColor);
       // Publishing requires a signed-in user; the server checks the session's access token.
-      const publishResult = await publishLiveScene(liveScene, scene.sceneId);
+      const publishResult = await publishLiveScene(liveScene, scene.sceneId, bgColor);
 
       if (!publishResult) {
         window.alert("There is no exportable mesh content in the current scene.");

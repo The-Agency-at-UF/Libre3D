@@ -111,6 +111,18 @@ describe("publishing", () => {
     });
   });
 
+  it("stores the scene's background colour on the published row, and drops one that isn't a hex colour", async () => {
+    const sceneId = await createScene();
+
+    const { publishId } = (await publish({ sceneId, bgColor: " FF8800" })).body as { publishId: string };
+    expect(dynamo.getPublished(publishId)?.bgColor).toEqual({ S: "#ff8800" });
+
+    // Publishing again replaces the row, so a colour that isn't valid (or none) leaves no attribute.
+    const injected = await publish({ sceneId, bgColor: "#000; background-image: url(https://evil.example)" });
+    expect(injected.status).toBe(200);
+    expect(dynamo.getPublished(publishId)).not.toHaveProperty("bgColor");
+  });
+
   it("keeps the same publish ID (and share link) when the scene is published again", async () => {
     const sceneId = await createScene();
     const first = await publishAndUpload(sceneId);
@@ -225,6 +237,27 @@ describe("the public viewer", () => {
     const response = await view(oldId);
 
     expect(presigner.find((response.body as { cloudAssetUrl: string }).cloudAssetUrl).input.Key).toBe(`scenes/${oldId}.glb`);
+  });
+
+  it("returns the background colour checked again, and null when the row has none or a bad one", async () => {
+    const seed = (id: string, bgColor?: string) =>
+      dynamo.putItem("published-scenes", {
+        sceneId: { S: id },
+        assetKey: { S: `scenes/${id}.glb` },
+        ...(bgColor === undefined ? {} : { bgColor: { S: bgColor } }),
+      });
+    const [stored, none, tampered] = [
+      "33333333-3333-4333-8333-333333333333",
+      "44444444-4444-4444-8444-444444444444",
+      "55555555-5555-4555-8555-555555555555",
+    ];
+    seed(stored, "#FF8800");
+    seed(none);
+    seed(tampered, "#000; background-image: url(x)");
+
+    await expect(view(stored)).resolves.toMatchObject({ status: 200, body: { bgColor: "#ff8800" } });
+    await expect(view(none)).resolves.toMatchObject({ status: 200, body: { bgColor: null } });
+    await expect(view(tampered)).resolves.toMatchObject({ status: 200, body: { bgColor: null } });
   });
 
   it("answers 404 for an unknown or malformed ID before building any key, and 405 for anything but GET", async () => {
