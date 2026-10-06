@@ -11,6 +11,17 @@ interface PublishSession {
 
 const PUBLISH_ENDPOINT = "/api/publish";
 
+// The publish endpoint answers failures with `{ error }`. Keep that message so a failed publish
+// says why (scene not found, a share link someone else owns, ...) instead of a bare status.
+const readServerError = async (response: Response): Promise<string | null> => {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === "string" && body.error ? body.error : null;
+  } catch {
+    return null;
+  }
+};
+
 // Throws ApiAuthError when signed out or the session was rejected; the caller reports that.
 const readPublishSession = async (sceneId: string, bgColor: string | null): Promise<PublishSession> => {
   const response = await apiFetch(PUBLISH_ENDPOINT, {
@@ -22,7 +33,8 @@ const readPublishSession = async (sceneId: string, bgColor: string | null): Prom
   });
 
   if (!response.ok) {
-    throw new Error(`Failed to create a publish session (${response.status}).`);
+    const serverError = await readServerError(response);
+    throw new Error(`Failed to create a publish session (HTTP ${response.status})${serverError ? `: ${serverError}` : "."}`);
   }
 
   return (await response.json()) as PublishSession;
