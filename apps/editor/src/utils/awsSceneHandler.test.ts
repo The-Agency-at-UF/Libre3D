@@ -8,14 +8,12 @@ import { assetHashToBase64 } from "./sceneAssets";
 const aws = vi.hoisted(() => ({ dynamo: null as unknown, s3: null as unknown, presigner: null as unknown }));
 
 vi.mock("./awsConfig.js", () => ({
-  readAwsAccess: () => ({ region: "us-east-2", credentials: undefined }),
   readRequiredEnv: (env: Record<string, string | undefined>, name: string) => {
     const value = env[name];
     if (!value) throw new Error(`Missing required environment variable: ${name}`);
     return value;
   },
-  createDynamoClient: () => aws.dynamo,
-  createS3Client: () => aws.s3,
+  getAwsClients: () => ({ s3: aws.s3, dynamo: aws.dynamo }),
 }));
 
 vi.mock("@aws-sdk/s3-request-presigner", () => ({

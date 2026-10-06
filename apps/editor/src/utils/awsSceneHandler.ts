@@ -73,7 +73,7 @@ import {
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 // `.js` is required: Vercel runs server modules under Node's ES module loader (see awsConfig.ts).
-import { createDynamoClient, createS3Client, readAwsAccess, readRequiredEnv, type ServerEnv } from "./awsConfig.js";
+import { getAwsClients, readRequiredEnv, type ServerEnv } from "./awsConfig.js";
 import { MAX_ASSET_BYTES, assetHashToBase64, collectAssetHashes, isAssetHash, type AssetKind } from "./sceneAssets.js";
 import { verifyAuth } from "./verifyAuth.js";
 
@@ -150,17 +150,12 @@ export const json = (status: number, body: unknown, headers?: Record<string, str
 export const errorResponse = (status: number, error: string, extra: Record<string, unknown> = {}): SceneApiResponse =>
   json(status, { error, ...extra });
 
-export const readSceneConfig = (env: ServerEnv): SceneConfig => {
-  const access = readAwsAccess(env);
-
-  return {
-    bucketName: readRequiredEnv(env, "S3_BUCKET_NAME"),
-    tableName: readRequiredEnv(env, "USER_SCENES_TABLE_NAME"),
-    publishedTableName: readRequiredEnv(env, "PUBLISHED_SCENES_TABLE_NAME"),
-    s3: createS3Client(access),
-    dynamo: createDynamoClient(access),
-  };
-};
+export const readSceneConfig = (env: ServerEnv): SceneConfig => ({
+  bucketName: readRequiredEnv(env, "S3_BUCKET_NAME"),
+  tableName: readRequiredEnv(env, "USER_SCENES_TABLE_NAME"),
+  publishedTableName: readRequiredEnv(env, "PUBLISHED_SCENES_TABLE_NAME"),
+  ...getAwsClients(env),
+});
 
 // ---- Request parsing ------------------------------------------------------------------------
 
