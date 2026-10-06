@@ -103,6 +103,8 @@ interface SceneSummaryBody {
   updatedAt: string;
   /** Set once the scene has been published; its share link is `/v/<publishId>`. */
   publishId?: string;
+  /** Short-lived presigned GET for the gallery picture (the list only). */
+  thumbnailUrl?: string;
 }
 
 export interface SceneConfig {
@@ -136,6 +138,8 @@ const MAX_SCENE_ASSETS = 500;
 const ASSET_CONTENT_TYPES: Record<AssetKind, string> = { model: "model/gltf-binary", texture: "image/png" };
 // A 480×270 JPEG is tens of kB; this only stops something that isn't a thumbnail.
 const MAX_THUMBNAIL_BYTES = 256 * 1024;
+// How long a gallery picture's URL works. The gallery asks for new ones each time it loads.
+const THUMBNAIL_URL_TTL_SECONDS = 900;
 
 export const json = (status: number, body: unknown, headers?: Record<string, string>): SceneApiResponse => ({
   status,
@@ -348,7 +352,7 @@ const checkDocumentAssets = async (
 // ---- Route handlers -------------------------------------------------------------------------
 
 const listScenes = async (config: SceneConfig, userId: string): Promise<SceneApiResponse> => {
-  const scenes: SceneSummaryBody[] = [];
+  const items: Record<string, AttributeValue>[] = [];
   let exclusiveStartKey: Record<string, AttributeValue> | undefined;
 
   do {
@@ -358,14 +362,28 @@ const listScenes = async (config: SceneConfig, userId: string): Promise<SceneApi
         KeyConditionExpression: "userId = :userId",
         ExpressionAttributeValues: { ":userId": { S: userId } },
         ExpressionAttributeNames: { "#name": "name" },
-        ProjectionExpression: "sceneId, #name, updatedAt, publishId",
+        ProjectionExpression: "sceneId, #name, updatedAt, publishId, thumbnailKey",
         ExclusiveStartKey: exclusiveStartKey,
       }),
     );
 
-    page.Items?.forEach((item) => scenes.push(toSummary(item)));
+    items.push(...(page.Items ?? []));
     exclusiveStartKey = page.LastEvaluatedKey;
   } while (exclusiveStartKey);
+
+  // Signing is local (no request to S3), so a URL per scene costs next to nothing.
+  const scenes = await Promise.all(
+    items.map(async (item): Promise<SceneSummaryBody> => {
+      const key = item.thumbnailKey?.S;
+      const thumbnailUrl = key
+        ? await getSignedUrl(config.s3, new GetObjectCommand({ Bucket: config.bucketName, Key: key }), {
+            expiresIn: THUMBNAIL_URL_TTL_SECONDS,
+          })
+        : undefined;
+
+      return { ...toSummary(item), thumbnailUrl };
+    }),
+  );
 
   // The sort key is sceneId, so order here. A user has tens of scenes, not thousands.
   scenes.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));

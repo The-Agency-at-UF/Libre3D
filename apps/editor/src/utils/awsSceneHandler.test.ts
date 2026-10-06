@@ -817,6 +817,23 @@ describe("thumbnails", () => {
     expect(lockExpiresAt(sceneId)).toBe(Date.parse("2026-10-03T12:01:30.000Z"));
   });
 
+  it("lists a presigned GET for each scene with a picture, and none for the others", async () => {
+    const withPicture = await createLockedScene();
+    const without = await createScene();
+    await putThumbnail(withPicture);
+
+    const response = await call("GET");
+    const scenes = (response.body as { scenes: { sceneId: string; thumbnailUrl?: string }[] }).scenes;
+    const listed = scenes.find((scene) => scene.sceneId === withPicture)!;
+
+    expect(presigner.find(listed.thumbnailUrl!)).toMatchObject({
+      operation: "GetObject",
+      input: { Bucket: "bucket", Key: `users/alice/scenes/${withPicture}.thumb.jpg` },
+      expiresIn: 900,
+    });
+    expect(scenes.find((scene) => scene.sceneId === without)?.thumbnailUrl).toBeUndefined();
+  });
+
   it("refuses a session without the lock (423), leaving the row without a picture", async () => {
     const sceneId = await createLockedScene();
 

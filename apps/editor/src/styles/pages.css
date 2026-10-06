@@ -608,6 +608,25 @@
   min-width: 0;
 }
 
+/* The name, then a "Published" badge that stays whole while a long name is cut off. */
+.gallery-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.gallery-card-badge {
+  flex-shrink: 0;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  line-height: 1.6;
+}
+
 .gallery-card-name {
   overflow: hidden;
   font-size: var(--font-size-sm);

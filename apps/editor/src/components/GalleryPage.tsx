@@ -11,7 +11,7 @@ import { SidebarLayout } from "./ui/SidebarLayout";
 import { useStoredChoice } from "../hooks/useStoredChoice";
 
 import { signOut } from "../utils/authSession";
-import { HOME_PATH, navigate } from "../utils/navigation";
+import { HOME_PATH, navigate, shareUrlFor } from "../utils/navigation";
 import { ApiAuthError } from "../utils/apiFetch";
 import { createScene, deleteScene, listScenes, renameScene, type SceneSummary } from "../utils/sceneLibrary";
 import { toggleTheme } from "../utils/theme";
@@ -28,6 +28,9 @@ type GalleryState =
 const SORT_ORDERS = ["modified", "name"] as const;
 const VIEW_MODES = ["grid", "list"] as const;
 
+// How long a card says its share link was copied.
+const COPIED_NOTICE_MS = 2000;
+
 type SortOrder = (typeof SORT_ORDERS)[number];
 type ViewMode = (typeof VIEW_MODES)[number];
 
@@ -43,6 +46,16 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOrder, setSortOrder] = useStoredChoice<SortOrder>("libre3d-gallery-sort", SORT_ORDERS, "modified");
   const [viewMode, setViewMode] = useStoredChoice<ViewMode>("libre3d-gallery-view", VIEW_MODES, "grid");
+  const [copiedSceneId, setCopiedSceneId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!copiedSceneId) {
+      return;
+    }
+
+    const timer = setTimeout(() => setCopiedSceneId(null), COPIED_NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [copiedSceneId]);
 
   useEffect(() => {
     // Ignore a response that arrives after the page was left.
@@ -106,6 +119,19 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
     } catch (error) {
       console.error("Failed to rename the scene.", error);
       window.alert(error instanceof ApiAuthError ? error.message : "The scene could not be renamed. Try again.");
+    }
+  };
+
+  const handleCopyShareLink = async (scene: SceneSummary, publishId: string) => {
+    const shareUrl = shareUrlFor(publishId);
+
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopiedSceneId(scene.sceneId);
+    } catch (error) {
+      // E.g. clipboard access refused: show it to copy by hand instead.
+      console.warn("Failed to copy the share link.", error);
+      window.prompt(`Share link for “${scene.name}”`, shareUrl);
     }
   };
 
@@ -201,13 +227,16 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
             <ul className={`gallery-grid${viewMode === "list" ? " gallery-grid--list" : ""}`}>
               {visibleScenes.map((scene) => (
                 <li key={scene.sceneId} className="gallery-item">
-                  <SceneCard scene={scene} />
+                  <SceneCard scene={scene} isLinkCopied={copiedSceneId === scene.sceneId} />
                   <div className="gallery-card-actions">
                     <Menu
                       label={`Actions for ${scene.name}`}
                       align="end"
                       trigger={<i className="ti ti-dots" aria-hidden="true" />}
                       items={[
+                        ...(scene.publishId
+                          ? [{ label: "Copy share link", icon: "link", onSelect: () => void handleCopyShareLink(scene, scene.publishId!) }]
+                          : []),
                         { label: "Rename", icon: "pencil", onSelect: () => void handleRenameScene(scene) },
                         { label: "Delete", icon: "trash", onSelect: () => void handleDeleteScene(scene) },
                       ]}
@@ -269,7 +298,7 @@ const formatEdited = (iso: string): string => {
   return "Edited just now";
 };
 
-function SceneCard({ scene }: { scene: SceneSummary }) {
+function SceneCard({ scene, isLinkCopied }: { scene: SceneSummary; isLinkCopied: boolean }) {
   return (
     <Link className="gallery-card" href={`/edit/${encodeURIComponent(scene.sceneId)}`}>
       <div className="gallery-card-thumb">
@@ -284,9 +313,12 @@ function SceneCard({ scene }: { scene: SceneSummary }) {
           <i className="ti ti-cube" />
         </span>
         <span className="gallery-card-text">
-          <span className="gallery-card-name">{scene.name}</span>
-          <span className="gallery-card-meta" title={new Date(scene.updatedAt).toLocaleString()}>
-            {formatEdited(scene.updatedAt)}
+          <span className="gallery-card-title">
+            <span className="gallery-card-name">{scene.name}</span>
+            {scene.publishId && <span className="gallery-card-badge">Published</span>}
+          </span>
+          <span className="gallery-card-meta" title={new Date(scene.updatedAt).toLocaleString()} role="status">
+            {isLinkCopied ? "Share link copied" : formatEdited(scene.updatedAt)}
           </span>
         </span>
       </div>
