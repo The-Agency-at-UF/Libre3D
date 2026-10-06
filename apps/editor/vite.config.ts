@@ -7,20 +7,22 @@ import { createRequire } from "node:module";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
-import { createPublishSession, getPublishedScene, resolveRequestBaseUrl } from "./src/utils/awsPublishHandler";
+import { handlePublishRequest, handlePublishedSceneRequest } from "./src/utils/awsPublishHandler";
 import { handleScenesRequest, type SceneSubresource } from "./src/utils/awsSceneHandler";
-import { verifyAuth } from "./src/utils/verifyAuth";
 
 const editorConfigDir = fileURLToPath(new URL(".", import.meta.url));
 const repoRootDir = path.resolve(editorConfigDir, "../..");
 const threeModulePath = path.resolve(editorConfigDir, "node_modules/three");
 
 // `/api/scenes`, `/api/scenes/:sceneId`, or `/api/scenes/:sceneId/` followed by `lock`,
-// `assets/uploads`, or `assets/downloads`, ignoring any query string.
-const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*)(?:\/(lock|assets\/uploads|assets\/downloads))?)?\/?(?:\?.*)?$/;
+// `assets/uploads`, `assets/downloads`, or `thumbnail`, ignoring any query string.
+const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*)(?:\/(lock|assets\/uploads|assets\/downloads|thumbnail))?)?\/?(?:\?.*)?$/;
+// `/api/scene/:publishId` (the public viewer) and `/api/publish`.
+const PUBLISHED_SCENE_ROUTE_PATTERN = /^\/api\/scene\/([^/?]*)\/?(?:\?.*)?$/;
+const PUBLISH_ROUTE_PATTERN = /^\/api\/publish\/?(?:\?.*)?$/;
 
 const readSubresource = (value: string | undefined): SceneSubresource | null =>
-  value === "lock" || value === "assets/uploads" || value === "assets/downloads" ? value : null;
+  value === "lock" || value === "assets/uploads" || value === "assets/downloads" || value === "thumbnail" ? value : null;
 
 const readRequestBody = (req: NodeJS.ReadableStream): Promise<string> =>
   new Promise<string>((resolve, reject) => {
@@ -37,9 +39,9 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
   configureServer(server) {
     server.middlewares.use(async (req, res, next) => {
       // The dev copy of api/scenes/index.ts, api/scenes/[sceneId]/index.ts,
-      // api/scenes/[sceneId]/lock.ts, and api/scenes/[sceneId]/assets/[action].ts: same
-      // handler, so the two can't drift. Everything route-specific lives in
-      // handleScenesRequest.
+      // api/scenes/[sceneId]/lock.ts, api/scenes/[sceneId]/assets/[action].ts, and
+      // api/scenes/[sceneId]/thumbnail.ts: same handler, so the two can't drift. Everything
+      // route-specific lives in handleScenesRequest.
       const scenesMatch = req.url?.match(SCENES_ROUTE_PATTERN);
 
       if (scenesMatch) {
@@ -65,78 +67,24 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
         return;
       }
 
-      if (req.url && req.url.startsWith("/api/scene/") && req.method === "GET") {
-        const sceneId = req.url.slice("/api/scene/".length);
-        if (!sceneId) {
-          res.statusCode = 400;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: "Missing sceneId parameter" }));
-          return;
-        }
-        try {
-          const sceneData = await getPublishedScene(sceneId, env);
-          if (!sceneData) {
-            res.statusCode = 404;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Scene not found" }));
-            return;
-          }
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ cloudAssetUrl: sceneData.assetUrl }));
-        } catch (error) {
-          console.error("Vite Backend Error:", error);
-          const message = error instanceof Error ? error.message : "Unable to retrieve scene.";
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: message }));
-        }
+      // The dev copy of api/scene/[sceneId].ts (public viewer) and api/publish.ts, around the same
+      // handlers (awsPublishHandler.ts).
+      const publishedMatch = req.url?.match(PUBLISHED_SCENE_ROUTE_PATTERN);
+
+      if (publishedMatch || req.url?.match(PUBLISH_ROUTE_PATTERN)) {
+        const method = req.method ?? "GET";
+        const result = publishedMatch
+          ? await handlePublishedSceneRequest({ method, publishId: decodeURIComponent(publishedMatch[1]) }, env)
+          : await handlePublishRequest({ method, headers: req.headers, body: method === "POST" ? await readRequestBody(req) : "" }, env);
+
+        res.statusCode = result.status;
+        Object.entries(result.headers ?? {}).forEach(([name, value]) => res.setHeader(name, value));
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(result.body));
         return;
       }
 
-      if (req.url === "/api/publish" && req.method === "POST") {
-        const auth = await verifyAuth(req.headers, env);
-
-        if (!auth.authorized) {
-          res.statusCode = auth.status;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: auth.error }));
-          return;
-        }
-
-        try {
-          const bodyStr = await readRequestBody(req);
-
-          let currentPublishId: string | null = null;
-          if (bodyStr) {
-            try {
-              const parsed = JSON.parse(bodyStr);
-              currentPublishId = parsed.currentPublishId || null;
-            } catch {
-              // Ignore invalid JSON
-            }
-          }
-
-          const session = await createPublishSession(env, currentPublishId, resolveRequestBaseUrl(req.headers, env));
-
-          res.statusCode = 200;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify(session));
-        } catch (error) {
-          console.error("Vite Backend Error:", error);
-
-          const message = error instanceof Error ? error.message : "Unable to create publish session.";
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify({ error: message }));
-        }
-        return;
-      }
-
-      if (req.url !== "/api/publish" || req.method !== "POST") {
-        next();
-        return;
-      }
+      next();
     });
   },
 });

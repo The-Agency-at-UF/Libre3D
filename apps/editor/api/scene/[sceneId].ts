@@ -1,44 +1,25 @@
 /**
- * PURPOSE: Vercel serverless entry point for `GET /api/scene/:sceneId`.
+ * PURPOSE: Vercel serverless entry point for `GET /api/scene/:sceneId`, the public viewer's lookup.
  *
- * INPUT: The `sceneId` path segment from a published share link.
- * OUTPUT: `{ cloudAssetUrl }` pointing at the published GLB, which `PublicViewer` hands to
- *         `<model-viewer>`; 404 when the scene is not in DynamoDB.
+ * INPUT: The publish ID from a share link (`/v/:sceneId`). No sign-in.
+ * OUTPUT: `{ cloudAssetUrl }`, a short-lived presigned GET for the published GLB, which
+ *         `PublicViewer` hands to `<model-viewer>`; 404 when nothing is published under that ID.
+ *
+ * A thin adapter around `handlePublishedSceneRequest` (`src/utils/awsPublishHandler.ts`), which the
+ * Vite dev middleware also calls.
  */
 
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 
 // `.js` is required: Vercel runs this under Node's ES module loader (see api/publish.ts).
-import { getPublishedScene } from "../../src/utils/awsPublishHandler.js";
+import { handlePublishedSceneRequest } from "../../src/utils/awsPublishHandler.js";
 
 export default async function handler(req: VercelRequest, res: VercelResponse): Promise<void> {
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET");
-    res.status(405).json({ error: "Method not allowed" });
-    return;
-  }
-
   const rawSceneId = req.query.sceneId;
-  const sceneId = Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId;
+  const publishId = (Array.isArray(rawSceneId) ? rawSceneId[0] : rawSceneId) ?? "";
 
-  if (!sceneId) {
-    res.status(400).json({ error: "Missing sceneId parameter" });
-    return;
-  }
+  const result = await handlePublishedSceneRequest({ method: req.method ?? "GET", publishId }, process.env);
 
-  try {
-    const sceneData = await getPublishedScene(sceneId, process.env);
-
-    if (!sceneData) {
-      res.status(404).json({ error: "Scene not found" });
-      return;
-    }
-
-    res.status(200).json({ cloudAssetUrl: sceneData.assetUrl });
-  } catch (error) {
-    console.error("Scene lookup handler error:", error);
-
-    const message = error instanceof Error ? error.message : "Unable to retrieve scene.";
-    res.status(500).json({ error: message });
-  }
+  Object.entries(result.headers ?? {}).forEach(([name, value]) => res.setHeader(name, value));
+  res.status(result.status).json(result.body);
 }

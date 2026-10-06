@@ -27,12 +27,6 @@ selectedEntityIds: string[]
 ```
 IDs of currently selected entities. Use `selectEntity()` or `selectEntities()` to modify.
 
-### Selection & Publishing
-```typescript
-currentPublishId: string | null
-```
-ID of the open scene's most recent publish (for sharing links). Set via `setCurrentPublishId()`; reset by `loadScene`, and not saved, so it lasts one editing session (the server will own it per scene in PR 6).
-
 ### Viewport State
 ```typescript
 activeTransformTool: "translate" | "rotate" | "scale"
@@ -86,7 +80,7 @@ Named camera positions (viewport bookmarks). Default profile is always "personal
 Replaces the whole scene with a saved one, or with a new scene's starting content (a cube and the default light) when `content` is `null`. Called by `useOpenScene` when `/edit/:sceneId` opens.
 - **Deep merge**: `sceneSettings`, `postProcessing`, and `frame` are merged over the current defaults, so settings added since the scene was saved keep their defaults
 - **Camera profiles**: the "personal" profile is always present; an unknown `activeProfileId` falls back to it
-- **Resets** selection, preview mode, and `currentPublishId`
+- **Resets** selection and preview mode
 - **Clears undo history**: the editor no longer reloads the page between scenes, so Ctrl+Z must not reach into the previous one, and the load itself isn't an undoable step
 - **Works while read-only**: it writes past the read-only guard, so a view-only tab can show the latest saved scene. It leaves `readOnlyReason` as it is
 
@@ -572,7 +566,7 @@ useEditorStore.subscribe(
 - hudOverlay, viewportZoom
 
 **NOT saved** (while the editor is open only):
-- selectedEntityIds, currentPublishId, isPreviewMode, previewGlbUrl
+- selectedEntityIds, isPreviewMode, previewGlbUrl
 - pendingImportCount, readOnlyReason, undo history
 
 ---

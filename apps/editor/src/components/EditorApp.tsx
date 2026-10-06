@@ -128,8 +128,9 @@ interface EditorWorkspaceProps {
 
 function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: EditorWorkspaceProps) {
   const entities = useEditorStore((state) => state.entities) ?? [];
-  const currentPublishId = useEditorStore((state) => state.currentPublishId);
-  const setCurrentPublishId = useEditorStore((state) => state.setCurrentPublishId);
+  // The scene's share link once published. Kept on its row by the server; publishing the first
+  // time sets it, and it never changes after that.
+  const [publishId, setPublishId] = useState<string | null>(scene.publishId ?? null);
   const setEditorState = useEditorStore((state) => state.setEditorState);
   const duplicateEntity = useEditorStore((state) => state.duplicateEntity);
   const sceneSettings = useEditorStore((state) => state.sceneSettings);
@@ -163,7 +164,7 @@ function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: Edito
   }, [previewCamera?.cameraOrbit, previewCamera?.cameraTarget, previewCamera?.fieldOfView]);
 
   // Hook for right sidebar local UI state
-  const sidebarUI = useRightSidebarState(currentPublishId);
+  const sidebarUI = useRightSidebarState();
 
   // Left sidebar width — non-persisted-store UI state (local component state,
   // per the "no parallel stores" rule), persisted like the theme (utils/theme.ts)
@@ -323,17 +324,14 @@ function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: Edito
 
     try {
       // Publishing requires a signed-in user; the server checks the session's access token.
-      const publishResult = await publishLiveScene(liveScene, currentPublishId);
+      const publishResult = await publishLiveScene(liveScene, scene.sceneId);
 
       if (!publishResult) {
         window.alert("There is no exportable mesh content in the current scene.");
         return;
       }
 
-      setCurrentPublishId(publishResult.sceneId);
-      // The server builds this from the request origin, so it carries the right scheme and host
-      // on every deployment instead of assuming http:// and the current window.
-      sidebarUI.setShareUrl(publishResult.shareUrl);
+      setPublishId(publishResult.publishId);
     } catch (error) {
       if (error instanceof ApiAuthError) {
         window.alert(error.message);
@@ -523,7 +521,7 @@ function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: Edito
         setActiveTab={sidebarUI.setActiveTab}
         isExporting={sidebarUI.isExporting}
         isPublishing={sidebarUI.isPublishing}
-        shareUrl={sidebarUI.shareUrl}
+        publishId={publishId}
         isCopied={sidebarUI.isCopied}
         setIsCopied={sidebarUI.setIsCopied}
         handleExportAsset={handleExportAsset}

@@ -8,6 +8,9 @@ import { collectAssetRefs } from "../utils/sceneAssets";
 import { SceneAutosaver, type SaveStatus } from "../utils/sceneAutosave";
 import { clearSceneCache, writeSceneCache } from "../utils/sceneCache";
 import { toSceneDocument, type SceneDocument } from "../utils/sceneDocument";
+import { saveSceneThumbnail } from "../utils/sceneLibrary";
+import { ThumbnailScheduler } from "../utils/sceneThumbnails";
+import { captureViewportThumbnail } from "../viewport/thumbnailCapture";
 
 // How often unsaved edits are copied to this browser's cache while editing continues.
 const CACHE_WRITE_INTERVAL_MS = 500;
@@ -32,6 +35,7 @@ export interface EditSession {
  * saved, a copy stays in this browser (sceneCache.ts) so a closed tab, lost connection, or lost lock
  * can't lose it. Leaving the editor saves right away; closing the tab with unsaved edits asks first.
  * Each save first uploads the imported assets its document uses that the cloud doesn't have yet.
+ * Saves also retake the gallery picture, at most once a minute (ThumbnailScheduler).
  *
  * Returns the save status for the indicator, `retry` (save now), and `flush` (save everything and
  * report whether that worked, e.g. before signing out).
@@ -60,6 +64,10 @@ export function useSceneAutosave(sceneId: string, session: EditSession | null) {
     const ownerId = auth.status === "signedIn" ? auth.userId : null;
     const readDocument = () => toSceneDocument(selectSceneContent(useEditorStore.getState()));
     const uploader = new AssetUploader({ sceneId, confirmed: session.assetHashes });
+    const thumbnails = new ThumbnailScheduler({
+      capture: captureViewportThumbnail,
+      upload: (image) => saveSceneThumbnail(sceneId, image),
+    });
     let cacheTimer: ReturnType<typeof setTimeout> | null = null;
 
     const writeCacheNow = () => {
@@ -87,6 +95,7 @@ export function useSceneAutosave(sceneId: string, session: EditSession | null) {
       onStatus: setStatus,
       onSaved: (revision, hasPendingEdits) => {
         revisionRef.current = revision;
+        thumbnails.noteSaved();
 
         if (hasPendingEdits) {
           // Re-key the copy to the new revision, or reopening would think the cloud moved on.
@@ -140,6 +149,8 @@ export function useSceneAutosave(sceneId: string, session: EditSession | null) {
       void autosaver.saveNow();
       autosaver.dispose();
       autosaverRef.current = null;
+      // The viewport is going too, so there's no picture of this last save to take.
+      thumbnails.dispose();
     };
   }, [sceneId, session]);
 

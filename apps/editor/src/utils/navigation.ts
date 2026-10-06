@@ -28,6 +28,13 @@ export const navigate = (path: string, options: { replace?: boolean } = {}): voi
 
 export const getPathname = (): string => window.location.pathname;
 
+/**
+ * A published scene's public link (`/v/:publishId`, PublicViewer) on this deployment, so local dev,
+ * dev staging, and production each link to themselves.
+ */
+export const shareUrlFor = (publishId: string): string =>
+  new URL(`/v/${encodeURIComponent(publishId)}`, window.location.origin).href;
+
 /** The landing page, remembering that the visitor was headed to `path` before being asked to sign in. */
 export const landingPathFor = (path: string): string => `/?${new URLSearchParams({ [NEXT_PARAM]: path })}`;
 

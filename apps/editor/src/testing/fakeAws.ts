@@ -4,8 +4,9 @@
  *
  * They implement the commands the handlers send, and evaluate the expressions the handlers use
  * (`attribute_exists(x)`, `attribute_not_exists(x)`, `#a = :b`, `a < :b`, `a > :b`, joined by
- * AND / OR with parentheses; `SET a = :b, …` and `REMOVE a, …`) rather than matching on them, so a
- * wrong condition fails a test instead of passing a fake.
+ * AND / OR with parentheses; `SET a = :b, a = if_not_exists(a, :b), …` and `REMOVE a, …`) rather
+ * than matching on them, so a wrong condition fails a test instead of passing a fake.
+ * `FakeDynamoDB` keeps each `TableName` apart, so one instance serves both tables.
  * Query and ListObjectsV2 return small pages so the handlers' pagination loops run.
  *
  * `FakePresigner` stands in for `getSignedUrl` (`@aws-sdk/s3-request-presigner`): it records what
@@ -173,7 +174,27 @@ const meetsCondition = (item: Item | undefined, condition: string | undefined, i
   return result;
 };
 
-/** Applies `SET a = :b, …` and/or `REMOVE a, …`; returns the attributes it changed. */
+// Splits on top-level commas only: `if_not_exists(a, :b)` has one of its own.
+const splitTopLevel = (list: string): string[] => {
+  const parts: string[] = [];
+  let depth = 0;
+  let current = "";
+
+  for (const char of list) {
+    if (char === "," && depth === 0) {
+      parts.push(current);
+      current = "";
+      continue;
+    }
+
+    depth += char === "(" ? 1 : char === ")" ? -1 : 0;
+    current += char;
+  }
+
+  return [...parts, current].map((part) => part.trim()).filter(Boolean);
+};
+
+/** Applies `SET a = :b, a = if_not_exists(a, :b), …` and/or `REMOVE a, …`; returns the attributes it changed. */
 const applyUpdate = (item: Item, expression: string, input: ExpressionInput): string[] => {
   const match = expression.match(/^(?:SET (.+?))?\s*(?:REMOVE (.+))?$/);
 
@@ -181,23 +202,28 @@ const applyUpdate = (item: Item, expression: string, input: ExpressionInput): st
     throw new Error(`Fake DynamoDB: unsupported update expression "${expression}"`);
   }
 
-  const set = (match[1] ?? "")
-    .split(",")
-    .filter((assignment) => assignment.trim())
-    .map((assignment) => {
-      const [name, value] = assignment.split("=").map((part) => part.trim());
-      const attribute = resolveName(name, input);
+  const set = splitTopLevel(match[1] ?? "").map((assignment) => {
+    const [name, value] = assignment.split(/=(.*)/s).map((part) => part.trim());
+    const attribute = resolveName(name, input);
+    const ifNotExists = value.match(/^if_not_exists\((\S+?),\s*(\S+?)\)$/);
+
+    if (ifNotExists) {
+      if (resolveName(ifNotExists[1], input) !== attribute) {
+        throw new Error(`Fake DynamoDB: unsupported if_not_exists in "${assignment}"`);
+      }
+
+      item[attribute] ??= resolveValue(ifNotExists[2], input);
+    } else {
       item[attribute] = resolveValue(value, input);
-      return attribute;
-    });
-  const removed = (match[2] ?? "")
-    .split(",")
-    .filter((name) => name.trim())
-    .map((name) => {
-      const attribute = resolveName(name.trim(), input);
-      delete item[attribute];
-      return attribute;
-    });
+    }
+
+    return attribute;
+  });
+  const removed = splitTopLevel(match[2] ?? "").map((name) => {
+    const attribute = resolveName(name, input);
+    delete item[attribute];
+    return attribute;
+  });
 
   return [...set, ...removed];
 };
@@ -209,18 +235,33 @@ const conditionFailed = (item: Item | undefined, returnOld: boolean) =>
     Item: returnOld ? item : undefined,
   });
 
-/** A user-scenes-shaped table: partition key `userId`, sort key `sceneId`. */
+/**
+ * Any number of tables, told apart by `TableName`. An item's key is `userId` + `sceneId` when it has
+ * a `userId` (user-scenes) and `sceneId` alone otherwise (published-scenes).
+ */
 export class FakeDynamoDB {
+  /** Every table's items, under `<table>|<userId>|<sceneId>`. */
   readonly items = new Map<string, Item>();
   /** Thrown by the next `send`, once (e.g. to simulate an outage). */
   failNextWith: Error | null = null;
 
-  private keyOf(key: Item): string {
-    return `${key.userId?.S}|${key.sceneId?.S}`;
+  private keyOf(table: string | undefined, key: Item): string {
+    return `${table}|${key.userId?.S ?? ""}|${key.sceneId?.S}`;
   }
 
-  getItem(userId: string, sceneId: string): Item | undefined {
-    return this.items.get(`${userId}|${sceneId}`);
+  /** A row of the user-scenes table (`user-scenes` unless the test named it otherwise). */
+  getItem(userId: string, sceneId: string, table = "user-scenes"): Item | undefined {
+    return this.items.get(this.keyOf(table, { userId: { S: userId }, sceneId: { S: sceneId } }));
+  }
+
+  /** A row of the published-scenes table, by publish ID. */
+  getPublished(publishId: string, table = "published-scenes"): Item | undefined {
+    return this.items.get(this.keyOf(table, { sceneId: { S: publishId } }));
+  }
+
+  /** Stores a row as it is, bypassing the handlers (e.g. one written by older code). */
+  putItem(table: string, item: Item): void {
+    this.items.set(this.keyOf(table, item), structuredClone(item));
   }
 
   async send(command: unknown): Promise<unknown> {
@@ -232,19 +273,19 @@ export class FakeDynamoDB {
 
     if (command instanceof PutItemCommand) {
       assertAllUsed(command.input);
-      const { Item: item, ConditionExpression } = command.input;
-      const existing = this.items.get(this.keyOf(item!));
+      const { Item: item, ConditionExpression, TableName } = command.input;
+      const existing = this.items.get(this.keyOf(TableName, item!));
 
       if (!meetsCondition(existing, ConditionExpression, command.input)) {
         throw conditionFailed(existing, false);
       }
 
-      this.items.set(this.keyOf(item!), structuredClone(item!));
+      this.items.set(this.keyOf(TableName, item!), structuredClone(item!));
       return {};
     }
 
     if (command instanceof GetItemCommand) {
-      const item = this.items.get(this.keyOf(command.input.Key!));
+      const item = this.items.get(this.keyOf(command.input.TableName, command.input.Key!));
       return { Item: item ? structuredClone(item) : undefined };
     }
 
@@ -258,8 +299,9 @@ export class FakeDynamoDB {
       }
 
       const userId = resolveValue(keyMatch[1], input).S;
-      const matching = [...this.items.values()]
-        .filter((item) => item.userId?.S === userId)
+      const matching = [...this.items.entries()]
+        .filter(([key, item]) => key.startsWith(`${input.TableName}|`) && item.userId?.S === userId)
+        .map(([, item]) => item)
         .sort((a, b) => a.sceneId!.S!.localeCompare(b.sceneId!.S!));
       const start = input.ExclusiveStartKey
         ? matching.findIndex((item) => item.sceneId?.S === input.ExclusiveStartKey!.sceneId?.S) + 1
@@ -279,7 +321,7 @@ export class FakeDynamoDB {
     if (command instanceof UpdateItemCommand) {
       const input = command.input;
       assertAllUsed(input);
-      const existing = this.items.get(this.keyOf(input.Key!));
+      const existing = this.items.get(this.keyOf(input.TableName, input.Key!));
 
       if (!meetsCondition(existing, input.ConditionExpression, input)) {
         throw conditionFailed(existing, input.ReturnValuesOnConditionCheckFailure === "ALL_OLD");
@@ -288,7 +330,7 @@ export class FakeDynamoDB {
       const before = structuredClone(existing ?? { ...input.Key! });
       const updated = structuredClone(before);
       const changed = applyUpdate(updated, input.UpdateExpression!, input);
-      this.items.set(this.keyOf(input.Key!), updated);
+      this.items.set(this.keyOf(input.TableName, input.Key!), updated);
 
       if (input.ReturnValues === "UPDATED_OLD") {
         return { Attributes: Object.fromEntries(changed.filter((name) => before[name]).map((name) => [name, before[name]])) };
@@ -299,7 +341,7 @@ export class FakeDynamoDB {
 
     if (command instanceof DeleteItemCommand) {
       assertAllUsed(command.input);
-      const key = this.keyOf(command.input.Key!);
+      const key = this.keyOf(command.input.TableName, command.input.Key!);
       const existing = this.items.get(key);
 
       if (!meetsCondition(existing, command.input.ConditionExpression, command.input)) {

@@ -13,7 +13,9 @@ export interface SceneSummary {
   name: string;
   /** ISO 8601 timestamp of the last save. */
   updatedAt: string;
-  /** Short-lived presigned URL for the gallery thumbnail, once scenes have one (PR 6). */
+  /** Set once the scene has been published: its share link is `shareUrlFor(publishId)`. */
+  publishId?: string;
+  /** Short-lived presigned URL for the gallery thumbnail; the list only, once the scene has one. */
   thumbnailUrl?: string;
 }
 
@@ -108,6 +110,29 @@ export const saveScene = (
   void save.catch(() => undefined).finally(() => pendingSaves.delete(save));
 
   return save;
+};
+
+// Base64 in chunks: spreading a whole image into String.fromCharCode overflows the call stack.
+const toBase64 = async (blob: Blob): Promise<string> => {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+
+  for (let start = 0; start < bytes.length; start += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(start, start + 0x8000));
+  }
+
+  return btoa(binary);
+};
+
+/**
+ * Replaces a scene's gallery picture with a JPEG image. Like a save, only works while this tab
+ * holds the scene's editing lock (SceneApiError 423 otherwise, 404 when the scene was deleted).
+ */
+export const saveSceneThumbnail = async (sceneId: string, image: Blob): Promise<void> => {
+  await requestJson(`${scenePath(sceneId)}/thumbnail`, {
+    method: "PUT",
+    body: JSON.stringify({ sessionId: getEditorSessionId(), image: await toBase64(image) }),
+  });
 };
 
 /**

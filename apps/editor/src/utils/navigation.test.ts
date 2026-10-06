@@ -29,6 +29,17 @@ describe("landingPathFor", () => {
   });
 });
 
+describe("shareUrlFor", () => {
+  it("links to the public viewer on this deployment", async () => {
+    browser = stubBrowserGlobals("https://libre3d-editor-git-dev-libre3-d.vercel.app/edit/abc");
+    const { shareUrlFor } = await loadNavigation();
+
+    expect(shareUrlFor("1b2c3d4e-0000-4000-8000-000000000000")).toBe(
+      "https://libre3d-editor-git-dev-libre3-d.vercel.app/v/1b2c3d4e-0000-4000-8000-000000000000",
+    );
+  });
+});
+
 describe("getPostSignInPath", () => {
   it.each([
     ["the remembered deep link", "/?next=%2Fedit%2Fabc", "/edit/abc"],

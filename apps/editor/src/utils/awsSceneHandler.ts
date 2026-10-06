@@ -19,6 +19,8 @@
  *                                            PUTs for the assets the cloud doesn't have yet; 423
  *                                            unless that editor session holds the lock
  *   POST   /api/scenes/:id/assets/downloads  `{ hashes }`: presigned GETs for the scene's assets
+ *   PUT    /api/scenes/:id/thumbnail  `{ sessionId, image }` (base64 JPEG): the gallery picture; 423
+ *                                     unless that editor session holds the lock
  *
  * The lock is a lease on the row (`lockHolder`, `lockUserId`, `lockExpiresAt`): one editor session
  * (a browser tab) holds it for 60 s at a time and renews it while open; saves renew it too. Only the
@@ -39,8 +41,9 @@
  *
  * Ownership is by construction: every row is keyed by the verified token's `sub` (the user-scenes
  * partition key) and every object lives under `users/<sub>/`, so there is no way to name someone
- * else's scene. The document itself is opaque here, apart from finding its assets
- * (`collectAssetHashes`); the editor owns its shape (sceneDocument.ts).
+ * else's scene. A published copy (awsPublishHandler.ts) is found through the row's `publishId`, so
+ * deleting a scene takes its share link down too. The document itself is opaque here, apart from
+ * finding its assets (`collectAssetHashes`); the editor owns its shape (sceneDocument.ts).
  */
 
 import { randomUUID } from "node:crypto";
@@ -75,7 +78,7 @@ import { MAX_ASSET_BYTES, assetHashToBase64, collectAssetHashes, isAssetHash, ty
 import { verifyAuth } from "./verifyAuth.js";
 
 /** What follows `/api/scenes/:sceneId/`, if anything. */
-export type SceneSubresource = "lock" | "assets/uploads" | "assets/downloads";
+export type SceneSubresource = "lock" | "assets/uploads" | "assets/downloads" | "thumbnail";
 
 export interface SceneApiRequest {
   method: string;
@@ -98,11 +101,18 @@ interface SceneSummaryBody {
   sceneId: string;
   name: string;
   updatedAt: string;
+  /** Set once the scene has been published; its share link is `/v/<publishId>`. */
+  publishId?: string;
+  /** Short-lived presigned GET for the gallery picture (the list only). */
+  thumbnailUrl?: string;
 }
 
-interface SceneConfig {
+export interface SceneConfig {
   bucketName: string;
+  /** user-scenes */
   tableName: string;
+  /** published-scenes: publish ID → published GLB and its owner. */
+  publishedTableName: string;
   s3: S3Client;
   dynamo: DynamoDBClient;
 }
@@ -126,22 +136,27 @@ const MAX_ASSETS_PER_REQUEST = 100;
 // Per scene. Each new one costs a HEAD on the save that adds it, and they're all listed on the row.
 const MAX_SCENE_ASSETS = 500;
 const ASSET_CONTENT_TYPES: Record<AssetKind, string> = { model: "model/gltf-binary", texture: "image/png" };
+// A 480×270 JPEG is tens of kB; this only stops something that isn't a thumbnail.
+const MAX_THUMBNAIL_BYTES = 256 * 1024;
+// How long a gallery picture's URL works. The gallery asks for new ones each time it loads.
+const THUMBNAIL_URL_TTL_SECONDS = 900;
 
-const json = (status: number, body: unknown, headers?: Record<string, string>): SceneApiResponse => ({
+export const json = (status: number, body: unknown, headers?: Record<string, string>): SceneApiResponse => ({
   status,
   body,
   headers,
 });
 
-const errorResponse = (status: number, error: string, extra: Record<string, unknown> = {}): SceneApiResponse =>
+export const errorResponse = (status: number, error: string, extra: Record<string, unknown> = {}): SceneApiResponse =>
   json(status, { error, ...extra });
 
-const readConfig = (env: ServerEnv): SceneConfig => {
+export const readSceneConfig = (env: ServerEnv): SceneConfig => {
   const access = readAwsAccess(env);
 
   return {
     bucketName: readRequiredEnv(env, "S3_BUCKET_NAME"),
     tableName: readRequiredEnv(env, "USER_SCENES_TABLE_NAME"),
+    publishedTableName: readRequiredEnv(env, "PUBLISHED_SCENES_TABLE_NAME"),
     s3: createS3Client(access),
     dynamo: createDynamoClient(access),
   };
@@ -149,7 +164,7 @@ const readConfig = (env: ServerEnv): SceneConfig => {
 
 // ---- Request parsing ------------------------------------------------------------------------
 
-const parseBody = (body: unknown): Record<string, unknown> => {
+export const parseBody = (body: unknown): Record<string, unknown> => {
   let parsed: unknown = body;
 
   if (typeof body === "string") {
@@ -168,6 +183,9 @@ const parseBody = (body: unknown): Record<string, unknown> => {
     ? (parsed as Record<string, unknown>)
     : {};
 };
+
+/** Scene and publish IDs are UUIDs made by the server; anything else can't name one. */
+export const isSceneId = (value: unknown): value is string => typeof value === "string" && SCENE_ID_PATTERN.test(value);
 
 const readSessionId = (value: unknown): string | null =>
   typeof value === "string" && SESSION_ID_PATTERN.test(value) ? value : null;
@@ -212,8 +230,8 @@ const checkDocument = (value: unknown): DocumentCheck => {
 
 // ---- Storage helpers ------------------------------------------------------------------------
 
-// Everything stored for one scene starts with this prefix (document versions, later the thumbnail),
-// so deleting a scene is one prefix sweep.
+// Everything stored for one scene starts with this prefix (document versions, the thumbnail), so
+// deleting a scene is one prefix sweep. Its published copy lives elsewhere (publishedGlbKey).
 const sceneObjectPrefix = (userId: string, sceneId: string): string => `users/${userId}/scenes/${sceneId}.`;
 
 // Each save writes a new object and then points the row at it, so a save that loses the revision
@@ -221,7 +239,12 @@ const sceneObjectPrefix = (userId: string, sceneId: string): string => `users/${
 const newDocumentKey = (userId: string, sceneId: string): string =>
   `${sceneObjectPrefix(userId, sceneId)}${randomUUID()}.json`;
 
-const rowKey = (userId: string, sceneId: string): Record<string, AttributeValue> => ({
+const thumbnailKey = (userId: string, sceneId: string): string => `${sceneObjectPrefix(userId, sceneId)}thumb.jpg`;
+
+/** Where a published scene's GLB lives. Outside `users/`: the public viewer reads it by publish ID. */
+export const publishedGlbKey = (publishId: string): string => `scenes/${publishId}.glb`;
+
+export const rowKey = (userId: string, sceneId: string): Record<string, AttributeValue> => ({
   userId: { S: userId },
   sceneId: { S: sceneId },
 });
@@ -245,6 +268,7 @@ const toSummary = (item: Record<string, AttributeValue>): SceneSummaryBody => ({
   sceneId: item.sceneId?.S ?? "",
   name: item.name?.S ?? DEFAULT_SCENE_NAME,
   updatedAt: item.updatedAt?.S ?? "",
+  publishId: item.publishId?.S,
 });
 
 const putDocument = async (config: SceneConfig, key: string, serialized: string): Promise<void> => {
@@ -328,7 +352,7 @@ const checkDocumentAssets = async (
 // ---- Route handlers -------------------------------------------------------------------------
 
 const listScenes = async (config: SceneConfig, userId: string): Promise<SceneApiResponse> => {
-  const scenes: SceneSummaryBody[] = [];
+  const items: Record<string, AttributeValue>[] = [];
   let exclusiveStartKey: Record<string, AttributeValue> | undefined;
 
   do {
@@ -338,14 +362,28 @@ const listScenes = async (config: SceneConfig, userId: string): Promise<SceneApi
         KeyConditionExpression: "userId = :userId",
         ExpressionAttributeValues: { ":userId": { S: userId } },
         ExpressionAttributeNames: { "#name": "name" },
-        ProjectionExpression: "sceneId, #name, updatedAt",
+        ProjectionExpression: "sceneId, #name, updatedAt, publishId, thumbnailKey",
         ExclusiveStartKey: exclusiveStartKey,
       }),
     );
 
-    page.Items?.forEach((item) => scenes.push(toSummary(item)));
+    items.push(...(page.Items ?? []));
     exclusiveStartKey = page.LastEvaluatedKey;
   } while (exclusiveStartKey);
+
+  // Signing is local (no request to S3), so a URL per scene costs next to nothing.
+  const scenes = await Promise.all(
+    items.map(async (item): Promise<SceneSummaryBody> => {
+      const key = item.thumbnailKey?.S;
+      const thumbnailUrl = key
+        ? await getSignedUrl(config.s3, new GetObjectCommand({ Bucket: config.bucketName, Key: key }), {
+            expiresIn: THUMBNAIL_URL_TTL_SECONDS,
+          })
+        : undefined;
+
+      return { ...toSummary(item), thumbnailUrl };
+    }),
+  );
 
   // The sort key is sceneId, so order here. A user has tens of scenes, not thousands.
   scenes.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
@@ -570,9 +608,53 @@ const renameScene = async (
   return json(200, { name });
 };
 
-const deleteScene = async (config: SceneConfig, userId: string, sceneId: string): Promise<SceneApiResponse> => {
+/**
+ * Takes a published scene down: its published-scenes row and its GLB. Only the owner's: the row's
+ * `ownerId` must be them (or the row is already gone).
+ */
+const unpublishScene = async (config: SceneConfig, userId: string, publishId: string): Promise<void> => {
   try {
-    // The row first: it's what the gallery lists, so the scene disappears even if S3 cleanup fails.
+    await config.dynamo.send(
+      new DeleteItemCommand({
+        TableName: config.publishedTableName,
+        Key: { sceneId: { S: publishId } },
+        ConditionExpression: "attribute_not_exists(sceneId) OR ownerId = :owner",
+        ExpressionAttributeValues: { ":owner": { S: userId } },
+      }),
+    );
+  } catch (error) {
+    if (error instanceof ConditionalCheckFailedException) {
+      // Can't happen while publish IDs come only from the owner's row; never touch someone else's.
+      console.error(`Publish ID ${publishId} on ${userId}'s scene belongs to someone else`);
+      return;
+    }
+
+    throw error;
+  }
+
+  await config.s3.send(new DeleteObjectCommand({ Bucket: config.bucketName, Key: publishedGlbKey(publishId) }));
+};
+
+const deleteScene = async (config: SceneConfig, userId: string, sceneId: string): Promise<SceneApiResponse> => {
+  const { Item: item } = await config.dynamo.send(
+    new GetItemCommand({ TableName: config.tableName, Key: rowKey(userId, sceneId), ConsistentRead: true }),
+  );
+
+  if (!item) {
+    return errorResponse(404, "Scene not found.");
+  }
+
+  // The share link first: if this fails, the scene is still there to delete again, rather than gone
+  // with its public copy left up and nothing pointing at it.
+  const publishId = item.publishId?.S;
+
+  if (publishId) {
+    await unpublishScene(config, userId, publishId);
+  }
+
+  try {
+    // Then the row, before the scene's objects: it's what the gallery lists, so the scene disappears
+    // even if S3 cleanup fails.
     await config.dynamo.send(
       new DeleteItemCommand({
         TableName: config.tableName,
@@ -859,6 +941,68 @@ const prepareDownloads = async (
   return json(200, { downloads, unavailable: hashes.filter((hash) => !available.has(hash)) });
 };
 
+// JPEG files start with the SOI marker and the first segment's marker: FF D8 FF.
+const isJpeg = (bytes: Buffer): boolean => bytes.length > 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+
+const saveThumbnail = async (
+  config: SceneConfig,
+  userId: string,
+  sceneId: string,
+  body: Record<string, unknown>,
+): Promise<SceneApiResponse> => {
+  const sessionId = readSessionId(body.sessionId);
+
+  if (!sessionId) {
+    return errorResponse(400, "sessionId must be this editor session's ID.");
+  }
+
+  const image = typeof body.image === "string" ? Buffer.from(body.image, "base64") : null;
+
+  if (!image || !isJpeg(image)) {
+    return errorResponse(400, "image must be a base64 JPEG picture.");
+  }
+
+  if (image.length > MAX_THUMBNAIL_BYTES) {
+    return errorResponse(413, "This thumbnail is too large.");
+  }
+
+  // One fixed key per scene, replaced each time. Written first so the row never points at a picture
+  // that isn't there; a tab without the lock (refused just below) only replaces this user's own
+  // picture of their own scene.
+  const key = thumbnailKey(userId, sceneId);
+  await config.s3.send(
+    new PutObjectCommand({ Bucket: config.bucketName, Key: key, Body: image, ContentType: "image/jpeg" }),
+  );
+
+  try {
+    // Like a save: lock holder only, and it renews the lease. Not an edit, so updatedAt stays.
+    await config.dynamo.send(
+      new UpdateItemCommand({
+        TableName: config.tableName,
+        Key: rowKey(userId, sceneId),
+        UpdateExpression: "SET thumbnailKey = :key, lockExpiresAt = :expires",
+        ConditionExpression: "attribute_exists(sceneId) AND lockHolder = :session",
+        ExpressionAttributeValues: { ":key": { S: key }, ":session": { S: sessionId }, ":expires": { N: lockExpiry() } },
+        ReturnValuesOnConditionCheckFailure: "ALL_OLD",
+      }),
+    );
+  } catch (error) {
+    if (!(error instanceof ConditionalCheckFailedException)) {
+      throw error;
+    }
+
+    if (!error.Item) {
+      // Deleted meanwhile: don't leave the picture behind the delete's sweep.
+      await deleteObjectQuietly(config, key);
+      return errorResponse(404, "Scene not found.");
+    }
+
+    return lockedResponse(error.Item, userId);
+  }
+
+  return json(200, { saved: true });
+};
+
 // ---- Dispatch -------------------------------------------------------------------------------
 
 export const handleScenesRequest = async (request: SceneApiRequest, env: ServerEnv): Promise<SceneApiResponse> => {
@@ -870,9 +1014,11 @@ export const handleScenesRequest = async (request: SceneApiRequest, env: ServerE
       ? ["GET", "POST"]
       : isLock
         ? ["POST", "DELETE"]
-        : subresource
-          ? ["POST"]
-          : ["GET", "PUT", "PATCH", "DELETE"];
+        : subresource === "thumbnail"
+          ? ["PUT"]
+          : subresource
+            ? ["POST"]
+            : ["GET", "PUT", "PATCH", "DELETE"];
 
   if (!allowed.includes(method)) {
     return json(405, { error: "Method not allowed" }, { Allow: allowed.join(", ") });
@@ -884,12 +1030,12 @@ export const handleScenesRequest = async (request: SceneApiRequest, env: ServerE
     return errorResponse(auth.status, auth.error);
   }
 
-  if (request.sceneId !== null && !SCENE_ID_PATTERN.test(request.sceneId)) {
+  if (request.sceneId !== null && !isSceneId(request.sceneId)) {
     return errorResponse(404, "Scene not found.");
   }
 
   try {
-    const config = readConfig(env);
+    const config = readSceneConfig(env);
     const body = parseBody(request.body);
 
     if (request.sceneId === null) {
@@ -908,6 +1054,10 @@ export const handleScenesRequest = async (request: SceneApiRequest, env: ServerE
 
     if (subresource === "assets/downloads") {
       return await prepareDownloads(config, auth.userId, request.sceneId, body);
+    }
+
+    if (subresource === "thumbnail") {
+      return await saveThumbnail(config, auth.userId, request.sceneId, body);
     }
 
     switch (method) {
