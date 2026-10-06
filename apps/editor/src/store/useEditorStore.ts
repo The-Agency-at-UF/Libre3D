@@ -976,12 +976,21 @@ export const useEditorStore = create<EditorState>()(
               ),
             })),
           toggleLock: (id) =>
-            set((state) => ({
-              entities: state.entities.map((entity) =>
-                entity.id === id ? { ...entity, locked: !entity.locked } : entity,
-              ),
-              selectedEntityIds: state.selectedEntityIds.filter(selId => selId !== id),
-            })),
+            set((state) => {
+              const target = state.entities.find((entity) => entity.id === id);
+              // Locking a group locks its subtree (see isEffectivelyLocked), so
+              // drop any selected descendants along with the entity itself.
+              const deselect = new Set([id]);
+              if (target && !target.locked) {
+                getDescendantIds(state.entities, id).forEach((descId) => deselect.add(descId));
+              }
+              return {
+                entities: state.entities.map((entity) =>
+                  entity.id === id ? { ...entity, locked: !entity.locked } : entity,
+                ),
+                selectedEntityIds: state.selectedEntityIds.filter((selId) => !deselect.has(selId)),
+              };
+            }),
           renameEntity: (id, newName) =>
             set((state) => ({
               entities: state.entities.map((entity) =>

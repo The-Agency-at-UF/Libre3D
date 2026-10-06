@@ -631,6 +631,15 @@
   background: transparent;
 }
 
+/* Locked via a parent group: dimmed amber, not toggleable on its own. */
+.hierarchy-action-btn.inherited-locked {
+  color: rgba(251, 191, 36, 0.45);
+}
+
+.hierarchy-action-btn.inherited-locked:disabled {
+  cursor: not-allowed;
+}
+
 .editor-tree-delete:disabled {
   opacity: 0.3;
   cursor: not-allowed;
@@ -1385,7 +1394,8 @@
 
 /* Force visible if locked or hidden to keep feedback correct */
 .editor-tree-item .hierarchy-action-btn.inactive,
-.editor-tree-item .hierarchy-action-btn.active-locked {
+.editor-tree-item .hierarchy-action-btn.active-locked,
+.editor-tree-item .hierarchy-action-btn.inherited-locked {
   opacity: 1 !important;
 }
 

@@ -103,8 +103,16 @@ export function useViewportRaycaster(
         }
       });
 
+      // Resolve each hit to its selection root, exactly like a click does: the
+      // outermost enclosing group, or an imported model's root. Without this,
+      // box-select grabbed every registered node inside the rect — including
+      // the hidden internals of a collapsed model (whole bone chains) — so the
+      // selection didn't match what the hierarchy showed or what a click picks.
+      const state = useEditorStore.getState();
+      const rootIds = [...new Set(hitIds.map((id) => getSelectionRootId(state.entities, id)))];
+
       const mode = event.shiftKey ? "add" : event.ctrlKey || event.metaKey ? "subtract" : "replace";
-      useEditorStore.getState().selectEntities(hitIds, mode);
+      state.selectEntities(rootIds, mode);
     };
 
     const onPointerDown = (event: PointerEvent) => {
