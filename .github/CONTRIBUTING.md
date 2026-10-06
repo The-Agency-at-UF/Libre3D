@@ -115,17 +115,26 @@ Pull the branch and actually run it — don't review from the diff alone. Then c
 
 ---
 
-## AWS setup (publish / share only)
+## Running it locally (sign-in and AWS)
 
-The publish and share features talk to S3 and DynamoDB through Vite dev middleware. Everything else in the editor works without this. To enable them, put a `.env` in the repo root:
+The editor needs a signed-in account: scenes, imported models, and published links are all stored in AWS. Locally, `pnpm dev` talks to the **dev** stack (never production) through Vite dev middleware. Two things come from the maintainer:
+
+- **An invitation** to the dev user pool. Accounts are invite-only, with an authenticator app (TOTP) required.
+- **The root `.env`**, which is gitignored:
 
 ```
-AWS_REGION=your-region
-AWS_ACCESS_KEY_ID=your-access-key
-AWS_SECRET_ACCESS_KEY=your-secret-key
-S3_BUCKET_NAME=your-bucket
-DYNAMODB_TABLE_NAME=your-table
+AWS_REGION=us-east-2
+VITE_COGNITO_USER_POOL_ID=...
+VITE_COGNITO_CLIENT_ID=...
+VITE_COGNITO_DOMAIN=...
+S3_BUCKET_NAME=...
+USER_SCENES_TABLE_NAME=...
+PUBLISHED_SCENES_TABLE_NAME=...
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
 ```
+
+The values are the `Libre3d-dev` stack's outputs (see `infra/`). The access key belongs to the dev-only `libre3d-dev-local` user, which can reach the dev bucket and tables and nothing else. Sign-in only works at `http://localhost:5173`.
 
 ---
 
