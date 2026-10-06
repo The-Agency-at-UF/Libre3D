@@ -104,7 +104,7 @@ All three live in [`src/viewport/`](../apps/editor/src/viewport/) and are plain 
 new SceneManager(initialSettings: EditorState["sceneSettings"])
 
 scene: THREE.Scene            // public — the live scene
-gridHelper: THREE.GridHelper  // public — the XZ grid (X axis red, Z axis blue)
+grid: InfiniteGrid           // public — shader-drawn infinite XZ grid (X axis red, Z axis blue)
 
 updateBackground(color: string)
 updateFog(enabled: boolean, color: string)
