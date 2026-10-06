@@ -196,20 +196,10 @@ describe("create and list", () => {
     expect(dynamo.getItem("alice", capped)?.name?.S).toHaveLength(120);
   });
 
-  it("creates a scene with a document (the pre-cloud upload) at revision 1", async () => {
-    const sceneId = await createScene({ document: sceneDocument("legacy") });
+  it("ignores a document sent with create: a new scene is empty until its first save", async () => {
+    const sceneId = await createScene({ document: sceneDocument("ignored") });
 
-    await expect(call("GET", { sceneId })).resolves.toMatchObject({
-      body: { scene: { revision: 1 }, document: sceneDocument("legacy") },
-    });
-    expect(objectsOf("alice", sceneId)).toHaveLength(1);
-  });
-
-  it("rejects an invalid document on create without writing a row or an object", async () => {
-    const response = await call("POST", { body: { document: { not: "a scene" } } });
-
-    expect(response.status).toBe(400);
-    expect(dynamo.items.size).toBe(0);
+    await expect(call("GET", { sceneId })).resolves.toMatchObject({ body: { scene: { revision: 0 }, document: null } });
     expect(s3.objects.size).toBe(0);
   });
 
@@ -402,7 +392,9 @@ describe("editing lock", () => {
   const NOW = Date.parse("2026-10-03T12:00:00.000Z");
 
   it("claims a free lock for 60 s, records who holds it, and returns the scene's revision", async () => {
-    const sceneId = await createScene({ document: sceneDocument("doc") });
+    const sceneId = await createLockedScene();
+    await save(sceneId, "doc", 0);
+    await release(sceneId);
 
     await expect(claim(sceneId)).resolves.toEqual({ status: 200, body: { revision: 1 }, headers: undefined });
     expect(dynamo.getItem("alice", sceneId)).toMatchObject({
@@ -412,7 +404,7 @@ describe("editing lock", () => {
     });
   });
 
-  it("renews the holder's lease (the heartbeat, or a reload of the same tab)", async () => {
+  it("renews the holder's lease (the heartbeat)", async () => {
     const sceneId = await createLockedScene();
     vi.setSystemTime(NOW + 20_000);
 
@@ -739,19 +731,6 @@ describe("saving a scene's assets", () => {
     const hashes = Array.from({ length: 501 }, (_unused, index) => index.toString(16).padStart(64, "0"));
 
     await expect(saveDocument(sceneId, documentUsing("big", { models: hashes }), 0)).resolves.toMatchObject({ status: 413 });
-  });
-
-  it("applies the same rule to a scene created with a document", async () => {
-    await expect(call("POST", { body: { document: documentUsing("legacy", { models: [MODEL] }) } })).resolves.toMatchObject({
-      status: 422,
-      body: { missingAssets: [MODEL] },
-    });
-    expect(dynamo.items.size).toBe(0);
-    expect(s3.keysUnder("users/alice/scenes/")).toEqual([]);
-
-    storeAsset(MODEL);
-    const sceneId = await createScene({ document: documentUsing("legacy", { models: [MODEL] }) });
-    expect(assetHashesOf(sceneId)).toEqual([MODEL]);
   });
 
   it("keeps a scene's assets when the scene is deleted: other scenes may use them", async () => {

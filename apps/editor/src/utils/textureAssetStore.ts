@@ -35,7 +35,3 @@ export function hasTextureAsset(textureAssetId: string): Promise<boolean> {
 export function deleteTextureAsset(textureAssetId: string): Promise<void> {
   return store.remove(textureAssetId);
 }
-
-export function listTextureAssetIds(): Promise<string[]> {
-  return store.listIds();
-}

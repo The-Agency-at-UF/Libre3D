@@ -72,8 +72,8 @@ export const listScenes = async (): Promise<SceneSummary[]> => {
   return scenes;
 };
 
-/** Creates a scene; `document` only when uploading a scene saved in the browser before cloud saving. */
-export const createScene = async (options: { name?: string; document?: unknown } = {}): Promise<SceneSummary> =>
+/** Creates an empty scene (revision 0); its first save gives it a document. */
+export const createScene = async (options: { name?: string } = {}): Promise<SceneSummary> =>
   requestJson<SceneSummary>(SCENES_ENDPOINT, { method: "POST", body: JSON.stringify(options) });
 
 /**

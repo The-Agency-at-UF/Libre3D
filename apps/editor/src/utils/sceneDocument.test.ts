@@ -3,7 +3,6 @@ import type { Entity } from "../store/useEditorStore";
 import {
   CURRENT_SCENE_SCHEMA_VERSION,
   SCENE_DOCUMENT_FORMAT,
-  hasSceneContent,
   parseSceneDocument,
   toSceneDocument,
   type SceneContent,
@@ -110,19 +109,5 @@ describe("toSceneDocument / parseSceneDocument", () => {
         activeProfileId: undefined,
       },
     });
-  });
-});
-
-describe("hasSceneContent", () => {
-  it("is false for an empty scene, lights only, or the untouched starter cube", () => {
-    expect(hasSceneContent([])).toBe(false);
-    expect(hasSceneContent([light])).toBe(false);
-    expect(hasSceneContent([makeEntity("cube-1"), light])).toBe(false);
-  });
-
-  it("is true once the starter cube is moved, renamed, or joined by anything else", () => {
-    expect(hasSceneContent([makeEntity("cube-1", { position: [0, 1, 0] }), light])).toBe(true);
-    expect(hasSceneContent([makeEntity("cube-1", { name: "Box" })])).toBe(true);
-    expect(hasSceneContent([makeEntity("cube-1"), makeEntity("sphere-1", { type: "sphere", name: "Sphere" })])).toBe(true);
   });
 });

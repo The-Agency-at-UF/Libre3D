@@ -50,13 +50,13 @@ describe("requests", () => {
     expect(lastCall()).toMatchObject({ path: "/api/scenes", method: "GET" });
   });
 
-  it("creates a scene, optionally from a document", async () => {
+  it("creates a scene", async () => {
     apiFetchMock.mockResolvedValueOnce(jsonResponse({ sceneId: "new", name: "Untitled scene", updatedAt: "t" }, 201));
 
-    await expect(createScene({ name: "Untitled scene", document: { format: "libre3d.scene" } })).resolves.toMatchObject({ sceneId: "new" });
+    await expect(createScene({ name: "Untitled scene" })).resolves.toMatchObject({ sceneId: "new" });
 
     const request = lastCall();
-    expect(request).toMatchObject({ path: "/api/scenes", method: "POST", body: { name: "Untitled scene", document: { format: "libre3d.scene" } } });
+    expect(request).toMatchObject({ path: "/api/scenes", method: "POST", body: { name: "Untitled scene" } });
     expect(request.headers.get("Content-Type")).toBe("application/json");
   });
 

@@ -33,7 +33,3 @@ export function hasModelAsset(assetId: string): Promise<boolean> {
 export function deleteModelAsset(assetId: string): Promise<void> {
   return store.remove(assetId);
 }
-
-export function listModelAssetIds(): Promise<string[]> {
-  return store.listIds();
-}
