@@ -5,7 +5,6 @@ import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
 import type { Entity } from "./useEditorStore";
 
 const EDITOR_KEY = "libre3d-scene-state";
-const LEGACY_KEY = "libre3d-legacy-scene";
 const PREFERENCE_KEYS = ["activeTransformTool", "hudOverlay", "projectionMode", "transformSpace", "viewportZoom"];
 
 let browser: BrowserStubs;
@@ -18,7 +17,6 @@ const loadStore = async () => {
 };
 
 const persisted = () => JSON.parse(browser.localStorage.getItem(EDITOR_KEY) ?? "null");
-const legacyScene = () => JSON.parse(browser.localStorage.getItem(LEGACY_KEY) ?? "null");
 
 const entity = (id: string, overrides: Partial<Entity> = {}): Entity => ({
   id,
@@ -40,8 +38,6 @@ const seedEditorState = (state: Record<string, unknown>, version: number) =>
 
 beforeEach(() => {
   browser = stubBrowserGlobals();
-  // The migration has a leftover diagnostic log; keep test output clean.
-  vi.spyOn(console, "log").mockImplementation(() => undefined);
 });
 
 afterEach(() => {
@@ -50,15 +46,13 @@ afterEach(() => {
 });
 
 describe("persist v17 migration", () => {
-  it("moves a v16 scene with content to the legacy key and keeps only editor preferences", async () => {
+  it("keeps only editor preferences from an older blob; the scene saved there is dropped", async () => {
     seedEditorState(
       {
         entities: [entity("cube-1", { position: [1, 2, 3] }), light, entity("sphere-1", { type: "sphere", name: "Sphere" })],
         selectedEntityIds: ["cube-1"],
         currentPublishId: "publish-1",
         sceneSettings: { bgColor: "#123456" },
-        cameraProfiles: { personal: { id: "personal", name: "Personal Camera", position: [1, 1, 1], target: [0, 0, 0], fov: 50, near: 0.1, far: 500, zoom: 1 } },
-        activeProfileId: "personal",
         projectionMode: "orthographic",
         viewportZoom: 66,
       },
@@ -66,57 +60,26 @@ describe("persist v17 migration", () => {
     );
 
     const { useEditorStore } = await loadStore();
+    const state = useEditorStore.getState();
 
     expect(persisted().version).toBe(17);
     expect(Object.keys(persisted().state).sort()).toEqual(PREFERENCE_KEYS);
-    expect(useEditorStore.getState()).toMatchObject({ projectionMode: "orthographic", viewportZoom: 66, currentPublishId: null });
-
-    const stashed = parseSceneDocument(legacyScene());
-    expect(stashed.ok && stashed.content.entities.map((e) => e.name)).toEqual(["Cube", "Directional Light", "Sphere"]);
-    expect(stashed.ok && stashed.content.sceneSettings?.bgColor).toBe("#123456");
-    expect(stashed.ok && stashed.content.cameraProfiles?.personal.fov).toBe(50);
+    expect(state).toMatchObject({ projectionMode: "orthographic", viewportZoom: 66, currentPublishId: null, selectedEntityIds: [] });
+    // The starter scene, not the old one: scenes are opened from the cloud.
+    expect(state.entities.map((e) => e.type)).toEqual(["cube", "directionalLight"]);
+    expect(state.sceneSettings.bgColor).not.toBe("#123456");
   });
 
-  it("drops an untouched starter scene instead of offering it for upload", async () => {
-    seedEditorState({ entities: [entity("cube-1"), light], viewportZoom: 100 }, 16);
+  it("drops the stray keys of a much older blob (v11) instead of merging them into the store", async () => {
+    seedEditorState({ selectedEntityId: "box", bgColor: "#ff0000", toneMap: "ACES Filmic", viewportZoom: 80 }, 11);
 
-    await loadStore();
+    const { useEditorStore } = await loadStore();
+    const state = useEditorStore.getState() as unknown as Record<string, unknown>;
 
-    expect(persisted().version).toBe(17);
-    expect(legacyScene()).toBeNull();
-  });
-
-  it("never replaces a scene that's already set aside", async () => {
-    browser.localStorage.setItem(LEGACY_KEY, JSON.stringify({ kept: true }));
-    seedEditorState({ entities: [entity("sphere-1", { type: "sphere", name: "Sphere" })] }, 16);
-
-    await loadStore();
-
-    expect(legacyScene()).toEqual({ kept: true });
-  });
-
-  it("runs an old blob (v11) through every earlier migration before setting the scene aside", async () => {
-    seedEditorState(
-      {
-        entities: [
-          { id: "box", type: "cube", name: "Box", position: [0, 1, 0], rotation: [0, 0, 0], scale: [1, 1, 1], color: "#ff0000" },
-          { ...light, parentId: undefined },
-        ],
-        selectedEntityId: "box",
-      },
-      11,
-    );
-
-    await loadStore();
-
-    const stashed = parseSceneDocument(legacyScene());
-    const box = stashed.ok ? stashed.content.entities.find((e) => e.id === "box") : undefined;
-
-    // v12: a color becomes material layers; v14: parentId defaults to null.
-    expect(box?.color).toBeUndefined();
-    expect(box?.materialLayers?.map((layer) => layer.type)).toEqual(["color", "lighting"]);
-    expect(box?.parentId).toBeNull();
-    expect(persisted().version).toBe(17);
+    expect(state.viewportZoom).toBe(80);
+    expect(state).not.toHaveProperty("selectedEntityId");
+    expect(state).not.toHaveProperty("bgColor");
+    expect(state).not.toHaveProperty("toneMap");
   });
 
   it("writes the migrated state back right away, so the next load doesn't migrate again", async () => {
@@ -134,7 +97,6 @@ describe("persist v17 migration", () => {
 
     expect(useEditorStore.persist.hasHydrated()).toBe(true);
     expect(useEditorStore.getState().entities.map((e) => e.type)).toEqual(["cube", "directionalLight"]);
-    expect(legacyScene()).toBeNull();
   });
 
   it("saves only editor preferences while editing; the scene goes to the cloud instead", async () => {

@@ -6,7 +6,7 @@
  *
  * Routes (all require sign-in):
  *   GET    /api/scenes       the caller's scenes, newest first
- *   POST   /api/scenes       create one `{ name?, document? }`
+ *   POST   /api/scenes       create one `{ name? }` (empty: revision 0 until its first save)
  *   GET    /api/scenes/:id   one scene's row and document (`null` until its first save)
  *   PUT    /api/scenes/:id   save `{ document, baseRevision, sessionId }`; 423 unless that editor
  *                             session holds the lock, 409 when another save got there first
@@ -295,8 +295,8 @@ const findMissingAssets = async (config: SceneConfig, userId: string, hashes: st
 
 type AssetCheck = { ok: true; hashes: string[] } | { ok: false; response: SceneApiResponse };
 
-// A document may only name assets the cloud has, so the scene opens complete anywhere. Those the
-// row already lists were checked by an earlier save, so only new ones are looked up.
+// A saved document may only name assets the cloud has, so the scene opens complete anywhere. Those
+// the row already lists were checked by an earlier save, so only new ones are looked up.
 const checkDocumentAssets = async (
   config: SceneConfig,
   userId: string,
@@ -369,31 +369,6 @@ const createScene = async (
     // Revision 0 = no document yet; the editor opens the default scene and its first save makes 1.
     revision: { N: "0" },
   };
-
-  // Only the one-time upload of a scene saved in the browser before cloud saving sends a document.
-  if (body.document !== undefined) {
-    const check = checkDocument(body.document);
-
-    if (!check.ok) {
-      return check.response;
-    }
-
-    const assets = await checkDocumentAssets(config, userId, body.document, new Set());
-
-    if (!assets.ok) {
-      return assets.response;
-    }
-
-    const documentKey = newDocumentKey(userId, sceneId);
-    await putDocument(config, documentKey, check.serialized);
-    item.revision = { N: "1" };
-    item.documentKey = { S: documentKey };
-    item.schemaVersion = { N: String(check.schemaVersion) };
-
-    if (assets.hashes.length > 0) {
-      item.assetHashes = { SS: assets.hashes };
-    }
-  }
 
   await config.dynamo.send(
     new PutItemCommand({

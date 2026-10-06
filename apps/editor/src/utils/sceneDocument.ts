@@ -1,6 +1,6 @@
 /**
- * PURPOSE: The saved form of a scene: what goes to the cloud (`/api/scenes/:id`), the local cache of
- * the open scene, and the one-time upload of a scene saved in the browser before cloud saving.
+ * PURPOSE: The saved form of a scene: what goes to the cloud (`/api/scenes/:id`), and the local copy
+ * of the open scene's unsaved edits.
  *
  * INPUT: The scene content from the store (`toSceneDocument`), or a document read back from
  *        anywhere (`parseSceneDocument`, which migrates it to the current schema).
@@ -128,23 +128,4 @@ export const parseSceneDocument = (raw: unknown): ParsedSceneDocument => {
       activeProfileId: typeof scene.activeProfileId === "string" ? scene.activeProfileId : undefined,
     },
   };
-};
-
-const isPristineDefaultCube = (entity: Entity): boolean =>
-  entity.type === "cube" &&
-  entity.name === "Cube" &&
-  !entity.parentId &&
-  entity.position.every((value) => value === 0) &&
-  entity.rotation.every((value) => value === 0) &&
-  entity.scale.every((value) => value === 1);
-
-/**
- * Whether a scene holds anything worth keeping: more than lights, and more than the untouched cube
- * every new scene starts with. Decides whether a scene saved before cloud saving is offered for
- * upload.
- */
-export const hasSceneContent = (entities: Entity[]): boolean => {
-  const nonLights = entities.filter((entity) => entity.type !== "directionalLight");
-
-  return nonLights.length > 1 || (nonLights.length === 1 && !isPristineDefaultCube(nonLights[0]));
 };
