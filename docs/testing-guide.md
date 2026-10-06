@@ -42,7 +42,7 @@ Runs a single test file.
 | `utils/sceneAssets.ts` | SHA-256 test vectors, the base64 form S3 takes, telling hashes from older IDs, finding a scene's assets in malformed input |
 | `utils/assetTransfers.ts` | `AssetUploader`: only unconfirmed hashes, once; batches of 100; at most 3 at once; progress; retrying only what failed; an asset missing everywhere. `AssetDownloader`: only what's missing, hash-checked, unavailable or failed ones reported, one download per hash for concurrent callers, progress |
 | `utils/sceneLock.ts` | Renewing every 20 s while held and retrying every 10 s while held elsewhere, new revisions reported, failed requests changing nothing, stopping on a deleted scene or lost session, checking when the tab is shown again or restored from the back/forward cache, take-over (after a claim still out), a refused save counting as lost; releasing on `pagehide` only when nothing is unsaved; `releaseWhenSaved` waiting for the last saves (even one queued behind another), called off by `cancelRelease` (fake timers) |
-| `utils/editorSession.ts` | One session ID per tab, kept across a reload through sessionStorage but never left there for a duplicated tab to copy, back/forward cache, storage that throws |
+| `utils/editorSession.ts` | One random session ID per page |
 | `utils/sceneCache.ts`, `utils/sceneLibrary.ts` | Unsaved edits per user and scene, another user's never loaded; `resolveSceneToOpen`; the client's requests (saves carry the session ID; claiming, taking over, and releasing the lock) and `SceneApiError`; the gallery's list waiting for a save in flight |
 | `store/useEditorStore.ts` | The persist v17 migration (only the preferences kept from an older blob, its scene and stray keys dropped, written back on load); `loadScene` (defaults deep-merged, personal camera kept, undo history cleared); a scene coming back unchanged from store → document → JSON → store; read-only mode (every content-changing action dropped whole, selection/camera/preferences still allowed, `loadScene` still works, undo history cleared, not persisted) |
 
@@ -170,7 +170,7 @@ Open the same scene in two tabs of one browser (or two browsers signed in as the
 - [ ] **View follows the editing tab** (edit in the first tab; the second shows it within ~10 s, keeping its camera and selection)
 - [ ] **Back to the gallery releases it** (the second tab can edit within ~10 s)
 - [ ] **Closing the tab releases it** (within ~10 s; at worst ~60 s when the release can't be sent)
-- [ ] **Reloading the editing tab keeps the lock** (no View only flash)
+- [ ] **Reloading the editing tab keeps editing** (it releases on the way out and claims again; with unsaved edits it opens View only until Take over or ≤60 s)
 - [ ] **Take over editing** (the second tab can edit at once; the first shows View only as soon as it's looked at, or within 20 s)
 - [ ] **A forced save from the view-only tab is refused** (from the console: `(await import("/src/utils/sceneLibrary.ts")).saveScene(id, doc, revision)` rejects with status 423)
 

@@ -404,7 +404,7 @@ describe("editing lock", () => {
     });
   });
 
-  it("renews the holder's lease (the heartbeat, or a reload of the same tab)", async () => {
+  it("renews the holder's lease (the heartbeat)", async () => {
     const sceneId = await createLockedScene();
     vi.setSystemTime(NOW + 20_000);
 

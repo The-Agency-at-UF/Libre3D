@@ -639,7 +639,7 @@ const claimLock = async (
         TableName: config.tableName,
         Key: rowKey(userId, sceneId),
         UpdateExpression: "SET lockHolder = :session, lockUserId = :user, lockExpiresAt = :expires",
-        // Free, already ours (a renewal, or a reload of this tab), or lapsed. A take-over skips that.
+        // Free, already ours (a renewal), or lapsed. A take-over skips that.
         ConditionExpression: takeOver
           ? "attribute_exists(sceneId)"
           : "attribute_exists(sceneId) AND (attribute_not_exists(lockHolder) OR lockHolder = :session OR lockExpiresAt < :now)",
