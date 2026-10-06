@@ -1,6 +1,12 @@
 import { useState } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 
+export interface MenuAccount {
+  /** Who is signed in, shown above Sign Out. Null if the token carried no email. */
+  email: string | null;
+  onSignOut: () => void;
+}
+
 interface HamburgerMenuProps {
   /** False while the scene is view only: the items that would change it are disabled. */
   canEdit: boolean;
@@ -10,9 +16,8 @@ interface HamburgerMenuProps {
   onToggleTheme: () => void;
   showAxisGuides: boolean;
   onToggleAxisGuides: () => void;
-  /** Who is signed in, shown above Sign Out. Null if the token carried no email. */
-  accountEmail: string | null;
-  onSignOut: () => void;
+  /** The signed-in account and Sign Out. Null for a guest, who has neither. */
+  account: MenuAccount | null;
 }
 
 /*
@@ -28,8 +33,7 @@ export function HamburgerMenu({
   onToggleTheme,
   showAxisGuides,
   onToggleAxisGuides,
-  accountEmail,
-  onSignOut,
+  account,
 }: HamburgerMenuProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -145,22 +149,26 @@ export function HamburgerMenu({
               </span>
               <span className="hamburger-dropdown-shortcut">{showAxisGuides ? "On" : "Off"}</span>
             </button>
-            <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
-            {accountEmail && (
-              <div className="hamburger-dropdown-account" title={accountEmail}>
-                {accountEmail}
-              </div>
+            {account && (
+              <>
+                <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+                {account.email && (
+                  <div className="hamburger-dropdown-account" title={account.email}>
+                    {account.email}
+                  </div>
+                )}
+                <button
+                  className="hamburger-dropdown-btn"
+                  type="button"
+                  onClick={() => handleItemClick(account.onSignOut)}
+                >
+                  <span>
+                    <i className="ti ti-logout" style={{ marginRight: "6px" }}></i>
+                    Sign Out
+                  </span>
+                </button>
+              </>
             )}
-            <button
-              className="hamburger-dropdown-btn"
-              type="button"
-              onClick={() => handleItemClick(onSignOut)}
-            >
-              <span>
-                <i className="ti ti-logout" style={{ marginRight: "6px" }}></i>
-                Sign Out
-              </span>
-            </button>
           </div>
         </>
       )}

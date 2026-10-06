@@ -5,6 +5,8 @@ import { usePreviewSession } from "../../hooks/usePreviewSession";
 interface InspectorTopbarProps {
   setIsModalOpen: (open: boolean) => void;
   setActiveTab: (tab: "export" | "share") => void;
+  /** False hides the Share button (a guest's scene isn't in the cloud). */
+  canShare: boolean;
   viewportZoom: number;
   hasSelection: boolean;
 }
@@ -12,6 +14,7 @@ interface InspectorTopbarProps {
 export function InspectorTopbar({
   setIsModalOpen,
   setActiveTab,
+  canShare,
   viewportZoom,
   hasSelection,
 }: InspectorTopbarProps) {
@@ -261,16 +264,18 @@ export function InspectorTopbar({
           <i className={isPreviewMode ? "ti ti-player-stop" : "ti ti-player-play"} style={{ fontSize: "12px" }}></i>
           <span>{isPreviewMode ? "Stop" : "Play"}</span>
         </button>
-        <button
-          className="btn-chip"
-          disabled={isPreviewMode}
-          onClick={() => {
-            setActiveTab("share");
-            setIsModalOpen(true);
-          }}
-        >
-          Share
-        </button>
+        {canShare && (
+          <button
+            className="btn-chip"
+            disabled={isPreviewMode}
+            onClick={() => {
+              setActiveTab("share");
+              setIsModalOpen(true);
+            }}
+          >
+            Share
+          </button>
+        )}
         <button
           className="btn-chip primary"
           disabled={isPreviewMode}

@@ -10,9 +10,11 @@ import { ViewportSettingsPanel } from "./inspector/ViewportSettingsPanel";
 export interface RightSidebarProps {
   setIsModalOpen: (open: boolean) => void;
   setActiveTab: (tab: "export" | "share") => void;
+  /** False hides the Share button (a guest's scene isn't in the cloud). */
+  canShare: boolean;
 }
 
-export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps) {
+export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSidebarProps) {
   const viewportZoom = useEditorStore((state) => state.viewportZoom);
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const entities = useEditorStore((state) => state.entities) ?? [];
@@ -32,6 +34,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab }: RightSidebarProps
       <InspectorTopbar
         setIsModalOpen={setIsModalOpen}
         setActiveTab={setActiveTab}
+        canShare={canShare}
         viewportZoom={viewportZoom}
         hasSelection={selectedEntityIds.length > 0}
       />

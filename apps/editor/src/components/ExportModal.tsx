@@ -7,6 +7,8 @@ export interface ExportModalProps {
   setActiveTab: (tab: "export" | "share") => void;
   isExporting: boolean;
   isPublishing: boolean;
+  /** False hides the Share Scene tab (a guest's scene isn't in the cloud). */
+  canShare: boolean;
   /** The scene's publish ID once it's published; its share link is shown and can be copied. */
   publishId: string | null;
   isCopied: boolean;
@@ -23,6 +25,7 @@ export function ExportModal({
   setActiveTab,
   isExporting,
   isPublishing,
+  canShare,
   publishId,
   isCopied,
   setIsCopied,
@@ -51,16 +54,18 @@ export function ExportModal({
           >
             Export Asset
           </button>
-          <button
-            className={`modal-tab-btn ${activeTab === "share" ? "active" : ""}`}
-            type="button"
-            onClick={() => setActiveTab("share")}
-          >
-            Share Scene
-          </button>
+          {canShare && (
+            <button
+              className={`modal-tab-btn ${activeTab === "share" ? "active" : ""}`}
+              type="button"
+              onClick={() => setActiveTab("share")}
+            >
+              Share Scene
+            </button>
+          )}
         </div>
 
-        {activeTab === "export" ? (
+        {activeTab === "export" || !canShare ? (
           <div className="modal-tab-content">
             <h2 className="editor-modal-title" id="modal-dialog-title">
               Export Scene Options
