@@ -47,6 +47,7 @@ Runs a single test file.
 | `utils/sceneLock.ts` | Renewing every 20 s while held and retrying every 10 s while held elsewhere, new revisions reported, failed requests changing nothing, stopping on a deleted scene or lost session, checking when the tab is shown again or restored from the back/forward cache, take-over (after a claim still out), a refused save counting as lost; releasing on `pagehide` only when nothing is unsaved; `releaseWhenSaved` waiting for the last saves (even one queued behind another), called off by `cancelRelease` (fake timers) |
 | `utils/sceneThumbnails.ts` | `ThumbnailScheduler`: a picture right after the first save, later saves within the minute folded into one more, another after an upload a save overtook, none during preview, retrying on the next save after a failure, stopping on 423/404, nothing after `dispose` (fake timers) |
 | `utils/editorSession.ts` | One random session ID per page |
+| `utils/guestScene.ts` | Nothing kept → the default scene; what's kept comes back as a versioned scene document; only the latest is kept; unreadable data starts over; a newer build's document is refused; a full or blocked storage is reported, not thrown |
 | `utils/sceneCache.ts`, `utils/sceneLibrary.ts` | Unsaved edits per user and scene, another user's never loaded; `resolveSceneToOpen`; the client's requests (saves carry the session ID; claiming, taking over, and releasing the lock; thumbnails sent as base64) and `SceneApiError`; the gallery's list waiting for a save in flight |
 | `store/useEditorStore.ts` | The persist v17 migration (only the preferences kept from an older blob, its scene and stray keys dropped, written back on load); `loadScene` (defaults deep-merged, personal camera kept, undo history cleared); a scene coming back unchanged from store → document → JSON → store; read-only mode (every content-changing action dropped whole, selection/camera/preferences still allowed, `loadScene` still works, undo history cleared, not persisted) |
 
@@ -160,6 +161,23 @@ Run this quick smoke test after ANY change to catch obvious regressions:
 - [ ] **Old state migrates** (if you bumped version, new fields have defaults)
 
 **Time**: 3-5 minutes
+
+---
+
+### Guest Mode (`/try`)
+
+Signed out (or in a private window).
+
+- [ ] **Landing page** has "Try it without an account" under Sign in, and it opens `/try`
+- [ ] **Header** says "Guest scene · Saved in this browser · Sign in"; the back button goes to `/`
+- [ ] **No Share anywhere** (top-right buttons are Play and Export; the Export dialog has only Export Asset) and no account or Sign Out in the menu
+- [ ] **Kept in this browser** (edit, reload: the edit is still there; DevTools → Network shows no `/api/` requests)
+- [ ] **Imported models** (import a .glb: it appears, survives a reload, nothing uploads)
+- [ ] **Play and Export** work (preview, Download .glb / .json)
+- [ ] **New Scene** asks, then starts over from the default scene
+- [ ] **Signed in**, `/try` still works and its link says "Your scenes"
+
+**Time**: 5 minutes
 
 ---
 
