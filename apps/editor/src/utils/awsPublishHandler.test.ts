@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DeleteObjectCommand } from "@aws-sdk/client-s3";
 
 import { FakeDynamoDB, FakePresigner, FakeS3 } from "../testing/fakeAws";
 import { handlePublishRequest, handlePublishedSceneRequest } from "./awsPublishHandler";
@@ -235,5 +236,49 @@ describe("the public viewer", () => {
     await expect(view("../users/alice/scenes/x")).resolves.toMatchObject({ status: 404 });
     await expect(view(MISSING_ID, "POST")).resolves.toMatchObject({ status: 405, headers: { Allow: "GET" } });
     expect(presigner.signed).toEqual([]);
+  });
+});
+
+describe("deleting a published scene", () => {
+  it("takes its share link down (row and GLB) and leaves other published scenes alone", async () => {
+    const sceneId = await createScene();
+    const otherScene = await createScene();
+    const publishId = await publishAndUpload(sceneId);
+    const otherPublishId = await publishAndUpload(otherScene);
+
+    await expect(scenes("DELETE", sceneId)).resolves.toMatchObject({ status: 200 });
+
+    expect(dynamo.getPublished(publishId)).toBeUndefined();
+    expect(s3.objects.has(`scenes/${publishId}.glb`)).toBe(false);
+    await expect(view(publishId)).resolves.toMatchObject({ status: 404 });
+    expect(dynamo.getPublished(otherPublishId)).toBeDefined();
+    expect(s3.objects.has(`scenes/${otherPublishId}.glb`)).toBe(true);
+  });
+
+  it("keeps the scene when taking the link down fails, so the delete can be tried again", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const sceneId = await createScene();
+    const publishId = await publishAndUpload(sceneId);
+    s3.failNext = { command: DeleteObjectCommand, error: new Error("S3 is down") };
+
+    await expect(scenes("DELETE", sceneId)).resolves.toMatchObject({ status: 500 });
+    expect(dynamo.getItem("alice", sceneId)).toBeDefined();
+
+    await expect(scenes("DELETE", sceneId)).resolves.toMatchObject({ status: 200 });
+    expect(s3.objects.has(`scenes/${publishId}.glb`)).toBe(false);
+  });
+
+  it("never deletes a published row someone else owns", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const sceneId = await createScene();
+    const takenId = "11111111-1111-4111-8111-111111111111";
+    dynamo.putItem("user-scenes", { ...dynamo.getItem("alice", sceneId)!, publishId: { S: takenId } });
+    dynamo.putItem("published-scenes", { sceneId: { S: takenId }, assetKey: { S: `scenes/${takenId}.glb` }, ownerId: { S: "bob" } });
+    s3.upload(`scenes/${takenId}.glb`, "bob's glb");
+
+    await expect(scenes("DELETE", sceneId)).resolves.toMatchObject({ status: 200 });
+
+    expect(dynamo.getPublished(takenId)?.ownerId).toEqual({ S: "bob" });
+    expect(s3.objects.has(`scenes/${takenId}.glb`)).toBe(true);
   });
 });

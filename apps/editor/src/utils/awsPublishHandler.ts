@@ -14,7 +14,7 @@
  * where the GLB is; its condition refuses to take over a row someone else owns as a backstop.
  *
  * Publishing doesn't need the editing lock: it doesn't change the scene's document, and setting the
- * publish ID happens once.
+ * publish ID happens once. Deleting a scene unpublishes it (`unpublishScene` in awsSceneHandler.ts).
  *
  * The Vercel functions (`api/publish.ts`, `api/scene/[sceneId].ts`) and the Vite dev middleware are
  * thin adapters around these two handlers, so the two environments cannot drift.

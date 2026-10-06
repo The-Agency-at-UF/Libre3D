@@ -110,7 +110,12 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
   };
 
   const handleDeleteScene = async (scene: SceneSummary) => {
-    if (!window.confirm(`Delete “${scene.name}”? This can't be undone.`)) {
+    // Deleting a published scene takes its share link down too (the server unpublishes it).
+    const message = scene.publishId
+      ? `Delete “${scene.name}”? It's published: its share link will stop working for everyone. This can't be undone.`
+      : `Delete “${scene.name}”? This can't be undone.`;
+
+    if (!window.confirm(message)) {
       return;
     }
 

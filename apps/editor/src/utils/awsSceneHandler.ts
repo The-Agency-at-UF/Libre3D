@@ -39,9 +39,9 @@
  *
  * Ownership is by construction: every row is keyed by the verified token's `sub` (the user-scenes
  * partition key) and every object lives under `users/<sub>/`, so there is no way to name someone
- * else's scene; a published copy (awsPublishHandler.ts) is found through the row's `publishId`. The
- * document itself is opaque here, apart from finding its assets (`collectAssetHashes`); the editor
- * owns its shape (sceneDocument.ts).
+ * else's scene. A published copy (awsPublishHandler.ts) is found through the row's `publishId`, so
+ * deleting a scene takes its share link down too. The document itself is opaque here, apart from
+ * finding its assets (`collectAssetHashes`); the editor owns its shape (sceneDocument.ts).
  */
 
 import { randomUUID } from "node:crypto";
@@ -584,9 +584,53 @@ const renameScene = async (
   return json(200, { name });
 };
 
-const deleteScene = async (config: SceneConfig, userId: string, sceneId: string): Promise<SceneApiResponse> => {
+/**
+ * Takes a published scene down: its published-scenes row and its GLB. Only the owner's: the row's
+ * `ownerId` must be them (or the row is already gone).
+ */
+const unpublishScene = async (config: SceneConfig, userId: string, publishId: string): Promise<void> => {
   try {
-    // The row first: it's what the gallery lists, so the scene disappears even if S3 cleanup fails.
+    await config.dynamo.send(
+      new DeleteItemCommand({
+        TableName: config.publishedTableName,
+        Key: { sceneId: { S: publishId } },
+        ConditionExpression: "attribute_not_exists(sceneId) OR ownerId = :owner",
+        ExpressionAttributeValues: { ":owner": { S: userId } },
+      }),
+    );
+  } catch (error) {
+    if (error instanceof ConditionalCheckFailedException) {
+      // Can't happen while publish IDs come only from the owner's row; never touch someone else's.
+      console.error(`Publish ID ${publishId} on ${userId}'s scene belongs to someone else`);
+      return;
+    }
+
+    throw error;
+  }
+
+  await config.s3.send(new DeleteObjectCommand({ Bucket: config.bucketName, Key: publishedGlbKey(publishId) }));
+};
+
+const deleteScene = async (config: SceneConfig, userId: string, sceneId: string): Promise<SceneApiResponse> => {
+  const { Item: item } = await config.dynamo.send(
+    new GetItemCommand({ TableName: config.tableName, Key: rowKey(userId, sceneId), ConsistentRead: true }),
+  );
+
+  if (!item) {
+    return errorResponse(404, "Scene not found.");
+  }
+
+  // The share link first: if this fails, the scene is still there to delete again, rather than gone
+  // with its public copy left up and nothing pointing at it.
+  const publishId = item.publishId?.S;
+
+  if (publishId) {
+    await unpublishScene(config, userId, publishId);
+  }
+
+  try {
+    // Then the row, before the scene's objects: it's what the gallery lists, so the scene disappears
+    // even if S3 cleanup fails.
     await config.dynamo.send(
       new DeleteItemCommand({
         TableName: config.tableName,
