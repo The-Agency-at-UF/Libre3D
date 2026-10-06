@@ -736,11 +736,10 @@ export const useEditorStore = create<EditorState>()(
               getDescendantIds(entities, id).forEach((descId) => allIds.add(descId));
             });
 
-            // Note: this intentionally does NOT free the removed entities' OPFS
+            // Note: this intentionally does NOT free the removed entities'
             // model/texture assets, so undo always gets a working entity back.
-            // The app-load sweep that used to free them (reconcileAssetStorage)
-            // is off since scenes moved to the cloud: it only sees the open
-            // scene and would delete other scenes' imports (see persist below).
+            // Local copies are a cache of the cloud ones (assetTransfers.ts);
+            // nothing evicts them yet.
             set((state) => ({
               entities: state.entities.filter((entity) => !allIds.has(entity.id)),
               selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
@@ -1157,10 +1156,6 @@ export const useEditorStore = create<EditorState>()(
           name: "libre3d-scene-state",
           version: 17,
           storage: createJSONStorage(() => localStorage),
-          // No asset reconciliation on rehydrate any more: reconcileAssetStorage frees OPFS
-          // models/textures the *loaded* entities don't reference, and with several scenes that
-          // would delete every other scene's imports, whose bytes aren't in the cloud until PR 5.
-          // Unreferenced assets now stay in OPFS until PR 5 reworks local assets into a cache.
           // Before v17 the scene was saved here too. Scenes live in the cloud now and nothing saved
           // before then is kept, so an older blob keeps only the editor preferences (the fields
           // partialize saves below, none of which ever changed shape).
