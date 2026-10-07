@@ -1,172 +1,201 @@
+/**
+ * PURPOSE: Server-side (Node) logic for publishing a scene and for the public viewer.
+ *
+ * Routes:
+ *   POST /api/publish        `{ sceneId, bgColor? }`, one of the caller's scenes (sign-in required):
+ *                            returns `{ publishId, uploadUrl }`, a presigned PUT for the published GLB
+ *   GET  /api/scene/:id      public: `{ cloudAssetUrl, bgColor }`, a short-lived presigned GET for the
+ *                            GLB published under that publish ID, and the scene's background colour
+ *
+ * Ownership is by construction: the publish ID is made here, kept on the caller's own user-scenes
+ * row (`publishId`), and only ever read back from there, so a client can't name someone else's
+ * published scene. Each scene has one publish ID for life; publishing again replaces its GLB, so
+ * the share link (`/v/<publishId>`) stays the same. The published-scenes row records the owner and
+ * where the GLB is; its condition refuses to take over a row someone else owns as a backstop.
+ *
+ * Publishing doesn't need the editing lock: it doesn't change the scene's document, and setting the
+ * publish ID happens once. Deleting a scene unpublishes it (`unpublishScene` in awsSceneHandler.ts).
+ *
+ * The Vercel functions (`api/publish.ts`, `api/scene/[sceneId].ts`) and the Vite dev middleware are
+ * thin adapters around these two handlers, so the two environments cannot drift.
+ */
+
 import { randomUUID } from "node:crypto";
 import type { IncomingHttpHeaders } from "node:http";
 
-import { DynamoDBClient, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
-import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { ConditionalCheckFailedException, GetItemCommand, PutItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { GetObjectCommand, PutObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-export interface PublishSessionResult {
-  sceneId: string;
-  assetKey: string;
-  uploadUrl: string;
-  shareUrl: string;
+// `.js` is required: Vercel runs server modules under Node's ES module loader (see awsConfig.ts).
+import type { ServerEnv } from "./awsConfig.js";
+import {
+  errorResponse,
+  isSceneId,
+  json,
+  parseBody,
+  publishedGlbKey,
+  readSceneConfig,
+  rowKey,
+  type SceneApiResponse,
+  type SceneConfig,
+} from "./awsSceneHandler.js";
+import { normalizePublishedBgColor } from "./publishedSceneStyle.js";
+import { verifyAuth } from "./verifyAuth.js";
+
+export interface PublishApiRequest {
+  method: string;
+  headers: IncomingHttpHeaders;
+  /** Parsed JSON (Vercel) or the raw string (Vite middleware); either is accepted. */
+  body: unknown;
 }
 
-interface AwsPublishConfig {
-  region: string;
-  bucketName: string;
-  tableName: string;
-  accessKeyId: string;
-  secretAccessKey: string;
+export interface PublishedSceneApiRequest {
+  method: string;
+  /** The `:id` path segment of `/api/scene/:id`: a publish ID. */
+  publishId: string;
 }
 
-type AwsPublishEnv = Record<string, string | undefined>;
+const GLB_CONTENT_TYPE = "model/gltf-binary";
+// How long the editor has to start uploading, and the viewer to start downloading. S3 checks the
+// expiry when a transfer starts, so a slow one isn't cut off.
+const GLB_URL_TTL_SECONDS = 900;
 
-const readRequiredEnv = (env: AwsPublishEnv, name: string): string => {
-  const value = env[name];
+const methodNotAllowed = (allowed: string): SceneApiResponse => json(405, { error: "Method not allowed" }, { Allow: allowed });
 
-  if (!value) {
-    throw new Error(`Missing required environment variable: ${name}`);
-  }
-
-  return value;
-};
-
-const readConfig = (env: AwsPublishEnv): AwsPublishConfig => ({
-  region: readRequiredEnv(env, "AWS_REGION"),
-  bucketName: readRequiredEnv(env, "S3_BUCKET_NAME"),
-  tableName: readRequiredEnv(env, "DYNAMODB_TABLE_NAME"),
-  accessKeyId: readRequiredEnv(env, "AWS_ACCESS_KEY_ID"),
-  secretAccessKey: readRequiredEnv(env, "AWS_SECRET_ACCESS_KEY"),
-});
-
-const createS3Client = (config: AwsPublishConfig): S3Client =>
-  new S3Client({
-    region: config.region,
-    credentials: {
-      accessKeyId: config.accessKeyId,
-      secretAccessKey: config.secretAccessKey,
-    },
-  });
-
-const createDynamoClient = (config: AwsPublishConfig): DynamoDBClient =>
-  new DynamoDBClient({
-    region: config.region,
-    credentials: {
-      accessKeyId: config.accessKeyId,
-      secretAccessKey: config.secretAccessKey,
-    },
-  });
-
-const trimTrailingSlashes = (value: string): string => value.replace(/\/+$/, "");
-
-const readHeader = (headers: IncomingHttpHeaders, name: string): string | undefined => {
-  const value = headers[name];
-
-  return Array.isArray(value) ? value[0] : value;
-};
-
-const isLocalHost = (host: string): boolean => host.startsWith("localhost") || host.startsWith("127.0.0.1");
-
-/**
- * Resolves the origin that published share links should point at.
- *
- * `PUBLIC_BASE_URL` wins when it is set, which pins production links to the real domain and
- * keeps a spoofed `Host` header out of the share URL we persist. Without it we fall back to the
- * incoming request, so dev servers and Vercel preview deployments link to themselves.
- */
-export const resolveRequestBaseUrl = (headers: IncomingHttpHeaders, env: AwsPublishEnv): string => {
-  const configuredBaseUrl = env.PUBLIC_BASE_URL;
-
-  if (configuredBaseUrl) {
-    return trimTrailingSlashes(configuredBaseUrl);
-  }
-
-  const host = readHeader(headers, "x-forwarded-host") ?? readHeader(headers, "host");
-
-  if (!host) {
-    throw new Error("Unable to resolve the request host. Set PUBLIC_BASE_URL to provide one.");
-  }
-
-  const protocol = readHeader(headers, "x-forwarded-proto") ?? (isLocalHost(host) ? "http" : "https");
-
-  return `${protocol}://${host}`;
-};
-
-const createShareUrl = (baseUrl: string, sceneId: string): string => `${trimTrailingSlashes(baseUrl)}/v/${sceneId}`;
-
-const createAssetUrl = (config: AwsPublishConfig, assetKey: string): string =>
-  `https://${config.bucketName}.s3.${config.region}.amazonaws.com/${assetKey}`;
-
-export const createPublishSession = async (
-  env: AwsPublishEnv,
-  currentPublishId: string | null | undefined,
-  baseUrl: string,
-): Promise<PublishSessionResult> => {
-  const config = readConfig(env);
-  const s3Client = createS3Client(config);
-  const dynamoClient = createDynamoClient(config);
-  const sceneId = currentPublishId && currentPublishId.trim() ? currentPublishId : randomUUID();
-  const assetKey = `scenes/${sceneId}.glb`;
-  const assetUrl = createAssetUrl(config, assetKey);
-
-  const uploadUrl = await getSignedUrl(
-    s3Client,
-    new PutObjectCommand({
-      Bucket: config.bucketName,
-      Key: assetKey,
-      ContentType: "model/gltf-binary",
-    }),
-    { expiresIn: 900 },
-  );
-
-  await dynamoClient.send(
-    new PutItemCommand({
-      TableName: config.tableName,
-      Item: {
-        sceneId: { S: sceneId },
-        assetKey: { S: assetKey },
-        assetUrl: { S: assetUrl },
-        shareUrl: { S: createShareUrl(baseUrl, sceneId) },
-        createdAt: { S: new Date().toISOString() },
-      },
-    }),
-  );
-
-  return {
-    sceneId,
-    assetKey,
-    uploadUrl,
-    shareUrl: createShareUrl(baseUrl, sceneId),
-  };
-};
-
-export const getPublishedScene = async (
-  sceneId: string,
-  env: AwsPublishEnv,
-): Promise<{ assetUrl: string } | null> => {
+/** The scene's publish ID, made on its first publish; null when the caller has no such scene. */
+const reservePublishId = async (config: SceneConfig, userId: string, sceneId: string): Promise<string | null> => {
   try {
-    const config = readConfig(env);
-    const dynamoClient = createDynamoClient(config);
-
-    const response = await dynamoClient.send(
-      new GetItemCommand({
+    const result = await config.dynamo.send(
+      new UpdateItemCommand({
         TableName: config.tableName,
-        Key: {
-          sceneId: { S: sceneId },
-        },
+        Key: rowKey(userId, sceneId),
+        // One call, so two publishes at once still agree on one ID.
+        UpdateExpression: "SET publishId = if_not_exists(publishId, :publishId)",
+        ConditionExpression: "attribute_exists(sceneId)",
+        ExpressionAttributeValues: { ":publishId": { S: randomUUID() } },
+        ReturnValues: "ALL_NEW",
       }),
     );
 
-    if (!response.Item || !response.Item.assetUrl || !response.Item.assetUrl.S) {
+    return result.Attributes?.publishId?.S ?? null;
+  } catch (error) {
+    if (error instanceof ConditionalCheckFailedException) {
       return null;
     }
 
-    return {
-      assetUrl: response.Item.assetUrl.S,
-    };
+    throw error;
+  }
+};
+
+const publishScene = async (config: SceneConfig, userId: string, body: Record<string, unknown>): Promise<SceneApiResponse> => {
+  if (!isSceneId(body.sceneId)) {
+    return errorResponse(400, "sceneId must be the scene to publish.");
+  }
+
+  const sceneId = body.sceneId;
+  const publishId = await reservePublishId(config, userId, sceneId);
+
+  if (!publishId) {
+    return errorResponse(404, "Scene not found.");
+  }
+
+  const assetKey = publishedGlbKey(publishId);
+  // glTF can't hold a background colour, so it rides on the published row (see publishedSceneStyle).
+  // Anything that isn't a hex colour is dropped rather than failing the publish.
+  const bgColor = normalizePublishedBgColor(body.bgColor);
+
+  try {
+    await config.dynamo.send(
+      new PutItemCommand({
+        TableName: config.publishedTableName,
+        Item: {
+          sceneId: { S: publishId },
+          assetKey: { S: assetKey },
+          ownerId: { S: userId },
+          sourceSceneId: { S: sceneId },
+          updatedAt: { S: new Date().toISOString() },
+          ...(bgColor ? { bgColor: { S: bgColor } } : {}),
+        },
+        ConditionExpression: "attribute_not_exists(sceneId) OR ownerId = :owner",
+        ExpressionAttributeValues: { ":owner": { S: userId } },
+      }),
+    );
   } catch (error) {
-    console.error("Failed to retrieve scene from DynamoDB:", error);
-    return null;
+    if (!(error instanceof ConditionalCheckFailedException)) {
+      throw error;
+    }
+
+    console.error(`Publish ID ${publishId} on ${userId}'s scene ${sceneId} belongs to someone else`);
+    return errorResponse(409, "This scene's share link belongs to someone else.");
+  }
+
+  const uploadUrl = await getSignedUrl(
+    config.s3,
+    new PutObjectCommand({ Bucket: config.bucketName, Key: assetKey, ContentType: GLB_CONTENT_TYPE }),
+    { expiresIn: GLB_URL_TTL_SECONDS },
+  );
+
+  return json(200, { publishId, uploadUrl });
+};
+
+export const handlePublishRequest = async (request: PublishApiRequest, env: ServerEnv): Promise<SceneApiResponse> => {
+  if (request.method.toUpperCase() !== "POST") {
+    return methodNotAllowed("POST");
+  }
+
+  // The upload URL is write access to the bucket, so only a signed-in owner gets one.
+  const auth = await verifyAuth(request.headers, env);
+
+  if (!auth.authorized) {
+    return errorResponse(auth.status, auth.error);
+  }
+
+  try {
+    return await publishScene(readSceneConfig(env), auth.userId, parseBody(request.body));
+  } catch (error) {
+    console.error("Publish API error:", error);
+    return errorResponse(500, "Something went wrong on the server. Try again.");
+  }
+};
+
+/** Public, no sign-in: anyone with the share link may view the scene. */
+export const handlePublishedSceneRequest = async (
+  request: PublishedSceneApiRequest,
+  env: ServerEnv,
+): Promise<SceneApiResponse> => {
+  if (request.method.toUpperCase() !== "GET") {
+    return methodNotAllowed("GET");
+  }
+
+  if (!isSceneId(request.publishId)) {
+    return errorResponse(404, "Scene not found.");
+  }
+
+  try {
+    const config = readSceneConfig(env);
+    const { Item: item } = await config.dynamo.send(
+      new GetItemCommand({ TableName: config.publishedTableName, Key: { sceneId: { S: request.publishId } } }),
+    );
+    // Rows from before publishing was tied to users have the same `assetKey`, so their links work.
+    const assetKey = item?.assetKey?.S;
+
+    if (!assetKey) {
+      return errorResponse(404, "Scene not found.");
+    }
+
+    const cloudAssetUrl = await getSignedUrl(config.s3, new GetObjectCommand({ Bucket: config.bucketName, Key: assetKey }), {
+      expiresIn: GLB_URL_TTL_SECONDS,
+    });
+
+    // Checked again on the way out: it ends up in a style on a public page. Null for scenes
+    // published before the colour was stored, which keep the viewer's default.
+    const bgColor = normalizePublishedBgColor(item?.bgColor?.S);
+
+    // The URL expires, so nothing may keep this answer for later.
+    return json(200, { cloudAssetUrl, bgColor }, { "Cache-Control": "no-store" });
+  } catch (error) {
+    console.error(`Published scene API error (${request.publishId}):`, error);
+    return errorResponse(500, "Something went wrong on the server. Try again.");
   }
 };

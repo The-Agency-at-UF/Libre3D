@@ -1,6 +1,6 @@
 # Testing & Verification Guide
 
-Libre3D has a small Vitest unit suite for its pure scene-graph and transform logic. Everything else — the UI, the Three.js viewport, store actions, persistence, export — is still tested manually. This guide covers how to run the unit suite, plus checklists for different types of changes to ensure you don't break existing features.
+Libre3D has a Vitest unit suite for its scene-graph and transform logic and for the accounts → gallery → cloud-scenes pipeline (sign-in, the scene API, saving, loading, migrations). The UI, the Three.js viewport, and export are still tested manually. This guide covers how to run the unit suite, plus checklists for different types of changes to ensure you don't break existing features.
 
 ---
 
@@ -33,12 +33,34 @@ Runs a single test file.
 | `store/entityIndex.ts` | `getChildren`, `getDescendantIds`, `getAncestorIds` (including cycle guards); `filterMoveRoots` drops descendants of already-selected nodes; `canReparentEntities` rejects moving a node into itself or its own subtree and enforces the imported-model boundary |
 | `utils/entityTransforms.ts` | `getEntityWorldMatrix` composes the parent chain root-down; `solveLocalFromWorld` round-trips — reparenting under a different transformed parent leaves the world matrix unchanged (hand-picked cases plus 200 seeded random chains) |
 | `utils/pruneImportHierarchy.ts` | `pruneImportNodes` drops dead leaves, collapses single-child wrappers into their child without moving it in world space, and never removes the root, mesh nodes, bones, or multi-child groups |
+| `utils/authSession.ts` | `sanitizeReturnTo` keeps sign-in redirects same-site (`//evil`, `/evil`, the callback); the PKCE redirect (S256 challenge of the stored verifier); code redemption (state check, Cognito errors, once under StrictMode); token refresh shared between callers, signing out only on a rejected refresh; sign-out clearing the session and unsaved scene edits |
+| `utils/navigation.ts` | `getPostSignInPath` keeps a deep link through sign-in and sends anything else to the gallery; `landingPathFor`; `shareUrlFor`; `navigate` / `subscribeToLocation` |
+| `utils/apiFetch.ts`, `utils/verifyAuth.ts` | Bearer token on `/api/*` only, `ApiAuthError` when signed out or rejected; the server takes the user ID from the verified token's `sub`, 401s bad tokens, fails closed (503) without config, and caches one verifier per pool/client |
+| `utils/awsConfig.ts` | `getAwsClients` reuses its clients while the settings stay the same and makes new ones for another region, role, or key; local keys never start a role session; S3 and DynamoDB share one role session (fake OIDC → STS exchange); every URL presigned over three hours still has at least 15 minutes of session left; a failed exchange is tried again |
+| `utils/awsSceneHandler.ts` | Every `/api/scenes` route against in-memory DynamoDB/S3 (`testing/fakeAws.ts`): validation, revisions, 409 on a stale save, one document object per scene, delete sweeping its prefix, and one user never reaching another's scene. The editing lock: claiming a free, own, or lapsed lock (60 s lease), 423 while another session holds it, take-over, release only by the holder, a save refused (423) unless its session holds the lock and renewing the lease, 409 for a save from a tab older than the lock. Imported assets: uploads signed only for the lock holder and only for hashes S3 lacks (size, type, and checksum as signed headers; an object not matching its address counts as missing), malformed requests and files over 100 MB refused, downloads limited to the scene's recorded `assetHashes`, a save naming a missing asset refused (422) and checked only for new assets, assets kept when a scene is deleted. Thumbnails: lock holder only (renews the lease, leaves the revision), JPEG only and up to 256 kB, listed as presigned GETs, not left behind by a scene deleted meanwhile, swept with the scene |
+| `utils/publishedSceneStyle.ts` | `normalizePublishedBgColor` accepts 3/4/6/8-digit hex (adding a missing `#`, lowercased, trimmed) and rejects everything else, including CSS-injection attempts and non-strings |
+| `utils/awsPublishHandler.ts` | `POST /api/publish` against in-memory DynamoDB/S3: sign-in required; a publish ID made on the first publish, kept on the scene's row, and reused after; the published row's owner and source scene; a client-sent publish ID ignored; the background colour stored on the published row (and dropped unless it's a hex colour); another user's or a missing scene 404; a published row someone else owns refused (409); no editing lock needed. The public `GET /api/scene/:id`: a presigned GET for the GLB with `Cache-Control: no-store`, rows from before ownership still served, the background colour checked again on the way out (null without one), bad IDs 404. Deleting a published scene takes its row and GLB down (never someone else's), and a failed takedown keeps the scene to retry |
+| `utils/sceneDocument.ts` | The document round-trips through JSON, never shares vectors with the store, refuses newer schema versions, rejects malformed documents |
+| `utils/sceneAutosave.ts` | The 2 s debounce and 10 s cap, one save in flight (also across two autosavers of one scene), backoff retries, stopping on conflict/deletion/lost session/lost lock (423), offline waiting, `flush`, `dispose`; saving only after the document's uploads land, upload progress, a refused uploads request, retrying a failed upload, re-uploading after a 422, not retrying a missing or damaged asset (fake timers) |
+| `utils/sceneAssets.ts` | SHA-256 test vectors, the base64 form S3 takes, telling hashes from older IDs, finding a scene's assets in malformed input |
+| `utils/assetTransfers.ts` | `AssetUploader`: only unconfirmed hashes, once; batches of 100; at most 3 at once; progress; retrying only what failed; an asset missing everywhere. `AssetDownloader`: only what's missing, hash-checked, unavailable or failed ones reported, one download per hash for concurrent callers, progress |
+| `utils/sceneLock.ts` | Renewing every 20 s while held and retrying every 10 s while held elsewhere, new revisions reported, failed requests changing nothing, stopping on a deleted scene or lost session, checking when the tab is shown again or restored from the back/forward cache, take-over (after a claim still out), a refused save counting as lost; releasing on `pagehide` only when nothing is unsaved; `releaseWhenSaved` waiting for the last saves (even one queued behind another), called off by `cancelRelease` (fake timers) |
+| `utils/sceneThumbnails.ts` | `ThumbnailScheduler`: a picture right after the first save, later saves within the minute folded into one more, another after an upload a save overtook, none during preview, retrying on the next save after a failure, stopping on 423/404, nothing after `dispose` (fake timers) |
+| `utils/editorSession.ts` | One random session ID per page |
+| `utils/guestScene.ts` | Nothing kept → the default scene; what's kept comes back as a versioned scene document; only the latest is kept; unreadable data starts over; a newer build's document is refused; a full or blocked storage is reported, not thrown |
+| `utils/sceneCache.ts`, `utils/sceneLibrary.ts` | Unsaved edits per user and scene, another user's never loaded; `resolveSceneToOpen`; the client's requests (saves carry the session ID; claiming, taking over, and releasing the lock; thumbnails sent as base64) and `SceneApiError`; the gallery's list waiting for a save in flight |
+| `store/useEditorStore.ts` | The persist v17 migration (only the preferences kept from an older blob, its scene and stray keys dropped, written back on load); `loadScene` (defaults deep-merged, personal camera kept, undo history cleared); a scene coming back unchanged from store → document → JSON → store; read-only mode (every content-changing action dropped whole, selection/camera/preferences still allowed, `loadScene` still works, undo history cleared, not persisted) |
 
-**What's not covered**: React components, `SceneManager`/`CameraManager`/`ObjectManager`, store actions, persistence, and anything that needs a DOM or WebGL. Keep using the checklists below for those.
+**What's not covered**: React components and hooks (including `useSceneAutosave`'s local-copy writes, `useOpenScene`'s loading and asset downloads, and `useSceneLock`'s switching between editing and viewing; see the two-tab and imported-assets checklists below), the browser transfers themselves (`putAsset`'s XHR, `fetchAssetBlob`) and OPFS/IndexedDB, `SceneManager`/`CameraManager`/`ObjectManager`, most store actions, export/publish, and anything that needs a DOM or WebGL. Keep using the checklists below for those.
 
 **Tests marked "expected fail"** in the output are intentional. They use `it.fails` to pin down a known limitation (a TRS transform can't represent shear, so a rotated child under a non-uniformly scaled parent drifts slightly). If one of them starts *failing*, the limitation has been fixed — remove the `.fails`.
 
-**Writing a new test**: only for pure functions that don't touch the DOM, WebGL, or the live store. Build fixture data with a local factory (see `makeEntity` in `entityIndex.test.ts`), and compare transforms as matrices within a tolerance rather than exact Euler values.
+**Writing a new test**: the suite runs in Node, with no DOM library. Build fixture data with a local factory (see `makeEntity` in `entityIndex.test.ts`), and compare transforms as matrices within a tolerance rather than exact Euler values.
+
+- **Browser modules** (anything using `localStorage`, `sessionStorage`, `window`, `document`, `navigator`): install `stubBrowserGlobals()` from `src/testing/browserStubs.ts` in `beforeEach` and `vi.unstubAllGlobals()` in `afterEach`. Modules that read storage as they load (`authSession.ts`, the store) must be imported after that: `vi.resetModules()` then `await import(...)`.
+- **Server handlers**: mock `./awsConfig.js` so `getAwsClients` hands out `FakeDynamoDB` / `FakeS3` from `src/testing/fakeAws.ts`, and `./verifyAuth.js` to choose the caller. The fakes evaluate condition and update expressions, so add support there when a handler starts using a new one.
+- **The store**: allowed for persistence and `loadScene` (see `useEditorStore.test.ts`), loaded fresh per test as above. Keep the viewport (WebGL) out.
+- **Timers**: `vi.useFakeTimers()` and `vi.advanceTimersByTimeAsync` (see `sceneAutosave.test.ts`).
 
 ---
 
@@ -132,13 +154,67 @@ Run this quick smoke test after ANY change to catch obvious regressions:
 
 - [ ] **State updates** (add entity → count increases)
 - [ ] **Mutations don't cause errors** (TypeScript strict mode passes)
-- [ ] **localStorage saves** (DevTools → Application → localStorage → "editor-store" exists)
-- [ ] **Persistence survives reload** (close tab completely, reopen → state restored)
+- [ ] **Autosave runs** (the header under the scene name goes Saving… → Saved about 2 s after an edit)
+- [ ] **Persistence survives reload** (close tab completely, reopen the scene → state restored)
 - [ ] **Undo/redo work** (every action creates a checkpoint)
 - [ ] **No duplicate undo steps** (one action = one undo step)
 - [ ] **Old state migrates** (if you bumped version, new fields have defaults)
 
 **Time**: 3-5 minutes
+
+---
+
+### Guest Mode (`/try`)
+
+Signed out (or in a private window).
+
+- [ ] **Landing page** has "Try it without an account" under Sign in, and it opens `/try`
+- [ ] **Header** says "Guest scene · Saved in this browser · Sign in"; the back button goes to `/`
+- [ ] **No Share anywhere** (top-right buttons are Play and Export; the Export dialog has only Export Asset) and no account or Sign Out in the menu
+- [ ] **Kept in this browser** (edit, reload: the edit is still there; DevTools → Network shows no `/api/` requests)
+- [ ] **Imported models** (import a .glb: it appears, survives a reload, nothing uploads)
+- [ ] **Play and Export** work (preview, Download .glb / .json)
+- [ ] **New Scene** asks, then starts over from the default scene
+- [ ] **Signed in**, `/try` still works and its link says "Your scenes"
+
+**Time**: 5 minutes
+
+---
+
+### Scene Lock (Two Tabs)
+
+Open the same scene in two tabs of one browser (or two browsers signed in as the same user).
+
+**In addition to smoke test**:
+
+- [ ] **Second tab is view only** (banner "View only" with Take over editing, header says View only, Frame/Scene/Transform/Materials panels disabled, no gizmo, hierarchy toggles and context-menu edits disabled)
+- [ ] **Edits are refused there** (Delete, Ctrl+D, Ctrl+Z, dropping a .glb do nothing; selecting and orbiting still work)
+- [ ] **View follows the editing tab** (edit in the first tab; the second shows it within ~10 s, keeping its camera and selection)
+- [ ] **Back to the gallery releases it** (the second tab can edit within ~10 s)
+- [ ] **Closing the tab releases it** (within ~10 s; at worst ~60 s when the release can't be sent)
+- [ ] **Reloading the editing tab keeps editing** (it releases on the way out and claims again; with unsaved edits it opens View only until Take over or ≤60 s)
+- [ ] **Take over editing** (the second tab can edit at once; the first shows View only as soon as it's looked at, or within 20 s)
+- [ ] **A forced save from the view-only tab is refused** (from the console: `(await import("/src/utils/sceneLibrary.ts")).saveScene(id, doc, revision)` rejects with status 423)
+
+**Time**: 5 minutes
+
+---
+
+### Imported Assets (Cloud)
+
+Use a GLB with textures. "Clean storage" means another browser or profile, or deleting the scene's assets in the console: `(await import("/src/utils/modelAssetStore.ts")).deleteModelAsset(id)` (and `textureAssetStore`'s `deleteTextureAsset`).
+
+**In addition to smoke test**:
+
+- [ ] **Import uploads before saving** (the header goes Uploading… N% → Saved; the objects appear under `users/<sub>/assets/<hash>` in S3)
+- [ ] **Opens elsewhere** (clean storage: "Downloading the scene's models and textures…", then the model and textures appear)
+- [ ] **Nothing uploads twice** (the same GLB again, here or in another scene: no `assets/uploads` request, or one answered with no uploads)
+- [ ] **A failed download offers a way out** (block `amazonaws.com` in DevTools → Network: Try again works once unblocked; Open without them shows the scene with the model empty, and saving keeps it)
+- [ ] **View only never uploads** (second tab: no `assets/uploads` requests while it follows the first tab's import; a forced `requestAssetUploads` from the console is refused with 423)
+- [ ] **Too large is refused at import** (a .glb over 100 MB)
+- [ ] **Offline during an upload** (the header says offline; the save resumes when back online)
+
+**Time**: 10 minutes
 
 ---
 
@@ -152,7 +228,10 @@ Run this quick smoke test after ANY change to catch obvious regressions:
 - [ ] **Transforms preserved** (positions, rotations, scales match)
 - [ ] **Materials preserved** (colors, lighting layers visible)
 - [ ] **Share button works** (Share Scene tab opens, publish happens)
-- [ ] **Share link valid** (copy URL, visit /v/:id, scene loads in viewer)
+- [ ] **Share link valid** (copy URL, visit /v/:id signed out, scene loads in viewer)
+- [ ] **Republishing keeps the link** (reopen the scene: the share link is shown and the button says Update Published Scene; publish again, same link, new content)
+- [ ] **Gallery** shows the scene's thumbnail (taken after a save, at most once a minute) and a Published badge; its menu's Copy share link copies the `/v/` link
+- [ ] **Deleting a published scene** warns that its link stops working, then the link shows an error
 
 **Time**: 5-10 minutes (requires AWS credentials)
 
@@ -261,10 +340,9 @@ Check in order:
 
 ### "Changes don't persist"
 
-1. Check localStorage: `JSON.parse(localStorage.getItem("editor-store"))`
-2. Is the field in store's `partialize`? (Only persisted fields survive reload)
+1. Scene content: does the save status under the scene name say Saved? If not, it says why (offline, conflict, signed out). A new top-level scene field must be in `SceneContent`, `selectSceneContent`, and `loadScene` (see architecture.md §5).
+2. Editor preferences: is the field in the store's `partialize`? Check `JSON.parse(localStorage.getItem("libre3d-scene-state"))`
 3. Is there a migration error? (Check console on load)
-4. Is localStorage quota exceeded? (Clear other sites' data)
 
 ### "Transforms jump/scale weirdly"
 

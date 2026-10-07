@@ -6,7 +6,7 @@
 //
 // Storage strategy (OPFS first, IndexedDB fallback) and the reasoning behind it
 // live in createAssetStore.ts; this module only supplies the texture-specific
-// names and the Blob decode. The four exported functions keep their original
+// names and the Blob decode. The exported functions keep their original
 // signatures -- callers are unchanged.
 
 import { createAssetStore } from "./createAssetStore";
@@ -28,10 +28,10 @@ export function loadTextureAsset(textureAssetId: string): Promise<Blob | null> {
   return store.load(textureAssetId);
 }
 
-export function deleteTextureAsset(textureAssetId: string): Promise<void> {
-  return store.remove(textureAssetId);
+export function hasTextureAsset(textureAssetId: string): Promise<boolean> {
+  return store.has(textureAssetId);
 }
 
-export function listTextureAssetIds(): Promise<string[]> {
-  return store.listIds();
+export function deleteTextureAsset(textureAssetId: string): Promise<void> {
+  return store.remove(textureAssetId);
 }

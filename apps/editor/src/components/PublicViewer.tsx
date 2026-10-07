@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { normalizePublishedBgColor } from "../utils/publishedSceneStyle";
+
 /*
  * BLOCK: React JSX Custom Element Declaration
  * PURPOSE: Extends the built-in React JSX namespace to support `<model-viewer>` custom web elements.
@@ -46,6 +48,9 @@ interface PublicViewerProps {
 export function PublicViewer({ sceneId }: PublicViewerProps) {
   // Local state to store the direct cloud URL of the GLB asset
   const [cloudAssetUrl, setCloudAssetUrl] = useState<string | null>(null);
+  // The scene's background colour, stored with the publish because the GLB can't carry it.
+  // Null for scenes published before it was stored, which keep model-viewer's default.
+  const [bgColor, setBgColor] = useState<string | null>(null);
   // Local state to manage showing a loading state while fetching from the backend
   const [isLoading, setIsLoading] = useState(true);
   // Local state to capture and display any API or network errors
@@ -68,6 +73,8 @@ export function PublicViewer({ sceneId }: PublicViewerProps) {
           // If scene data contains a valid cloud asset URL, update the state
           if (data && data.cloudAssetUrl) {
             setCloudAssetUrl(data.cloudAssetUrl);
+            // Re-validated here too: it ends up in a style attribute on a public page.
+            setBgColor(normalizePublishedBgColor(data.bgColor));
           } else {
             throw new Error("No asset URL found in scene data");
           }
@@ -114,7 +121,7 @@ export function PublicViewer({ sceneId }: PublicViewerProps) {
         // Pinned rather than left on "auto" so the published scene keeps the exact
         // tone curve the editor renders with (see useViewportRenderer).
         tone-mapping="neutral"
-        style={{ width: "100%", height: "100%" }}
+        style={{ width: "100%", height: "100%", ...(bgColor ? { backgroundColor: bgColor } : {}) }}
       />
     </div>
   );

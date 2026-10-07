@@ -1,27 +1,39 @@
 import { useState } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 
+export interface MenuAccount {
+  /** Who is signed in, shown above Sign Out. Null if the token carried no email. */
+  email: string | null;
+  onSignOut: () => void;
+}
+
 interface HamburgerMenuProps {
+  /** False while the scene is view only: the items that would change it are disabled. */
+  canEdit: boolean;
   onNewFile: () => void;
   onDuplicate: () => void;
   onResetCamera: () => void;
   onToggleTheme: () => void;
   showAxisGuides: boolean;
   onToggleAxisGuides: () => void;
+  /** The signed-in account and Sign Out. Null for a guest, who has neither. */
+  account: MenuAccount | null;
 }
 
 /*
  * BLOCK: HamburgerMenu (React Component)
  * PURPOSE: Renders the sidebar menu button and the dropdown list containing editor action items
- *          (New File, Duplicate, Undo/Redo, Reset Camera, Toggle Theme).
+ *          (New Scene, Duplicate, Undo/Redo, Reset Camera, Toggle Theme).
  */
 export function HamburgerMenu({
+  canEdit,
   onNewFile,
   onDuplicate,
   onResetCamera,
   onToggleTheme,
   showAxisGuides,
   onToggleAxisGuides,
+  account,
 }: HamburgerMenuProps) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -63,13 +75,14 @@ export function HamburgerMenu({
             >
               <span>
                 <i className="ti ti-file" style={{ marginRight: "6px" }}></i>
-                New File
+                New Scene
               </span>
               <span className="hamburger-dropdown-shortcut">Ctrl+N</span>
             </button>
             <button
               className="hamburger-dropdown-btn"
               type="button"
+              disabled={!canEdit}
               onClick={() => handleItemClick(onDuplicate)}
             >
               <span>
@@ -82,6 +95,7 @@ export function HamburgerMenu({
             <button
               className="hamburger-dropdown-btn"
               type="button"
+              disabled={!canEdit}
               onClick={() => handleItemClick(() => useEditorStore.temporal.getState().undo())}
             >
               <span>
@@ -93,6 +107,7 @@ export function HamburgerMenu({
             <button
               className="hamburger-dropdown-btn"
               type="button"
+              disabled={!canEdit}
               onClick={() => handleItemClick(() => useEditorStore.temporal.getState().redo())}
             >
               <span>
@@ -125,6 +140,7 @@ export function HamburgerMenu({
             <button
               className="hamburger-dropdown-btn"
               type="button"
+              disabled={!canEdit}
               onClick={() => handleItemClick(onToggleAxisGuides)}
             >
               <span>
@@ -133,6 +149,26 @@ export function HamburgerMenu({
               </span>
               <span className="hamburger-dropdown-shortcut">{showAxisGuides ? "On" : "Off"}</span>
             </button>
+            {account && (
+              <>
+                <div style={{ height: "1px", background: "var(--border)", margin: "4px 0" }} />
+                {account.email && (
+                  <div className="hamburger-dropdown-account" title={account.email}>
+                    {account.email}
+                  </div>
+                )}
+                <button
+                  className="hamburger-dropdown-btn"
+                  type="button"
+                  onClick={() => handleItemClick(account.onSignOut)}
+                >
+                  <span>
+                    <i className="ti ti-logout" style={{ marginRight: "6px" }}></i>
+                    Sign Out
+                  </span>
+                </button>
+              </>
+            )}
           </div>
         </>
       )}

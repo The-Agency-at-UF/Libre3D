@@ -60,8 +60,8 @@ export interface AssetStoreConfig<T extends AssetPayload> {
 export interface AssetStore<T extends AssetPayload> {
   save(id: string, data: T): Promise<void>;
   load(id: string): Promise<T | null>;
+  has(id: string): Promise<boolean>;
   remove(id: string): Promise<void>;
-  listIds(): Promise<string[]>;
 }
 
 export function createAssetStore<T extends AssetPayload>(
@@ -190,29 +190,20 @@ export function createAssetStore<T extends AssetPayload>(
     return result ?? null;
   }
 
+  async function hasIdb(id: string): Promise<boolean> {
+    const db = await openIdb();
+    const result = await runTransaction<boolean>(db, "readonly", (store, setResult) => {
+      const request = store.count(id);
+      request.onsuccess = () => setResult(request.result > 0);
+    });
+    return result ?? false;
+  }
+
   async function removeIdb(id: string): Promise<void> {
     const db = await openIdb();
     await runTransaction<void>(db, "readwrite", (store) => {
       store.delete(id);
     });
-  }
-
-  async function listIdsIdb(): Promise<string[]> {
-    const db = await openIdb();
-    const result = await runTransaction<string[]>(db, "readonly", (store, setResult) => {
-      const keys: string[] = [];
-      const request = store.openCursor();
-      request.onsuccess = () => {
-        const cursor = request.result;
-        if (cursor) {
-          keys.push(String(cursor.key));
-          cursor.continue();
-          return;
-        }
-        setResult(keys);
-      };
-    });
-    return result ?? [];
   }
 
   return {
@@ -254,6 +245,22 @@ export function createAssetStore<T extends AssetPayload>(
       return await loadIdb(id);
     },
 
+    // Whether the asset is stored, without reading it (opening a scene checks every asset it uses
+    // before deciding what to download). Same rules as load(): an empty file doesn't count.
+    async has(id: string): Promise<boolean> {
+      if (supportsOpfs()) {
+        try {
+          const dir = await getDir(false);
+          const fileHandle = await dir.getFileHandle(id, { create: false });
+          if ((await fileHandle.getFile()).size > 0) return true;
+        } catch (error) {
+          if (!isNotFound(error) && !isMissingWritable(error)) throw error;
+        }
+      }
+
+      return await hasIdb(id);
+    },
+
     async remove(id: string): Promise<void> {
       let failure: unknown;
 
@@ -265,10 +272,9 @@ export function createAssetStore<T extends AssetPayload>(
         }
       }
 
-      // Always clear the IndexedDB side too. listIds() unions both backends, so
-      // an id can legitimately live in either or both; stopping at the first
-      // success left the other copy to be rediscovered and deleted only on a
-      // later reload, so freeing one asset took two full sessions.
+      // Always clear the IndexedDB side too: an id can legitimately live in
+      // either backend or both (a write that fell back), and load() would find
+      // a copy left behind.
       try {
         await removeIdb(id);
       } catch (error) {
@@ -276,41 +282,6 @@ export function createAssetStore<T extends AssetPayload>(
       }
 
       if (failure !== undefined) throw failure;
-    },
-
-    // Every stored id, across both backends. Used by the app-load reconciliation
-    // sweep to diff against entity-referenced ids and free orphans. A missing
-    // directory means nothing has been stored yet, so it's an empty list.
-    async listIds(): Promise<string[]> {
-      const ids = new Set<string>();
-
-      if (supportsOpfs()) {
-        try {
-          // keys() is part of the OPFS spec and shipped in every OPFS-capable
-          // browser, but the installed TS DOM lib doesn't declare it yet -- cast
-          // to reach it.
-          const dir = (await getDir(false)) as FileSystemDirectoryHandle & {
-            keys(): AsyncIterableIterator<string>;
-          };
-          for await (const name of dir.keys()) ids.add(name);
-        } catch (error) {
-          if (!isNotFound(error) && !isMissingWritable(error)) throw error;
-        }
-      }
-
-      // An unavailable IndexedDB (blocked site data, private-mode quirks) must
-      // not take down the whole sweep: assetReconciliation awaits this without a
-      // catch and useEditorStore invokes it as a bare `void`, so a rejection here
-      // would surface only as an unhandled rejection and silently disable orphan
-      // cleanup for the session. Returning a short list is safe -- reconciliation
-      // only ever deletes ids it can actually see.
-      try {
-        for (const id of await listIdsIdb()) ids.add(id);
-      } catch (error) {
-        console.warn(`[Libre3D] Could not list IndexedDB assets in "${dbName}":`, error);
-      }
-
-      return [...ids];
     },
   };
 }

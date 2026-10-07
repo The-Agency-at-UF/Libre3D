@@ -21,3 +21,6 @@ apps/editor/.tsbuild
 # Vercel detect the wrong package manager for the deploy Root Directory
 package-lock.json
 yarn.lock
+
+# CDK synth output
+infra/cdk.out/

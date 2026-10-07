@@ -154,3 +154,17 @@ export function getSelectionRootId(entities: Entity[], id: string): string {
 
   return current.id;
 }
+
+// Locks are inherited for interaction: a locked group locks its whole subtree
+// (viewport picking, box-select, gizmo, rename/delete/drag in the hierarchy).
+// Only the ancestor's own flag is set — each descendant keeps its `locked`
+// value, so unlocking the group restores whatever the children had before.
+export function isLockedByAncestor(entities: Entity[], id: string): boolean {
+  const { byId } = getEntityIndex(entities);
+  return getAncestorIds(entities, id).some((ancestorId) => byId.get(ancestorId)?.locked);
+}
+
+export function isEffectivelyLocked(entities: Entity[], id: string): boolean {
+  const { byId } = getEntityIndex(entities);
+  return !!byId.get(id)?.locked || isLockedByAncestor(entities, id);
+}

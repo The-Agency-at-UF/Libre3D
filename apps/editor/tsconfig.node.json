@@ -10,5 +10,5 @@
     "strict": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "src/utils/awsPublishHandler.ts", "src/utils/publishAuth.ts"]
+  "include": ["vite.config.ts", "src/utils/awsConfig.ts", "src/utils/awsPublishHandler.ts", "src/utils/awsSceneHandler.ts", "src/utils/publishedSceneStyle.ts", "src/utils/sceneAssets.ts", "src/utils/verifyAuth.ts"]
 }
