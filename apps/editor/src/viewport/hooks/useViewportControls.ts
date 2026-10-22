@@ -355,11 +355,14 @@ export function useViewportControls(
                 ? { rotation }
                 : { scale: [target.scale.x, target.scale.y, target.scale.z] },
         });
-      }
 
-      if (isDragging && !hasPausedForDrag) {
-        useEditorStore.temporal.getState().pause();
-        hasPausedForDrag = true;
+        // The drag's first write recorded its undo step; the rest of the drag joins it. Only after
+        // a write: pausing first (the multi-select proxy is written by ViewportCanvas, after this)
+        // left the whole drag out of undo history.
+        if (isDragging && !hasPausedForDrag) {
+          useEditorStore.temporal.getState().pause();
+          hasPausedForDrag = true;
+        }
       }
     });
 

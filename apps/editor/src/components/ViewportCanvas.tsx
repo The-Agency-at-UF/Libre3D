@@ -204,6 +204,9 @@ export function ViewportCanvas() {
           }
         });
         store.updateShownTransforms(updates);
+        // As for one object (useViewportControls): the drag's first write recorded its undo step,
+        // so the rest of the drag joins it. Tracking resumes when the drag ends.
+        if (tc.dragging) useEditorStore.temporal.getState().pause();
       }
     };
 
