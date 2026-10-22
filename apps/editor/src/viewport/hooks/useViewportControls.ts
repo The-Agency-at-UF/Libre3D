@@ -337,35 +337,24 @@ export function useViewportControls(
         ? store.entities.find((e) => e.id === target.userData.entityId)
         : undefined;
       if (target && entity && !target.userData.locked) {
-        const viewedState = selectViewedObjectState(store);
-        const objectState = viewedState?.targetId === entity.id ? viewedState : null;
         // The gizmo hands back rotations wrapped to ±180° (they go through a quaternion); keep the
         // turn nearest the stored one, so a turn past 180° stays one and transitions to it don't
         // go the long way round.
         const rotation = unwrapRotation(
           [target.rotation.x, target.rotation.y, target.rotation.z],
-          resolveState(entity, objectState).rotation,
+          resolveState(entity, selectViewedObjectState(store, entity.id)).rotation,
         );
-
-        if (objectState) {
-          // A state holds only what it changes: write just what this tool moves, so the rest keeps
-          // following Base.
-          const tool = transformControls.mode;
-          store.setStateValues(
-            objectState.id,
+        // Only what this tool moves: the edit goes to the state the object is shown in, if any, and
+        // a state holds only what it changes, so the rest keeps following Base.
+        const tool = transformControls.mode;
+        store.updateShownTransforms({
+          [entity.id]:
             tool === "translate"
               ? { position: [target.position.x, target.position.y, target.position.z] }
               : tool === "rotate"
                 ? { rotation }
                 : { scale: [target.scale.x, target.scale.y, target.scale.z] },
-          );
-        } else {
-          store.updateEntityTransform(entity.id, {
-            position: [target.position.x, target.position.y, target.position.z],
-            rotation,
-            scale: [target.scale.x, target.scale.y, target.scale.z],
-          });
-        }
+        });
       }
 
       if (isDragging && !hasPausedForDrag) {

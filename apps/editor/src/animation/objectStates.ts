@@ -85,6 +85,29 @@ export const resolveState = (entity: EntityTRS, state?: ObjectState | null): Pos
   scale: cloneVector(state?.values.scale ?? entity.scale),
 });
 
+/**
+ * The state an object is shown in while editing (`viewedStates` maps entity IDs to state IDs), or
+ * null for Base. An entry whose state is gone, or isn't that object's, means Base: it can outlive
+ * its state through a deletion and come back to life with an undo.
+ */
+export const getViewedState = (
+  viewedStates: Record<string, string>,
+  states: Record<string, ObjectState>,
+  entityId: string,
+): ObjectState | null => {
+  const state = entityId in viewedStates ? states[viewedStates[entityId]] : undefined;
+  return state && state.targetId === entityId ? state : null;
+};
+
+/** `viewedStates` without the entries that mean Base anyway (see getViewedState). */
+export const pruneViewedStates = (
+  viewedStates: Record<string, string>,
+  states: Record<string, ObjectState>,
+): Record<string, string> =>
+  Object.fromEntries(
+    Object.entries(viewedStates).filter(([entityId]) => getViewedState(viewedStates, states, entityId)),
+  );
+
 /** An object's states, in the order the States list shows them. */
 export const getObjectStates = (states: Record<string, ObjectState>, entityId: string): ObjectState[] =>
   Object.values(states)
@@ -154,12 +177,15 @@ export const removeStatesOf = (
  * Gives duplicated objects copies of their originals' states, with new IDs. `idMap` maps each
  * original's ID to its copy's. A copy placed apart from its original (`offsets`, by original ID)
  * has its states' positions moved the same way, so it doesn't fly back to the original's spot.
+ * Returns the states with the copies added (`states` itself when there were none) and each copied
+ * state's new ID by its original's.
  */
 export const duplicateStates = (
   states: Record<string, ObjectState>,
   idMap: Map<string, string>,
   offsets: Map<string, [number, number, number]>,
-): Record<string, ObjectState> => {
+): { states: Record<string, ObjectState>; stateIdMap: Map<string, string> } => {
+  const stateIdMap = new Map<string, string>();
   const copies = Object.values(states)
     .filter((state) => idMap.has(state.targetId))
     .map((state): ObjectState => {
@@ -168,10 +194,15 @@ export const duplicateStates = (
       if (values.position && offset) {
         values.position = [values.position[0] + offset[0], values.position[1] + offset[1], values.position[2] + offset[2]];
       }
-      return { ...state, id: createId("state"), targetId: idMap.get(state.targetId)!, values };
+      const copy = { ...state, id: createId("state"), targetId: idMap.get(state.targetId)!, values };
+      stateIdMap.set(state.id, copy.id);
+      return copy;
     });
 
-  return copies.length === 0 ? states : { ...states, ...Object.fromEntries(copies.map((state) => [state.id, state])) };
+  return {
+    states: copies.length === 0 ? states : { ...states, ...Object.fromEntries(copies.map((state) => [state.id, state])) },
+    stateIdMap,
+  };
 };
 
 /**

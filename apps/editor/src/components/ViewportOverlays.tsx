@@ -1,4 +1,5 @@
-import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore";
+import { useEditorStore } from "../store/useEditorStore";
+import { getViewedState } from "../animation/objectStates";
 
 // NOTE: this used to also render a `.axis-orb-gizmo` — a static, purely
 // decorative SVG "3D Axis Gizmo" with no click/drag behavior. It's been
@@ -15,15 +16,25 @@ import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore
 export function ViewportOverlays() {
   const projectionMode = useEditorStore((state) => state.projectionMode);
   const setEditorState = useEditorStore((state) => state.setEditorState);
-  const viewedState = useEditorStore(selectViewedObjectState);
+  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
+  const viewedStates = useEditorStore((state) => state.viewedStates);
+  const objectStates = useEditorStore((state) => state.animation.states);
   const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
+
+  // The selected objects shown in one of their states, where their edits go.
+  const selectedInStates = selectedEntityIds
+    .map((id) => getViewedState(viewedStates, objectStates, id))
+    .filter((objectState) => objectState !== null);
+  const verb = isReadOnly ? "Viewing" : "Editing";
 
   return (
     <div className="viewport-bottom-overlays">
       {/* So nobody edits a state thinking it's Base, even with the States section scrolled away. */}
-      {viewedState && (
+      {selectedInStates.length > 0 && (
         <div className="viewport-state-badge">
-          {isReadOnly ? "Viewing" : "Editing"} {viewedState.name}
+          {selectedEntityIds.length === 1
+            ? `${verb} ${selectedInStates[0].name}`
+            : `${verb} states (${selectedInStates.length}/${selectedEntityIds.length})`}
         </div>
       )}
       <div className="projection-toggle-capsule">

@@ -3,7 +3,7 @@ import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
 import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore";
 import { filterMoveRoots } from "../store/entityIndex";
-import { resolveState, unwrapRotation } from "../animation/objectStates";
+import { getViewedState, resolveState, unwrapRotation, type StateValues } from "../animation/objectStates";
 import { SceneManager } from "../viewport/SceneManager";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
@@ -27,7 +27,8 @@ export function ViewportCanvas() {
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
   const entities        = useEditorStore((state) => state.entities);
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
-  const viewedObjectState = useEditorStore(selectViewedObjectState);
+  const viewedStates    = useEditorStore((state) => state.viewedStates);
+  const objectStates    = useEditorStore((state) => state.animation.states);
 
   const [autoScaleFactor, setAutoScaleFactor] = useState(1);
 
@@ -163,10 +164,11 @@ export function ViewportCanvas() {
       const target = tc.object;
       const proxy = selectionProxyRef.current;
       if (target === proxy) {
-        const updates: Record<string, any> = {};
+        const updates: Record<string, StateValues> = {};
         proxy.updateMatrixWorld(true);
         const proxyMat = proxy.matrixWorld;
-        const { entities } = useEditorStore.getState();
+        const store = useEditorStore.getState();
+        const { entities } = store;
         getDragRootIds().forEach(id => {
           const localMat = initialOffsetsRef.current.get(id);
           const obj = objectManager.getObject(id);
@@ -188,12 +190,20 @@ export function ViewportCanvas() {
             const scale = new THREE.Vector3();
             newWorldMat.decompose(pos, quat, scale);
             const rot = new THREE.Euler().setFromQuaternion(quat);
+            // Where the object was shown: Base, or the state it's shown in (which the edit goes to).
+            const shown = resolveState(entity, selectViewedObjectState(store, id));
             // Wrapped to ±180° by the quaternion; keep the turn nearest the stored one (see unwrapRotation).
-            const rotation = unwrapRotation([rot.x, rot.y, rot.z], entity.rotation);
-            updates[id] = { position: pos.toArray(), rotation, scale: scale.toArray() };
+            const next = { position: pos.toArray(), rotation: unwrapRotation([rot.x, rot.y, rot.z], shown.rotation), scale: scale.toArray() };
+            // Only what this drag changed (decompose leaves float noise in the rest), so a state
+            // doesn't start setting values it left to Base.
+            updates[id] = Object.fromEntries(
+              (["position", "rotation", "scale"] as const)
+                .filter((key) => next[key].some((value, axis) => Math.abs(value - shown[key][axis]) > 1e-6))
+                .map((key) => [key, next[key]]),
+            );
           }
         });
-        useEditorStore.getState().updateMultipleEntityTransforms(updates);
+        store.updateShownTransforms(updates);
       }
     };
 
@@ -264,13 +274,14 @@ export function ViewportCanvas() {
 
     objectManager.syncMeshes(entities, transformTarget, isDragging);
 
-    // The selected object in the state being viewed (syncMeshes just put it in Base). Not while the
-    // gizmo drags it: the drag already put it there, and writes into the state.
-    if (viewedObjectState) {
-      const entity = entities.find((e) => e.id === viewedObjectState.targetId);
-      const isDraggedObject = isDragging && transformTarget === objectManager.getObject(viewedObjectState.targetId);
-      if (entity && !isDraggedObject) objectManager.applyPose(entity.id, resolveState(entity, viewedObjectState));
-    }
+    // Objects shown in one of their states (syncMeshes just put everything in Base). Not the one the
+    // gizmo is dragging: the drag already put it there, and writes into the state.
+    Object.keys(viewedStates).forEach((entityId) => {
+      const objectState = getViewedState(viewedStates, objectStates, entityId);
+      const entity = objectState && entities.find((e) => e.id === entityId);
+      const isDraggedObject = isDragging && transformTarget === objectManager.getObject(entityId);
+      if (entity && !isDraggedObject) objectManager.applyPose(entityId, resolveState(entity, objectState));
+    });
 
     const tc = transformControlsRef.current;
     const locked = selectedEntityIds.some(id => objectManager.getObject(id)?.userData.locked);
@@ -332,7 +343,7 @@ export function ViewportCanvas() {
         }
       }
     });
-  }, [entities, selectedEntityIds, viewedObjectState, objectManager, sceneManager, transformControlsRef, isPreviewMode, isReadOnly]);
+  }, [entities, selectedEntityIds, viewedStates, objectStates, objectManager, sceneManager, transformControlsRef, isPreviewMode, isReadOnly]);
 
   // -- Resize Logic --
   useEffect(() => {

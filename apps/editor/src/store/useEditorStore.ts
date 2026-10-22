@@ -18,6 +18,7 @@ import {
   createEmptyAnimation,
   createObjectState,
   duplicateStates,
+  getViewedState,
   removeStatesOf,
   reparentStates,
   type ObjectState,
@@ -134,12 +135,6 @@ export interface CameraProfile {
 
 type EntityTransformUpdates = Partial<Pick<Entity, "position" | "rotation" | "scale" | "color">> & {
 };
-
-/** The state shown for one object in the editor, instead of its Base State. */
-export interface ViewedState {
-  entityId: string;
-  stateId: string;
-}
 
 export type DeepPartial<T> = T extends object ? {
   [P in keyof T]?: DeepPartial<T[P]>;
@@ -359,18 +354,22 @@ export interface EditorState {
 
   // Object states (see animation/objectStates.ts). Saved with the scene and undoable.
   animation: SceneAnimation;
-  // The state shown for the selected object; null shows Base. Not saved, not undoable, and allowed
-  // while read-only (looking at a state changes nothing). Only the selected object shows a state:
-  // it's cleared when the selection stops being that one object, and on loadScene. Read it through
-  // selectViewedObjectState, which also drops a view whose state no longer exists (after an undo).
-  viewedState: ViewedState | null;
-  setViewedState: (view: ViewedState | null) => void;
+  // The state each object is shown in while editing (entity ID → state ID; no entry = Base). It
+  // stays when the object is deselected, and is saved with the scene so it reopens as it was left.
+  // Not undoable, and allowed while read-only (looking at a state changes nothing). Read it through
+  // selectViewedObjectState, which treats an entry whose state is gone (deleted, undone) as Base.
+  viewedStates: Record<string, string>;
+  // Shows an object in one of its states, or in Base (null).
+  setViewedState: (entityId: string, stateId: string | null) => void;
   // Adds "State N" (setting nothing yet) to an object and views it, like addEntity selects. Returns its ID.
   addState: (entityId: string) => string;
   renameState: (stateId: string, name: string) => void;
   removeState: (stateId: string) => void;
   // Sets values in a state, leaving the ones not passed as they are.
   setStateValues: (stateId: string, values: StateValues) => void;
+  // Transform edits from the inspector and the gizmo: each object's go to the state it's shown in,
+  // or to its own values in Base. One undo step for all of them.
+  updateShownTransforms: (updates: Record<string, StateValues>) => void;
   // "Reset to Base": the state stops setting that value, so it follows the object's own again.
   clearStateValue: (stateId: string, key: StateValueKey) => void;
 
@@ -536,14 +535,12 @@ export const selectSceneContent = (state: EditorState): SceneContent => ({
   cameraProfiles: state.cameraProfiles,
   activeProfileId: state.activeProfileId,
   animation: state.animation,
+  viewedStates: state.viewedStates,
 });
 
-/** The state being viewed, or null when the editor shows Base (see `viewedState`). */
-export const selectViewedObjectState = (state: EditorState): ObjectState | null => {
-  const view = state.viewedState;
-  const objectState = view ? state.animation.states[view.stateId] : undefined;
-  return objectState && objectState.targetId === view!.entityId ? objectState : null;
-};
+/** The state an object is shown in, or null when it's shown in Base (see `viewedStates`). */
+export const selectViewedObjectState = (state: EditorState, entityId: string): ObjectState | null =>
+  getViewedState(state.viewedStates, state.animation.states, entityId);
 
 // The `animation` part of an update that replaces its states, or nothing when they're unchanged.
 const withStates = (animation: SceneAnimation, states: Record<string, ObjectState>) =>
@@ -790,10 +787,17 @@ export const useEditorStore = create<EditorState>()(
                 };
               });
 
+              // Copies of the states too, and each copy shown in the copy of the state its original shows.
+              const { states, stateIdMap } = duplicateStates(state.animation.states, idMap, copyOffsets);
+              const copiedViews = cloneOrder
+                .map((id) => [idMap.get(id)!, stateIdMap.get(selectViewedObjectState(state, id)?.id ?? "")] as const)
+                .filter((view): view is readonly [string, string] => view[1] !== undefined);
+
               return {
                 entities: [...state.entities, ...newEntities],
                 selectedEntityIds: cloneOrder.filter((id) => requestedRootIds.has(id)).map((id) => idMap.get(id)!),
-                ...withStates(state.animation, duplicateStates(state.animation.states, idMap, copyOffsets)),
+                ...withStates(state.animation, states),
+                ...(copiedViews.length > 0 ? { viewedStates: { ...state.viewedStates, ...Object.fromEntries(copiedViews) } } : null),
               };
             });
           },
@@ -1127,8 +1131,17 @@ export const useEditorStore = create<EditorState>()(
             set((state) => ({ pendingImportCount: Math.max(0, state.pendingImportCount + delta) })),
 
           animation: createEmptyAnimation(),
-          viewedState: null,
-          setViewedState: (view) => set({ viewedState: view }),
+          viewedStates: {},
+          setViewedState: (entityId, stateId) =>
+            set((state) => {
+              const viewedStates = { ...state.viewedStates };
+              if (stateId) {
+                viewedStates[entityId] = stateId;
+              } else {
+                delete viewedStates[entityId];
+              }
+              return { viewedStates };
+            }),
           addState: (entityId) => {
             let stateId = "";
             set((state) => {
@@ -1137,7 +1150,7 @@ export const useEditorStore = create<EditorState>()(
               stateId = objectState.id;
               return {
                 animation: { ...state.animation, states: { ...state.animation.states, [objectState.id]: objectState } },
-                viewedState: { entityId, stateId: objectState.id },
+                viewedStates: { ...state.viewedStates, [entityId]: objectState.id },
               };
             });
             return stateId;
@@ -1146,15 +1159,14 @@ export const useEditorStore = create<EditorState>()(
             const trimmed = name.trim();
             if (trimmed) set((state) => updatingState(state, stateId, (objectState) => ({ ...objectState, name: trimmed })));
           },
+          // An object shown in the removed state is shown in Base (its viewedStates entry stays, so
+          // undoing the removal shows the state again).
           removeState: (stateId) =>
             set((state) => {
               if (!state.animation.states[stateId]) return state;
               const states = { ...state.animation.states };
               delete states[stateId];
-              return {
-                animation: { ...state.animation, states },
-                ...(state.viewedState?.stateId === stateId ? { viewedState: null } : null),
-              };
+              return { animation: { ...state.animation, states } };
             }),
           setStateValues: (stateId, values) =>
             set((state) =>
@@ -1171,6 +1183,29 @@ export const useEditorStore = create<EditorState>()(
                 return { ...objectState, values };
               }),
             ),
+          updateShownTransforms: (updates) =>
+            set((state) => {
+              const states = { ...state.animation.states };
+              const baseUpdates = new Map<string, StateValues>();
+              let isStateEdit = false;
+
+              for (const [entityId, values] of Object.entries(updates)) {
+                const shown = selectViewedObjectState(state, entityId);
+                if (shown) {
+                  states[shown.id] = { ...shown, values: { ...shown.values, ...cloneStateValues(values) } };
+                  isStateEdit = true;
+                } else {
+                  baseUpdates.set(entityId, cloneStateValues(values));
+                }
+              }
+
+              return {
+                ...(baseUpdates.size > 0
+                  ? { entities: state.entities.map((entity) => (baseUpdates.has(entity.id) ? { ...entity, ...baseUpdates.get(entity.id) } : entity)) }
+                  : null),
+                ...(isStateEdit ? { animation: { ...state.animation, states } } : null),
+              };
+            }),
 
           updatePostProcessing: (updates) =>
             set((state) => ({
@@ -1274,8 +1309,8 @@ export const useEditorStore = create<EditorState>()(
               cameraProfiles,
               activeProfileId,
               animation: cloneAnimation(content?.animation),
+              viewedStates: { ...content?.viewedStates },
               selectedEntityIds: [],
-              viewedState: null,
               isPreviewMode: false,
               previewGlbUrl: null,
             });
@@ -1334,19 +1369,6 @@ export const useEditorStore = create<EditorState>()(
       }
     )
   )
-);
-
-// Only the selected object shows a state other than Base: once the selection is anything but that
-// one object, it's back in Base. Selecting it again shows Base too, so nothing is left in a state
-// you forgot about.
-useEditorStore.subscribe(
-  (state) => state.selectedEntityIds,
-  (selectedEntityIds) => {
-    const { viewedState, setViewedState } = useEditorStore.getState();
-    if (viewedState && !(selectedEntityIds.length === 1 && selectedEntityIds[0] === viewedState.entityId)) {
-      setViewedState(null);
-    }
-  },
 );
 
 // zundo wraps set() to snapshot partialize(get()) first, and get() is still undefined while create()

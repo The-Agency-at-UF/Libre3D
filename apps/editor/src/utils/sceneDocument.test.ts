@@ -55,6 +55,7 @@ const makeContent = (): SceneContent => ({
     },
     events: {},
   },
+  viewedStates: { "cube-1": "up" },
 });
 
 describe("toSceneDocument / parseSceneDocument", () => {
@@ -86,10 +87,16 @@ describe("toSceneDocument / parseSceneDocument", () => {
   });
 
   it("opens a v1 document (from before states) as a scene without animation", () => {
-    const { animation: _animation, ...v1Scene } = makeContent();
+    const { animation: _animation, viewedStates: _viewedStates, ...v1Scene } = makeContent();
     const parsed = parseSceneDocument({ format: SCENE_DOCUMENT_FORMAT, schemaVersion: 1, scene: v1Scene });
 
-    expect(parsed).toEqual({ ok: true, content: { ...v1Scene, animation: undefined } });
+    expect(parsed).toEqual({ ok: true, content: { ...v1Scene, animation: undefined, viewedStates: undefined } });
+  });
+
+  it("saves only the shown states that still exist", () => {
+    const content = { ...makeContent(), viewedStates: { "cube-1": "up", "sphere-1": "deleted-state" } };
+
+    expect(toSceneDocument(content).scene.viewedStates).toEqual({ "cube-1": "up" });
   });
 
   it("refuses a document from a newer schema instead of dropping what it doesn't know", () => {
@@ -123,6 +130,7 @@ describe("toSceneDocument / parseSceneDocument", () => {
         cameraProfiles: undefined,
         activeProfileId: undefined,
         animation: undefined,
+        viewedStates: undefined,
       },
     });
   });

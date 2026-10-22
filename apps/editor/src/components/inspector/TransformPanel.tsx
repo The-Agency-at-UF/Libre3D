@@ -1,5 +1,5 @@
-import { selectViewedObjectState, useEditorStore, type Entity } from "../../store/useEditorStore";
-import { resolveState, type Pose, type StateValueKey } from "../../animation/objectStates";
+import { useEditorStore, type Entity } from "../../store/useEditorStore";
+import { getViewedState, resolveState, type StateValueKey, type StateValues } from "../../animation/objectStates";
 import { PanelSection } from "../ui/PanelSection";
 import { Vector3Input } from "../ui/Vector3Input";
 
@@ -8,17 +8,18 @@ interface TransformPanelProps {
 }
 
 export function TransformPanel({ selectedEntities }: TransformPanelProps) {
-  const updateMultipleEntityTransforms = useEditorStore((state) => state.updateMultipleEntityTransforms);
-  const setStateValues = useEditorStore((state) => state.setStateValues);
+  const updateShownTransforms = useEditorStore((state) => state.updateShownTransforms);
   const clearStateValue = useEditorStore((state) => state.clearStateValue);
-  const viewedState = useEditorStore(selectViewedObjectState);
+  const viewedStates = useEditorStore((state) => state.viewedStates);
+  const objectStates = useEditorStore((state) => state.animation.states);
 
   if (selectedEntities.length === 0) return null;
 
-  // While one of the object's states is viewed, the fields show that state and edits go to it.
-  const objectState =
-    selectedEntities.length === 1 && viewedState?.targetId === selectedEntities[0].id ? viewedState : null;
-  const shown: Pose[] = objectState ? [resolveState(selectedEntities[0], objectState)] : selectedEntities;
+  // Each object as it's shown: in Base, or in the state it's shown in (where its edits go).
+  const shownStates = selectedEntities.map((entity) => getViewedState(viewedStates, objectStates, entity.id));
+  const shown = selectedEntities.map((entity, i) => resolveState(entity, shownStates[i]));
+  // One object shown in a state: its fields get a marker and a "Reset to Base".
+  const objectState = selectedEntities.length === 1 ? shownStates[0] : null;
 
   // Compute mixed state for values
   const getMixedValue = (field: "position" | "rotation" | "scale", index: number): number | null => {
@@ -45,23 +46,16 @@ export function TransformPanel({ selectedEntities }: TransformPanelProps) {
     index: number,
     value: number
   ) => {
-    if (objectState) {
-      const current = [...shown[0][field]] as [number, number, number];
-      current[index] = value;
-      setStateValues(objectState.id, { [field]: current });
-      return;
-    }
-
-    const updates: Record<string, any> = {};
-    selectedEntities.forEach(entity => {
-      const current = [...entity[field]] as [number, number, number];
+    const updates: Record<string, StateValues> = {};
+    selectedEntities.forEach((entity, i) => {
+      const current = [...shown[i][field]] as [number, number, number];
       current[index] = value;
       updates[entity.id] = { [field]: current };
     });
-    updateMultipleEntityTransforms(updates);
+    updateShownTransforms(updates);
   };
 
-  // A field the viewed state sets: a marker, and a way to make it follow Base again.
+  // A field the shown state sets: a marker, and a way to make it follow Base again.
   const stateValueExtra = (field: StateValueKey) =>
     objectState?.values[field] ? (
       <>

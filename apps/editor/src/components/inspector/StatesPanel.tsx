@@ -7,12 +7,13 @@ interface StatesPanelProps {
   entity: Entity;
 }
 
-// The selected object's Base State and its states. Click one to view it (the viewport and the
-// Transform panel then show it, and edits go to it); double-click to rename. Viewing works in a
-// view-only scene; adding, renaming, and deleting don't.
+// The selected object's Base State and its states. Click one to show the object in it (the
+// viewport and the Transform panel then show it, and edits go to it; it stays shown that way when
+// deselected); double-click to rename. Viewing works in a view-only scene; adding, renaming, and
+// deleting don't.
 export function StatesPanel({ entity }: StatesPanelProps) {
   const allStates = useEditorStore((state) => state.animation.states);
-  const viewedState = useEditorStore(selectViewedObjectState);
+  const viewed = useEditorStore((state) => selectViewedObjectState(state, entity.id));
   const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
   const setViewedState = useEditorStore((state) => state.setViewedState);
   const addState = useEditorStore((state) => state.addState);
@@ -23,7 +24,6 @@ export function StatesPanel({ entity }: StatesPanelProps) {
   const [editName, setEditName] = useState("");
 
   const states = getObjectStates(allStates, entity.id);
-  const viewed = viewedState?.targetId === entity.id ? viewedState : null;
 
   const startRename = (objectState: ObjectState) => {
     if (isReadOnly) return;
@@ -48,7 +48,7 @@ export function StatesPanel({ entity }: StatesPanelProps) {
     <PanelSection title="States" defaultOpen={true}>
       <div className="state-list">
         <div className={`state-row${viewed ? "" : " state-row--active"}`}>
-          <button type="button" className="state-row-select" onClick={() => setViewedState(null)}>
+          <button type="button" className="state-row-select" onClick={() => setViewedState(entity.id, null)}>
             <span className="state-row-name">Base State</span>
           </button>
         </div>
@@ -74,7 +74,7 @@ export function StatesPanel({ entity }: StatesPanelProps) {
               <button
                 type="button"
                 className="state-row-select"
-                onClick={() => setViewedState({ entityId: entity.id, stateId: objectState.id })}
+                onClick={() => setViewedState(entity.id, objectState.id)}
                 onDoubleClick={() => startRename(objectState)}
               >
                 <span className="state-row-name">{objectState.name}</span>

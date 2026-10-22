@@ -6,7 +6,9 @@ import {
   createObjectState,
   duplicateStates,
   getObjectStates,
+  getViewedState,
   nextStateName,
+  pruneViewedStates,
   removeStatesOf,
   reparentStates,
   resolveState,
@@ -133,15 +135,43 @@ describe("entity lifecycle", () => {
     const child = makeState("b", "child", { values: { position: [1, 1, 1] } });
     const states = statesById(original, child);
 
-    const next = duplicateStates(states, new Map([["cube", "cube-copy"], ["child", "child-copy"]]), new Map([["cube", [0.5, 0, 0.5]]]));
+    const { states: next, stateIdMap } = duplicateStates(
+      states,
+      new Map([["cube", "cube-copy"], ["child", "child-copy"]]),
+      new Map([["cube", [0.5, 0, 0.5]]]),
+    );
     const copies = Object.values(next).filter((state) => state.id !== "a" && state.id !== "b");
 
     expect(copies).toHaveLength(2);
-    expect(copies.find((state) => state.targetId === "cube-copy")?.values).toEqual({ position: [0.5, 2, 0.5], rotation: [0, 1, 0] });
+    expect(next[stateIdMap.get("a")!]).toMatchObject({ targetId: "cube-copy", values: { position: [0.5, 2, 0.5], rotation: [0, 1, 0] } });
     // A child copy sits where the original child does, relative to its (moved) parent.
-    expect(copies.find((state) => state.targetId === "child-copy")?.values).toEqual({ position: [1, 1, 1] });
+    expect(next[stateIdMap.get("b")!]).toMatchObject({ targetId: "child-copy", values: { position: [1, 1, 1] } });
     expect(next.a).toBe(original);
     expect(original.values.position).toEqual([0, 2, 0]);
+  });
+
+  it("returns the same states when no duplicated object had any", () => {
+    const states = statesById(makeState("a", "sphere"));
+
+    expect(duplicateStates(states, new Map([["cube", "cube-copy"]]), new Map()).states).toBe(states);
+  });
+});
+
+describe("viewed states", () => {
+  const states = statesById(makeState("up", "cube"), makeState("big", "sphere"));
+
+  it("finds the state an object is shown in", () => {
+    expect(getViewedState({ cube: "up" }, states, "cube")?.id).toBe("up");
+    expect(getViewedState({ cube: "up" }, states, "sphere")).toBeNull();
+  });
+
+  it("shows Base for a state that's gone or belongs to another object", () => {
+    expect(getViewedState({ cube: "deleted" }, states, "cube")).toBeNull();
+    expect(getViewedState({ cube: "big" }, states, "cube")).toBeNull();
+  });
+
+  it("prunes the entries that show Base anyway", () => {
+    expect(pruneViewedStates({ cube: "up", sphere: "deleted", torus: "big" }, states)).toEqual({ cube: "up" });
   });
 });
 
