@@ -56,9 +56,9 @@ Three nested config objects. **These are updated via deep merge, not replacement
 
 ```typescript
 animation: SceneAnimation   // { states: Record<string, ObjectState>, events: Record<string, unknown> }
-viewedState: ViewedState | null
+viewedStates: Record<string, string>   // entity ID → the state it's shown in while editing
 ```
-Object states (saved with the scene) and the state the selected object is shown in (not saved). See [Object States](#object-states).
+Object states, and the state each object is shown in; both saved with the scene. See [Object States](#object-states).
 
 ### Preview & Play Mode
 ```typescript
@@ -93,12 +93,12 @@ Replaces the whole scene with a saved one, or with a new scene's starting conten
 
 #### `readOnlyReason: ReadOnlyReason | null` and `setReadOnly(reason: ReadOnlyReason | null) → void`
 Why the open scene can't be edited here, or `null` when it can. `"openElsewhere"`: another tab or device holds the scene's editing lock. Set by `useOpenScene` when a scene opens and by `useSceneLock` as the lock moves.
-- **While set**, any update that would change `entities`, `sceneSettings`, `postProcessing`, `frame`, or `animation` is dropped whole, whichever action sends it. Selection, the viewed state, cameras (`cameraProfiles`, `activeProfileId`), and editor preferences still change
+- **While set**, any update that would change `entities`, `sceneSettings`, `postProcessing`, `frame`, or `animation` is dropped whole, whichever action sends it. Selection, which state objects are shown in (`viewedStates`), cameras (`cameraProfiles`, `activeProfileId`), and editor preferences still change
 - **Entering it clears undo history** (undo writes from outside the guard, and there's nothing to undo into)
 - Not persisted and not undoable
 
 #### `selectSceneContent(state) → SceneContent`
-Not an action: a selector (exported from the store module) returning the parts of the state that are saved as the scene: `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId`, `animation`. Autosave subscribes to it (with `shallow` equality) and passes it to `toSceneDocument`.
+Not an action: a selector (exported from the store module) returning the parts of the state that are saved as the scene: `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId`, `animation`, `viewedStates`. Autosave subscribes to it (with `shallow` equality) and passes it to `toSceneDocument`.
 
 ---
 
@@ -400,16 +400,19 @@ Rename a state. A blank name is ignored.
 Delete a state. If it was being viewed, the object goes back to Base.
 
 #### `setStateValues(stateId: string, values: StateValues) → void`
-Set values in a state; the ones not passed stay as they are. Vectors are copied in. The Transform panel and the gizmo write through this while a state is viewed (the gizmo writes only what its tool moves).
+Set values in a state; the ones not passed stay as they are. Vectors are copied in.
+
+#### `updateShownTransforms(updates: Record<string, StateValues>) → void`
+Transform edits by entity ID, as the Transform panel and the gizmo (multi-select included) make them: each object's go to the state it's shown in, or to its own values in Base. One undo step for all of them. The gizmo passes only what its tool moved (a multi-select drag: only what changed), so a state never starts setting values it left to Base.
 
 #### `clearStateValue(stateId: string, key: "position" | "rotation" | "scale") → void`
 "Reset to Base": the state stops setting that value, so it follows the object's own again.
 
-#### `setViewedState(view: { entityId: string; stateId: string } | null) → void`
-Show the selected object in one of its states (`null` = Base). Not saved, not undoable, and allowed while read-only. Only the selected object shows a state: `viewedState` clears when the selection is anything but that one object, and on `loadScene`.
+#### `setViewedState(entityId: string, stateId: string | null) → void`
+Show an object in one of its states (`null` = Base). It stays that way when the object is deselected, until Base State is picked again, and is saved with the scene (`viewedStates`), so a scene reopens as it was left. Not undoable, and allowed while read-only.
 
-#### `selectViewedObjectState(state) → ObjectState | null`
-Not an action: the state being viewed, or `null` for Base. Read the view through this rather than `viewedState`: it also drops a view whose state no longer exists (after an undo).
+#### `selectViewedObjectState(state, entityId) → ObjectState | null`
+Not an action: the state an object is shown in, or `null` for Base. Read it through this rather than `viewedStates`: an entry whose state was deleted (or undone) means Base, and shows that state again if an undo brings it back. Saving drops such entries.
 
 ---
 
@@ -607,14 +610,14 @@ useEditorStore.subscribe(
 **Saved with the scene (cloud, per scene, via autosave)**:
 - entities, activeProfileId, cameraProfiles
 - sceneSettings, postProcessing, frame
-- animation (object states; events later)
+- animation (object states; events later), viewedStates
 
 **Persisted (localStorage, `persist` v17)** — editor preferences:
 - activeTransformTool, projectionMode, transformSpace
 - hudOverlay, viewportZoom
 
 **NOT saved** (while the editor is open only):
-- selectedEntityIds, viewedState, isPreviewMode, previewGlbUrl
+- selectedEntityIds, isPreviewMode, previewGlbUrl
 - pendingImportCount, readOnlyReason, undo history
 
 ---
