@@ -1,6 +1,7 @@
 import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
+import { shallow } from "zustand/shallow";
 import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
 import { createId } from "../utils/createId";
 import type { SceneContent, StoredSceneContent } from "../utils/sceneDocument";
@@ -1326,6 +1327,10 @@ export const useEditorStore = create<EditorState>()(
           cameraProfiles: state.cameraProfiles,
           animation: state.animation,
         }),
+        // Only record a step when something undo restores changed. Every action replaces what it
+        // changes, so comparing references is enough; without this, selecting an object or picking
+        // a state to view added a step that undid nothing.
+        equality: shallow,
       }
     )
   )

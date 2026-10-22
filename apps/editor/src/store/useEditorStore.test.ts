@@ -186,6 +186,23 @@ describe("loadScene", () => {
   });
 });
 
+describe("undo history", () => {
+  it("records a step only when the scene changed, not for selecting or viewing a state", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [entity("cube-1"), light] });
+    const store = useEditorStore.getState();
+
+    store.selectEntity("cube-1");
+    const stateId = store.addState("cube-1");
+    store.setViewedState(null);
+    store.setViewedState({ entityId: "cube-1", stateId });
+    store.setEditorState({ viewportZoom: 140 });
+    store.selectEntity("directional-light-1");
+
+    expect(useEditorStore.temporal.getState().pastStates).toHaveLength(1);
+  });
+});
+
 describe("read-only (the scene is open for editing elsewhere)", () => {
   const viewOnlyStore = async () => {
     const { useEditorStore } = await loadStore();
