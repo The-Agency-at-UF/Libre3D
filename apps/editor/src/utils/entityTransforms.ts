@@ -17,11 +17,11 @@ export interface EntityTRS {
   scale: [number, number, number];
 }
 
-const composeLocalMatrix = (entity: Entity): THREE.Matrix4 =>
+export const composeLocalMatrix = (trs: EntityTRS): THREE.Matrix4 =>
   new THREE.Matrix4().compose(
-    new THREE.Vector3(...entity.position),
-    new THREE.Quaternion().setFromEuler(new THREE.Euler(...entity.rotation, "XYZ")),
-    new THREE.Vector3(...entity.scale),
+    new THREE.Vector3(...trs.position),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(...trs.rotation, "XYZ")),
+    new THREE.Vector3(...trs.scale),
   );
 
 export function getEntityWorldMatrix(entities: Entity[], id: string): THREE.Matrix4 {
