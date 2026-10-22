@@ -49,6 +49,12 @@ const makeContent = (): SceneContent => ({
     },
   },
   activeProfileId: "personal",
+  animation: {
+    states: {
+      up: { id: "up", targetId: "cube-1", name: "State", order: 0, values: { position: [1, 3, 3], rotation: [0, 1, 0] } },
+    },
+    events: {},
+  },
 });
 
 describe("toSceneDocument / parseSceneDocument", () => {
@@ -72,9 +78,18 @@ describe("toSceneDocument / parseSceneDocument", () => {
 
     content.entities[0].position[0] = 99;
     content.cameraProfiles.personal.target[1] = 99;
+    content.animation.states.up.values.position![1] = 99;
 
     expect(document.scene.entities[0].position[0]).toBe(1);
     expect(document.scene.cameraProfiles.personal.target[1]).toBe(0);
+    expect(document.scene.animation.states.up.values.position![1]).toBe(3);
+  });
+
+  it("opens a v1 document (from before states) as a scene without animation", () => {
+    const { animation: _animation, ...v1Scene } = makeContent();
+    const parsed = parseSceneDocument({ format: SCENE_DOCUMENT_FORMAT, schemaVersion: 1, scene: v1Scene });
+
+    expect(parsed).toEqual({ ok: true, content: { ...v1Scene, animation: undefined } });
   });
 
   it("refuses a document from a newer schema instead of dropping what it doesn't know", () => {
@@ -107,6 +122,7 @@ describe("toSceneDocument / parseSceneDocument", () => {
         frame: undefined,
         cameraProfiles: undefined,
         activeProfileId: undefined,
+        animation: undefined,
       },
     });
   });
