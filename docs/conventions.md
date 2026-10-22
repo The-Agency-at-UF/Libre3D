@@ -15,7 +15,7 @@ This guide documents the naming conventions, architectural patterns, and testing
 - **Hooks**: `camelCase.ts` starting with `use`, matching the exported hook (`useViewportControls.ts` exports `useViewportControls`).
 - **Manager classes** (imperative Three.js wrappers): `PascalCase.ts` matching the exported class (`SceneManager.ts` exports `SceneManager`).
 - **Utility modules**: `camelCase.ts`, named after what they do, not what they contain (`exportScene.ts`, `publishScene.ts`), exporting a small set of named functions rather than a single default.
-- **Directory structure groups by architectural role, not by feature**: `components/`, `components/inspector/` (right-sidebar panels), `components/ui/` (generic, app-agnostic primitives), `hooks/` (app-level hooks), `viewport/` (Three.js manager classes), `viewport/hooks/` (viewport-specific hooks), `store/`, `utils/`, `styles/`. When adding a new file, place it by what kind of thing it is, matching this existing split.
+- **Directory structure groups by architectural role, not by feature**: `components/`, `components/inspector/` (right-sidebar panels), `components/ui/` (generic, app-agnostic primitives), `hooks/` (app-level hooks), `viewport/` (Three.js manager classes), `viewport/hooks/` (viewport-specific hooks), `store/`, `animation/` (state-based animation logic, free of the store, React, and the DOM so the share-link viewer can run it too), `utils/`, `styles/`. When adding a new file, place it by what kind of thing it is, matching this existing split.
 
 ## 3. Naming conventions (code)
 

@@ -9,6 +9,7 @@ Complete reference for the Libre3D Zustand store (`useEditorStore`). This guide 
 - [Viewport & Transform](#viewport--transform)
 - [Settings & Config](#settings--config)
 - [Material Layers](#material-layers)
+- [Object States](#object-states)
 - [Camera Profiles](#camera-profiles)
 - [Important Patterns](#important-patterns)
 
@@ -53,6 +54,12 @@ frame: FrameSettingsConfig
 ```
 Three nested config objects. **These are updated via deep merge, not replacement** — see [Deep Merge Pattern](#deep-merge-pattern).
 
+```typescript
+animation: SceneAnimation   // { states: Record<string, ObjectState>, events: Record<string, unknown> }
+viewedState: ViewedState | null
+```
+Object states (saved with the scene) and the state the selected object is shown in (not saved). See [Object States](#object-states).
+
 ### Preview & Play Mode
 ```typescript
 isPreviewMode: boolean
@@ -86,12 +93,12 @@ Replaces the whole scene with a saved one, or with a new scene's starting conten
 
 #### `readOnlyReason: ReadOnlyReason | null` and `setReadOnly(reason: ReadOnlyReason | null) → void`
 Why the open scene can't be edited here, or `null` when it can. `"openElsewhere"`: another tab or device holds the scene's editing lock. Set by `useOpenScene` when a scene opens and by `useSceneLock` as the lock moves.
-- **While set**, any update that would change `entities`, `sceneSettings`, `postProcessing`, or `frame` is dropped whole, whichever action sends it. Selection, cameras (`cameraProfiles`, `activeProfileId`), and editor preferences still change
+- **While set**, any update that would change `entities`, `sceneSettings`, `postProcessing`, `frame`, or `animation` is dropped whole, whichever action sends it. Selection, the viewed state, cameras (`cameraProfiles`, `activeProfileId`), and editor preferences still change
 - **Entering it clears undo history** (undo writes from outside the guard, and there's nothing to undo into)
 - Not persisted and not undoable
 
 #### `selectSceneContent(state) → SceneContent`
-Not an action: a selector (exported from the store module) returning the parts of the state that are saved as the scene: `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId`. Autosave subscribes to it (with `shallow` equality) and passes it to `toSceneDocument`.
+Not an action: a selector (exported from the store module) returning the parts of the state that are saved as the scene: `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId`, `animation`. Autosave subscribes to it (with `shallow` equality) and passes it to `toSceneDocument`.
 
 ---
 
@@ -168,13 +175,15 @@ Toggle locked state (lock icon in hierarchy). Prevents transform via gizmo.
 Delete one or more entities and all descendants.
 - **Imported assets**: Never deleted here, so undo always works. Local copies are a cache of the cloud ones (a missing one is downloaded when needed); cleaning them up is not wired up yet
 - **Selection**: Auto-clears deleted entities from selection
+- **States**: The removed entities' states go in the same step, so one undo brings both back
 
 #### `duplicateEntity(ids: string[]) → void`
 Clone selected entities with all descendants.
 - **Naming**: Cloned root gets " (Copy)" suffix
-- **Position offset**: Cloned roots shift by +0.5 on X and Z axes
+- **Position offset**: Cloned roots shift by +0.5 on X and Z axes (their states' positions too)
 - **New selection**: Cloned roots become selected; children keep their relative structure
 - **Handles descendants**: Automatically includes all children and remaps parent pointers
+- **States**: Each copy gets its own copies of its original's states, with new IDs
 
 ### Hierarchy Operations
 
@@ -182,7 +191,7 @@ Clone selected entities with all descendants.
 Move entities to a new parent, preserving their world-space position.
 - **newParentId=null**: Move to scene root
 - **index**: Insert position among siblings of new parent (optional, appends if omitted)
-- **World preservation**: Local transforms are automatically recomputed so object doesn't jump
+- **World preservation**: Local transforms are automatically recomputed so object doesn't jump, and so are the moved entities' states (`reparentStates`). `groupEntities` and `ungroupEntity` do the same
 - **Validation**: Refuses to create cycles or cross imported-model boundaries
 - **One step**: Entire reparent is a single undo/redo checkpoint
 
@@ -197,6 +206,7 @@ Group selected entities under a new parent.
 #### `ungroupEntity(id: string) → void`
 Dissolve a group, promoting children to its parent level.
 - **World preservation**: Children keep their world positions (local transforms recomputed)
+- **States**: The group's own states go with it
 - **Safety**: Only works on groups; silently fails on primitives
 
 #### `applyHierarchyPrune(removedIds: Set<string>, updates: Map<string, {...}>) → void`
@@ -363,6 +373,43 @@ Replace an entity's entire layer stack.
   wrapT: number; // THREE.js wrap constant
 }
 ```
+
+---
+
+## Object States
+
+The first part of state-based animation (no keyframes or timeline). Every object has a **Base State**: its own values on the entity. A state holds only the values it changes (`position`, `rotation`, `scale`), absolute and in the same parent space as the entity's own; everything else follows Base. States live in `animation.states`, keyed by ID, and point at their entity by `targetId`. The logic (`resolveState`, naming, the rotation unwrap, keeping states right through removal, duplication, and reparenting) is in `animation/objectStates.ts`, which has no store, React, or DOM dependency.
+
+```typescript
+interface ObjectState {
+  id: string;
+  targetId: string; // entity ID
+  name: string;     // "State", "State 2", …
+  order: number;    // position in the States list
+  values: { position?: [number, number, number]; rotation?: [number, number, number]; scale?: [number, number, number] };
+}
+```
+
+#### `addState(entityId: string) → string`
+Add "State" (then "State 2", …) to an object, setting nothing yet, and view it (like `addEntity` selects). Returns its ID.
+
+#### `renameState(stateId: string, name: string) → void`
+Rename a state. A blank name is ignored.
+
+#### `removeState(stateId: string) → void`
+Delete a state. If it was being viewed, the object goes back to Base.
+
+#### `setStateValues(stateId: string, values: StateValues) → void`
+Set values in a state; the ones not passed stay as they are. Vectors are copied in. The Transform panel and the gizmo write through this while a state is viewed (the gizmo writes only what its tool moves).
+
+#### `clearStateValue(stateId: string, key: "position" | "rotation" | "scale") → void`
+"Reset to Base": the state stops setting that value, so it follows the object's own again.
+
+#### `setViewedState(view: { entityId: string; stateId: string } | null) → void`
+Show the selected object in one of its states (`null` = Base). Not saved, not undoable, and allowed while read-only. Only the selected object shows a state: `viewedState` clears when the selection is anything but that one object, and on `loadScene`.
+
+#### `selectViewedObjectState(state) → ObjectState | null`
+Not an action: the state being viewed, or `null` for Base. Read the view through this rather than `viewedState`: it also drops a view whose state no longer exists (after an undo).
 
 ---
 
@@ -560,13 +607,14 @@ useEditorStore.subscribe(
 **Saved with the scene (cloud, per scene, via autosave)**:
 - entities, activeProfileId, cameraProfiles
 - sceneSettings, postProcessing, frame
+- animation (object states; events later)
 
 **Persisted (localStorage, `persist` v17)** — editor preferences:
 - activeTransformTool, projectionMode, transformSpace
 - hudOverlay, viewportZoom
 
 **NOT saved** (while the editor is open only):
-- selectedEntityIds, isPreviewMode, previewGlbUrl
+- selectedEntityIds, viewedState, isPreviewMode, previewGlbUrl
 - pendingImportCount, readOnlyReason, undo history
 
 ---
@@ -596,4 +644,4 @@ Object.keys(localStorage).filter((k) => k.startsWith("libre3d-scene-cache:")) //
 ```
 
 ### Undo/Redo
-The store uses `zundo` middleware. Undo/redo is automatic for all actions; no manual history management needed. Use keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z) or call through the hotkey handler.
+The store uses `zundo` middleware. Undo/redo is automatic for all actions; no manual history management needed. Use keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z) or call through the hotkey handler. A step is recorded only when something undo restores (`entities`, the settings, `cameraProfiles`, `animation`) changed, compared by reference: selecting or viewing a state records nothing.
