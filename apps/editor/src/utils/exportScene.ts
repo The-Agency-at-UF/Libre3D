@@ -110,6 +110,44 @@ export const showBasePoses = (scene: THREE.Scene): (() => void) => {
   return () => restores.forEach((restore) => restore());
 };
 
+// GLTFExporter writes every object's userData into the file as that node's glTF `extras`, through
+// JSON.stringify, so a Three object kept there ships its whole toJSON. ObjectManager keeps its own
+// bookkeeping in userData: which entity an object is, whether it's locked, which parent it's tracked
+// under, and its selection outline, light helper and light target. None of it means anything outside
+// the editor (a cube and the default light carried about 3 KB of it). Like the furniture above, each
+// object gets a copy without it for the duration of the parse. What's left is data an imported glTF
+// node brought with it (GLTFLoader puts a node's extras in userData), and that ships.
+//
+// The plain values go by name. The references go by type: a file's extras are JSON, so they can't
+// hold a Three object, and a node of the user's own with an extra called `target` keeps it.
+const EDITOR_USER_DATA_KEYS = new Set(["editorOnly", "entityId", "entityType", "parentEntityId", "locked", "assetId", "loadError"]);
+
+const isEditorUserData = (key: string, value: unknown): boolean =>
+  EDITOR_USER_DATA_KEYS.has(key) || value instanceof THREE.Object3D;
+
+const hideEditorUserData = (scene: THREE.Scene): (() => void) => {
+  const swapped: { object: THREE.Object3D; userData: Record<string, unknown> }[] = [];
+
+  scene.traverse((object) => {
+    const userData = object.userData;
+    if (!userData) return;
+
+    const entries = Object.entries(userData);
+    if (!entries.some(([key, value]) => isEditorUserData(key, value))) return;
+
+    object.userData = Object.fromEntries(entries.filter(([key, value]) => !isEditorUserData(key, value)));
+    swapped.push({ object, userData });
+  });
+
+  return () => {
+    for (const { object, userData } of swapped) {
+      // Keep anything the editor wrote while the export ran (a model that finishes loading
+      // mid-export sets its selection outline then).
+      object.userData = Object.assign(userData, object.userData);
+    }
+  };
+};
+
 const hasExportableMeshes = (scene: THREE.Scene): boolean => {
   let meshCount = 0;
 
@@ -152,6 +190,7 @@ export const createSceneExportBlob = async (
   const exporter = new GLTFExporter();
   const restoreEditorOnlyObjects = hideEditorOnlyObjects(scene);
   const restorePoses = showBasePoses(scene);
+  const restoreEditorUserData = hideEditorUserData(scene);
 
   try {
     const result = await parseScene(
@@ -194,6 +233,7 @@ export const createSceneExportBlob = async (
     // editor's grid, helpers and gizmo invisible.
     restoreEditorOnlyObjects();
     restorePoses();
+    restoreEditorUserData();
   }
 };
 
