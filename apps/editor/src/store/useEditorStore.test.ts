@@ -186,10 +186,30 @@ describe("loadScene", () => {
   });
 });
 
+describe("undo history", () => {
+  it("records a step only when the scene changed, not for selecting or viewing a state", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [entity("cube-1"), light] });
+    const store = useEditorStore.getState();
+
+    store.selectEntity("cube-1");
+    const stateId = store.addState("cube-1");
+    store.setViewedState("cube-1", null);
+    store.setViewedState("cube-1", stateId);
+    store.setEditorState({ viewportZoom: 140 });
+    store.selectEntity("directional-light-1");
+
+    expect(useEditorStore.temporal.getState().pastStates).toHaveLength(1);
+  });
+});
+
 describe("read-only (the scene is open for editing elsewhere)", () => {
   const viewOnlyStore = async () => {
     const { useEditorStore } = await loadStore();
-    useEditorStore.getState().loadScene({ entities: [entity("cube-1"), light] });
+    useEditorStore.getState().loadScene({
+      entities: [entity("cube-1"), light],
+      animation: { states: { up: { id: "up", targetId: "cube-1", name: "Up", order: 0, values: { position: [0, 2, 0] } } } },
+    });
     useEditorStore.getState().setReadOnly("openElsewhere");
     return useEditorStore;
   };
@@ -211,12 +231,18 @@ describe("read-only (the scene is open for editing elsewhere)", () => {
     store.updateFrameSettings({ mode: "fixed" });
     store.addMaterialLayer("cube-1", "color");
     store.setEditorState({ sceneSettings: { ...before.sceneSettings, bgColor: "#00ff00" } });
+    store.addState("cube-1");
+    store.renameState("up", "Renamed");
+    store.setStateValues("up", { position: [5, 5, 5] });
+    store.clearStateValue("up", "position");
+    store.removeState("up");
 
     const after = useEditorStore.getState();
     expect(after.entities).toBe(before.entities);
     expect(after.sceneSettings).toBe(before.sceneSettings);
     expect(after.postProcessing).toBe(before.postProcessing);
     expect(after.frame).toBe(before.frame);
+    expect(after.animation).toBe(before.animation);
   });
 
   it("drops a mixed update whole rather than applying part of it", async () => {
@@ -237,6 +263,15 @@ describe("read-only (the scene is open for editing elsewhere)", () => {
 
     expect(useEditorStore.getState()).toMatchObject({ selectedEntityIds: ["cube-1"], viewportZoom: 140, activeTransformTool: "rotate" });
     expect(useEditorStore.getState().cameraProfiles.personal.position).toEqual([9, 9, 9]);
+  });
+
+  it("still lets you look at an object's states", async () => {
+    const useEditorStore = await viewOnlyStore();
+    const { selectViewedObjectState } = await import("./useEditorStore");
+
+    useEditorStore.getState().setViewedState("cube-1", "up");
+
+    expect(selectViewedObjectState(useEditorStore.getState(), "cube-1")?.name).toBe("Up");
   });
 
   it("still shows the latest saved scene through loadScene", async () => {
@@ -283,6 +318,8 @@ describe("store → document → cloud → store", () => {
     store.updatePostProcessing({ vignette: { intensity: 40 } });
     store.updateFrameSettings({ mode: "fixed", preset: "1080x1080", width: 1080, height: 1080 });
     store.addCameraProfile("closeup", { position: [0, 2, 3], fov: 35 });
+    const stateId = store.addState(torusId);
+    store.setStateValues(stateId, { position: [1, 4, 3], rotation: [0, 2 * Math.PI, 0] });
 
     const saved = selectSceneContent(useEditorStore.getState());
     const overTheWire = JSON.parse(JSON.stringify(toSceneDocument(saved)));
@@ -296,5 +333,183 @@ describe("store → document → cloud → store", () => {
     // back as 0, which renders identically.
     expect(reopened.selectSceneContent(reopened.useEditorStore.getState())).toEqual(JSON.parse(JSON.stringify(saved)));
     expect(reopened.useEditorStore.getState().entities.find((e) => e.id === torusId)?.parentId).toBe(groupId);
+    expect(reopened.useEditorStore.getState().animation.states[stateId].targetId).toBe(torusId);
+  });
+});
+
+describe("object states", () => {
+  // A cube at (2, 0, 0) with a child sphere, and the light.
+  const storeWithCube = async () => {
+    const module = await loadStore();
+    module.useEditorStore.getState().loadScene({
+      entities: [entity("cube-1", { position: [2, 0, 0] }), entity("sphere-1", { type: "sphere", parentId: "cube-1" }), light],
+    });
+    module.useEditorStore.getState().selectEntity("cube-1");
+    return module;
+  };
+
+  it("adds State, then State 2, each viewed as it's added and set to nothing yet", async () => {
+    const { useEditorStore, selectViewedObjectState } = await storeWithCube();
+
+    const first = useEditorStore.getState().addState("cube-1");
+    const second = useEditorStore.getState().addState("cube-1");
+
+    const { states } = useEditorStore.getState().animation;
+    expect([states[first].name, states[second].name]).toEqual(["State", "State 2"]);
+    expect(states[second]).toMatchObject({ targetId: "cube-1", values: {} });
+    expect(selectViewedObjectState(useEditorStore.getState(), "cube-1")?.id).toBe(second);
+  });
+
+  it("sets values in a state without sharing vectors, and resets one to Base", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const stateId = useEditorStore.getState().addState("cube-1");
+    const position: [number, number, number] = [2, 3, 0];
+
+    useEditorStore.getState().setStateValues(stateId, { position });
+    useEditorStore.getState().setStateValues(stateId, { rotation: [0, 1, 0] });
+    position[1] = 99;
+    expect(useEditorStore.getState().animation.states[stateId].values).toEqual({ position: [2, 3, 0], rotation: [0, 1, 0] });
+
+    useEditorStore.getState().clearStateValue(stateId, "position");
+    expect(useEditorStore.getState().animation.states[stateId].values).toEqual({ rotation: [0, 1, 0] });
+  });
+
+  it("renames a state, ignoring a blank name", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const stateId = useEditorStore.getState().addState("cube-1");
+
+    useEditorStore.getState().renameState(stateId, "  Up ");
+    useEditorStore.getState().renameState(stateId, "   ");
+
+    expect(useEditorStore.getState().animation.states[stateId].name).toBe("Up");
+  });
+
+  it("removes a state and shows the object in Base, until an undo brings the state back", async () => {
+    const { useEditorStore, selectViewedObjectState } = await storeWithCube();
+    const stateId = useEditorStore.getState().addState("cube-1");
+
+    useEditorStore.getState().removeState(stateId);
+    expect(useEditorStore.getState().animation.states).toEqual({});
+    expect(selectViewedObjectState(useEditorStore.getState(), "cube-1")).toBeNull();
+
+    useEditorStore.temporal.getState().undo();
+    expect(selectViewedObjectState(useEditorStore.getState(), "cube-1")?.id).toBe(stateId);
+  });
+
+  it("undoes state edits", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const stateId = useEditorStore.getState().addState("cube-1");
+    useEditorStore.getState().setStateValues(stateId, { position: [2, 3, 0] });
+
+    useEditorStore.temporal.getState().undo();
+
+    expect(useEditorStore.getState().animation.states[stateId].values).toEqual({});
+  });
+
+  it("keeps each object in the state it's shown in when something else is selected", async () => {
+    const { useEditorStore, selectViewedObjectState } = await storeWithCube();
+    const cubeState = useEditorStore.getState().addState("cube-1");
+    useEditorStore.getState().selectEntity("sphere-1");
+    const sphereState = useEditorStore.getState().addState("sphere-1");
+
+    useEditorStore.getState().selectEntity(null);
+
+    expect(selectViewedObjectState(useEditorStore.getState(), "cube-1")?.id).toBe(cubeState);
+    expect(selectViewedObjectState(useEditorStore.getState(), "sphere-1")?.id).toBe(sphereState);
+
+    useEditorStore.getState().setViewedState("cube-1", null);
+    expect(selectViewedObjectState(useEditorStore.getState(), "cube-1")).toBeNull();
+    expect(selectViewedObjectState(useEditorStore.getState(), "sphere-1")?.id).toBe(sphereState);
+  });
+
+  it("shows Base when the viewed state is undone away", async () => {
+    const { useEditorStore, selectViewedObjectState } = await storeWithCube();
+    useEditorStore.getState().addState("cube-1");
+
+    useEditorStore.temporal.getState().undo();
+
+    expect(selectViewedObjectState(useEditorStore.getState(), "cube-1")).toBeNull();
+  });
+
+  it("opens a scene in the states it was saved in", async () => {
+    const { useEditorStore, selectViewedObjectState } = await storeWithCube();
+    useEditorStore.getState().addState("cube-1");
+
+    useEditorStore.getState().loadScene({
+      entities: [entity("cube-2"), light],
+      animation: { states: { big: { id: "big", targetId: "cube-2", name: "Big", order: 0, values: { scale: [2, 2, 2] } } } },
+      viewedStates: { "cube-2": "big" },
+    });
+
+    expect(useEditorStore.getState().viewedStates).toEqual({ "cube-2": "big" });
+    expect(selectViewedObjectState(useEditorStore.getState(), "cube-2")?.name).toBe("Big");
+
+    useEditorStore.getState().loadScene({ entities: [light] });
+    expect(useEditorStore.getState()).toMatchObject({ viewedStates: {}, animation: { states: {}, events: {} } });
+  });
+
+  it("sends transform edits to the state each object is shown in, or to Base, in one undo step", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const stateId = useEditorStore.getState().addState("cube-1");
+    const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().updateShownTransforms({ "cube-1": { position: [2, 5, 0] }, "sphere-1": { scale: [3, 3, 3] } });
+
+    const state = useEditorStore.getState();
+    expect(state.animation.states[stateId].values).toEqual({ position: [2, 5, 0] });
+    expect(state.entities.find((e) => e.id === "cube-1")?.position).toEqual([2, 0, 0]);
+    expect(state.entities.find((e) => e.id === "sphere-1")?.scale).toEqual([3, 3, 3]);
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
+  });
+
+  it("removes an object's states, and its children's, with it; one undo brings them all back", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const cubeState = useEditorStore.getState().addState("cube-1");
+    const sphereState = useEditorStore.getState().addState("sphere-1");
+
+    useEditorStore.getState().removeEntity(["cube-1"]);
+    expect(useEditorStore.getState().animation.states).toEqual({});
+
+    useEditorStore.temporal.getState().undo();
+    expect(Object.keys(useEditorStore.getState().animation.states).sort()).toEqual([cubeState, sphereState].sort());
+    expect(useEditorStore.getState().entities.map((e) => e.id)).toContain("cube-1");
+  });
+
+  it("gives a duplicate its own copy of the states, moved with it and shown the same way", async () => {
+    const { useEditorStore, selectViewedObjectState } = await storeWithCube();
+    const stateId = useEditorStore.getState().addState("cube-1");
+    useEditorStore.getState().setStateValues(stateId, { position: [2, 3, 0] });
+
+    useEditorStore.getState().duplicateEntity(["cube-1"]);
+
+    const copyId = useEditorStore.getState().selectedEntityIds[0];
+    const copies = Object.values(useEditorStore.getState().animation.states).filter((state) => state.targetId === copyId);
+    expect(copies).toHaveLength(1);
+    expect(copies[0]).toMatchObject({ name: "State", values: { position: [2.5, 3, 0.5] } });
+    expect(copies[0].id).not.toBe(stateId);
+    expect(selectViewedObjectState(useEditorStore.getState(), copyId)?.id).toBe(copies[0].id);
+  });
+
+  it("keeps a state in place when its object is grouped and ungrouped", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const stateId = useEditorStore.getState().addState("cube-1");
+    useEditorStore.getState().setStateValues(stateId, { position: [2, 3, 0] });
+
+    const groupId = useEditorStore.getState().groupEntities(["cube-1"]);
+    // The group sits at the cube, so the cube is at its origin and the state 3 above it.
+    expect(useEditorStore.getState().animation.states[stateId].values.position).toEqual([0, 3, 0]);
+
+    useEditorStore.getState().ungroupEntity(groupId);
+    expect(useEditorStore.getState().animation.states[stateId].values.position).toEqual([2, 3, 0]);
+  });
+
+  it("drops a group's own states when it's ungrouped", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const groupId = useEditorStore.getState().groupEntities(["cube-1"]);
+    useEditorStore.getState().addState(groupId);
+
+    useEditorStore.getState().ungroupEntity(groupId);
+
+    expect(useEditorStore.getState().animation.states).toEqual({});
   });
 });

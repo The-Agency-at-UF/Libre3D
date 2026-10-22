@@ -1,6 +1,7 @@
 import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
+import { shallow } from "zustand/shallow";
 import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
 import { createId } from "../utils/createId";
 import type { SceneContent, StoredSceneContent } from "../utils/sceneDocument";
@@ -11,6 +12,21 @@ import {
   getWorldPosition,
   type EntityTRS,
 } from "../utils/entityTransforms";
+import {
+  cloneAnimation,
+  cloneStateValues,
+  createEmptyAnimation,
+  createObjectState,
+  duplicateStates,
+  getViewedState,
+  removeStatesOf,
+  reparentStates,
+  type ObjectState,
+  type ParentChange,
+  type SceneAnimation,
+  type StateValueKey,
+  type StateValues,
+} from "../animation/objectStates";
 
 export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel" | "group";
 
@@ -336,6 +352,27 @@ export interface EditorState {
   readOnlyReason: ReadOnlyReason | null;
   setReadOnly: (reason: ReadOnlyReason | null) => void;
 
+  // Object states (see animation/objectStates.ts). Saved with the scene and undoable.
+  animation: SceneAnimation;
+  // The state each object is shown in while editing (entity ID → state ID; no entry = Base). It
+  // stays when the object is deselected, and is saved with the scene so it reopens as it was left.
+  // Not undoable, and allowed while read-only (looking at a state changes nothing). Read it through
+  // selectViewedObjectState, which treats an entry whose state is gone (deleted, undone) as Base.
+  viewedStates: Record<string, string>;
+  // Shows an object in one of its states, or in Base (null).
+  setViewedState: (entityId: string, stateId: string | null) => void;
+  // Adds "State N" (setting nothing yet) to an object and views it, like addEntity selects. Returns its ID.
+  addState: (entityId: string) => string;
+  renameState: (stateId: string, name: string) => void;
+  removeState: (stateId: string) => void;
+  // Sets values in a state, leaving the ones not passed as they are.
+  setStateValues: (stateId: string, values: StateValues) => void;
+  // Transform edits from the inspector and the gizmo: each object's go to the state it's shown in,
+  // or to its own values in Base. One undo step for all of them.
+  updateShownTransforms: (updates: Record<string, StateValues>) => void;
+  // "Reset to Base": the state stops setting that value, so it follows the object's own again.
+  clearStateValue: (stateId: string, key: StateValueKey) => void;
+
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
@@ -347,7 +384,7 @@ export interface EditorState {
   // Replaces the whole scene with a saved one (null = a new scene's starting content) and clears
   // undo history, so Ctrl+Z can't reach into the previously open scene.
   loadScene: (content: StoredSceneContent | null) => void;
-  setEditorState:(updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
+  setEditorState:(updates: Partial<Omit<EditorState, "entities" | "animation" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -497,7 +534,31 @@ export const selectSceneContent = (state: EditorState): SceneContent => ({
   frame: state.frame,
   cameraProfiles: state.cameraProfiles,
   activeProfileId: state.activeProfileId,
+  animation: state.animation,
+  viewedStates: state.viewedStates,
 });
+
+/** The state an object is shown in, or null when it's shown in Base (see `viewedStates`). */
+export const selectViewedObjectState = (state: EditorState, entityId: string): ObjectState | null =>
+  getViewedState(state.viewedStates, state.animation.states, entityId);
+
+// The `animation` part of an update that replaces its states, or nothing when they're unchanged.
+const withStates = (animation: SceneAnimation, states: Record<string, ObjectState>) =>
+  states === animation.states ? null : { animation: { ...animation, states } };
+
+// The update that replaces one state through `update`, or no change when it's gone.
+const updatingState = (
+  state: EditorState,
+  stateId: string,
+  update: (objectState: ObjectState) => ObjectState,
+): Partial<EditorState> => {
+  const objectState = state.animation.states[stateId];
+  return objectState ? withStates(state.animation, { ...state.animation.states, [stateId]: update(objectState) })! : {};
+};
+
+// Where an object's parent is in the world, from the stored tree (null = the scene).
+const getParentWorld = (entities: Entity[], parentId: string | null | undefined) =>
+  parentId ? getEntityWorldMatrix(entities, parentId) : null;
 
 // What a new scene starts with: a fresh cube (new ID) and the default light.
 const createStartingEntities = (): Entity[] => [
@@ -523,7 +584,7 @@ function deepMerge(target: any, source: any): any {
 // What read-only mode protects: the scene's content, less its cameras. Moving the view (and picking
 // a camera) is how you look at a scene you can't edit, and nothing is saved while read-only; the
 // scene is reloaded from the cloud before editing resumes.
-const PROTECTED_SCENE_KEYS = ["entities", "sceneSettings", "postProcessing", "frame"] as const;
+const PROTECTED_SCENE_KEYS = ["entities", "sceneSettings", "postProcessing", "frame", "animation"] as const;
 
 // What persist saves in this browser (partialize): editor preferences only. The scene is saved per
 // scene in the cloud.
@@ -698,6 +759,12 @@ export const useEditorStore = create<EditorState>()(
               const idMap = new Map<string, string>();
               cloneOrder.forEach((id) => idMap.set(id, createEntityId()));
 
+              // A requested copy is set a little apart from its original (its states too).
+              const copyOffset: [number, number, number] = [0.5, 0, 0.5];
+              const copyOffsets = new Map(
+                cloneOrder.filter((id) => requestedRootIds.has(id)).map((id) => [id, copyOffset] as const),
+              );
+
               const newEntities: Entity[] = cloneOrder.map((id) => {
                 const original = state.entities.find((e) => e.id === id)!;
                 const isRequestedRoot = requestedRootIds.has(id);
@@ -712,17 +779,25 @@ export const useEditorStore = create<EditorState>()(
                   rootEntityId: newRootEntityId,
                   position: isRequestedRoot
                     ? [
-                      original.position[0] + 0.5,
-                      original.position[1],
-                      original.position[2] + 0.5
+                      original.position[0] + copyOffset[0],
+                      original.position[1] + copyOffset[1],
+                      original.position[2] + copyOffset[2],
                     ] as [number, number, number]
                     : cloneVector(original.position),
                 };
               });
 
+              // Copies of the states too, and each copy shown in the copy of the state its original shows.
+              const { states, stateIdMap } = duplicateStates(state.animation.states, idMap, copyOffsets);
+              const copiedViews = cloneOrder
+                .map((id) => [idMap.get(id)!, stateIdMap.get(selectViewedObjectState(state, id)?.id ?? "")] as const)
+                .filter((view): view is readonly [string, string] => view[1] !== undefined);
+
               return {
                 entities: [...state.entities, ...newEntities],
                 selectedEntityIds: cloneOrder.filter((id) => requestedRootIds.has(id)).map((id) => idMap.get(id)!),
+                ...withStates(state.animation, states),
+                ...(copiedViews.length > 0 ? { viewedStates: { ...state.viewedStates, ...Object.fromEntries(copiedViews) } } : null),
               };
             });
           },
@@ -736,10 +811,12 @@ export const useEditorStore = create<EditorState>()(
             // Note: this intentionally does NOT free the removed entities'
             // model/texture assets, so undo always gets a working entity back.
             // Local copies are a cache of the cloud ones (assetTransfers.ts);
-            // nothing evicts them yet.
+            // nothing evicts them yet. The removed objects' states go in the same
+            // set, so one undo brings back the objects and their states together.
             set((state) => ({
               entities: state.entities.filter((entity) => !allIds.has(entity.id)),
               selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
+              ...withStates(state.animation, removeStatesOf(state.animation.states, allIds)),
             }));
           },
           // World-space placement is preserved: the new local TRS is solved from
@@ -756,12 +833,14 @@ export const useEditorStore = create<EditorState>()(
 
               const parentWorld = newParentId ? getEntityWorldMatrix(state.entities, newParentId) : null;
               const solvedById = new Map<string, EntityTRS>();
+              const parentChanges: ParentChange[] = [];
               for (const id of moveRoots) {
                 const entity = state.entities.find((e) => e.id === id)!;
                 // Same-parent moves are pure sibling reorders — keep the stored
                 // TRS bit-identical instead of a solve/decompose round-trip.
                 if ((entity.parentId ?? null) === (newParentId ?? null)) continue;
                 solvedById.set(id, solveLocalFromWorld(getEntityWorldMatrix(state.entities, id), parentWorld));
+                parentChanges.push({ entity, from: getParentWorld(state.entities, entity.parentId), to: parentWorld });
               }
 
               const movingSet = new Set(moveRoots);
@@ -795,6 +874,7 @@ export const useEditorStore = create<EditorState>()(
 
               return {
                 entities: [...remaining.slice(0, insertAt), ...moved, ...remaining.slice(insertAt)],
+                ...withStates(state.animation, reparentStates(state.animation.states, parentChanges)),
               };
             }),
           groupEntities: (ids) => {
@@ -845,9 +925,11 @@ export const useEditorStore = create<EditorState>()(
 
               const movingSet = new Set(moveRoots);
               const firstMemberIndex = state.entities.findIndex((entity) => movingSet.has(entity.id));
+              const parentChanges: ParentChange[] = [];
               const entitiesNext = state.entities.map((entity) => {
                 if (!movingSet.has(entity.id)) return entity;
                 const solved = solveLocalFromWorld(memberWorlds.get(entity.id)!, groupWorld);
+                parentChanges.push({ entity, from: getParentWorld(state.entities, entity.parentId), to: groupWorld });
                 return {
                   ...entity,
                   parentId: group.id,
@@ -858,7 +940,11 @@ export const useEditorStore = create<EditorState>()(
               });
               entitiesNext.splice(Math.max(firstMemberIndex, 0), 0, group);
 
-              return { entities: entitiesNext, selectedEntityIds: [group.id] };
+              return {
+                entities: entitiesNext,
+                selectedEntityIds: [group.id],
+                ...withStates(state.animation, reparentStates(state.animation.states, parentChanges)),
+              };
             });
             return groupId;
           },
@@ -887,13 +973,16 @@ export const useEditorStore = create<EditorState>()(
 
               const childIds = getChildren(state.entities, id).map((child) => child.id);
               const parentWorld = group.parentId ? getEntityWorldMatrix(state.entities, group.parentId) : null;
+              const groupWorld = getEntityWorldMatrix(state.entities, id);
               const childSet = new Set(childIds);
+              const parentChanges: ParentChange[] = [];
 
               const entitiesNext = state.entities
                 .filter((entity) => entity.id !== id)
                 .map((entity) => {
                   if (!childSet.has(entity.id)) return entity;
                   const solved = solveLocalFromWorld(getEntityWorldMatrix(state.entities, entity.id), parentWorld);
+                  parentChanges.push({ entity, from: groupWorld, to: parentWorld });
                   return {
                     ...entity,
                     parentId: group.parentId ?? null,
@@ -903,11 +992,15 @@ export const useEditorStore = create<EditorState>()(
                   };
                 });
 
+              // The group's own states go with it; its children's keep their place.
+              const statesNext = reparentStates(removeStatesOf(state.animation.states, new Set([id])), parentChanges);
+
               return {
                 entities: entitiesNext,
                 selectedEntityIds: childIds.length > 0
                   ? childIds
                   : state.selectedEntityIds.filter((selId) => selId !== id),
+                ...withStates(state.animation, statesNext),
               };
             }),
           updateEntityTransform: (id, updates) =>
@@ -1037,6 +1130,83 @@ export const useEditorStore = create<EditorState>()(
           adjustPendingImports: (delta) =>
             set((state) => ({ pendingImportCount: Math.max(0, state.pendingImportCount + delta) })),
 
+          animation: createEmptyAnimation(),
+          viewedStates: {},
+          setViewedState: (entityId, stateId) =>
+            set((state) => {
+              const viewedStates = { ...state.viewedStates };
+              if (stateId) {
+                viewedStates[entityId] = stateId;
+              } else {
+                delete viewedStates[entityId];
+              }
+              return { viewedStates };
+            }),
+          addState: (entityId) => {
+            let stateId = "";
+            set((state) => {
+              if (!state.entities.some((entity) => entity.id === entityId)) return state;
+              const objectState = createObjectState(state.animation.states, entityId);
+              stateId = objectState.id;
+              return {
+                animation: { ...state.animation, states: { ...state.animation.states, [objectState.id]: objectState } },
+                viewedStates: { ...state.viewedStates, [entityId]: objectState.id },
+              };
+            });
+            return stateId;
+          },
+          renameState: (stateId, name) => {
+            const trimmed = name.trim();
+            if (trimmed) set((state) => updatingState(state, stateId, (objectState) => ({ ...objectState, name: trimmed })));
+          },
+          // An object shown in the removed state is shown in Base (its viewedStates entry stays, so
+          // undoing the removal shows the state again).
+          removeState: (stateId) =>
+            set((state) => {
+              if (!state.animation.states[stateId]) return state;
+              const states = { ...state.animation.states };
+              delete states[stateId];
+              return { animation: { ...state.animation, states } };
+            }),
+          setStateValues: (stateId, values) =>
+            set((state) =>
+              updatingState(state, stateId, (objectState) => ({
+                ...objectState,
+                values: { ...objectState.values, ...cloneStateValues(values) },
+              })),
+            ),
+          clearStateValue: (stateId, key) =>
+            set((state) =>
+              updatingState(state, stateId, (objectState) => {
+                const values = { ...objectState.values };
+                delete values[key];
+                return { ...objectState, values };
+              }),
+            ),
+          updateShownTransforms: (updates) =>
+            set((state) => {
+              const states = { ...state.animation.states };
+              const baseUpdates = new Map<string, StateValues>();
+              let isStateEdit = false;
+
+              for (const [entityId, values] of Object.entries(updates)) {
+                const shown = selectViewedObjectState(state, entityId);
+                if (shown) {
+                  states[shown.id] = { ...shown, values: { ...shown.values, ...cloneStateValues(values) } };
+                  isStateEdit = true;
+                } else {
+                  baseUpdates.set(entityId, cloneStateValues(values));
+                }
+              }
+
+              return {
+                ...(baseUpdates.size > 0
+                  ? { entities: state.entities.map((entity) => (baseUpdates.has(entity.id) ? { ...entity, ...baseUpdates.get(entity.id) } : entity)) }
+                  : null),
+                ...(isStateEdit ? { animation: { ...state.animation, states } } : null),
+              };
+            }),
+
           updatePostProcessing: (updates) =>
             set((state) => ({
               postProcessing: deepMerge(state.postProcessing, updates),
@@ -1138,6 +1308,8 @@ export const useEditorStore = create<EditorState>()(
               frame: deepMerge(initialFrameDefaults, content?.frame ?? {}),
               cameraProfiles,
               activeProfileId,
+              animation: cloneAnimation(content?.animation),
+              viewedStates: { ...content?.viewedStates },
               selectedEntityIds: [],
               isPreviewMode: false,
               previewGlbUrl: null,
@@ -1188,7 +1360,12 @@ export const useEditorStore = create<EditorState>()(
           postProcessing: state.postProcessing,
           frame: state.frame,
           cameraProfiles: state.cameraProfiles,
+          animation: state.animation,
         }),
+        // Only record a step when something undo restores changed. Every action replaces what it
+        // changes, so comparing references is enough; without this, selecting an object or picking
+        // a state to view added a step that undid nothing.
+        equality: shallow,
       }
     )
   )

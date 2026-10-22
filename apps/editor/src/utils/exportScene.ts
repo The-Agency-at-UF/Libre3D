@@ -70,6 +70,46 @@ export const hideEditorOnlyObjects = (scene: THREE.Scene): (() => void) => {
   };
 };
 
+// The editor shows the selected object in the state being viewed by moving its Three object
+// (ObjectManager.applyPose), so clicks, the selection outline, and the gizmo all follow it. Exports
+// and the gallery thumbnail read that same scene and show every object in Base: each posed object's
+// Base transform is kept here and put back for them. A WeakMap rather than userData, which the
+// exporter writes into the file.
+const basePoses = new WeakMap<THREE.Object3D, { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 }>();
+
+/** Call before posing an object that's still in Base. */
+export const rememberBasePose = (object: THREE.Object3D): void => {
+  if (basePoses.has(object)) return;
+  basePoses.set(object, { position: object.position.clone(), quaternion: object.quaternion.clone(), scale: object.scale.clone() });
+};
+
+/** Call when an object is put back in Base. */
+export const forgetBasePose = (object: THREE.Object3D): void => {
+  basePoses.delete(object);
+};
+
+/** Puts every posed object in Base; returns what puts them back. */
+export const showBasePoses = (scene: THREE.Scene): (() => void) => {
+  const restores: (() => void)[] = [];
+
+  scene.traverse((object) => {
+    const base = basePoses.get(object);
+    if (!base) return;
+
+    const posed = { position: object.position.clone(), quaternion: object.quaternion.clone(), scale: object.scale.clone() };
+    object.position.copy(base.position);
+    object.quaternion.copy(base.quaternion);
+    object.scale.copy(base.scale);
+    restores.push(() => {
+      object.position.copy(posed.position);
+      object.quaternion.copy(posed.quaternion);
+      object.scale.copy(posed.scale);
+    });
+  });
+
+  return () => restores.forEach((restore) => restore());
+};
+
 const hasExportableMeshes = (scene: THREE.Scene): boolean => {
   let meshCount = 0;
 
@@ -111,6 +151,7 @@ export const createSceneExportBlob = async (
   const { GLTFExporter } = await import("three/examples/jsm/exporters/GLTFExporter.js");
   const exporter = new GLTFExporter();
   const restoreEditorOnlyObjects = hideEditorOnlyObjects(scene);
+  const restorePoses = showBasePoses(scene);
 
   try {
     const result = await parseScene(
@@ -152,6 +193,7 @@ export const createSceneExportBlob = async (
     // Restore even if the parse throws — a failed export must never leave the
     // editor's grid, helpers and gizmo invisible.
     restoreEditorOnlyObjects();
+    restorePoses();
   }
 };
 

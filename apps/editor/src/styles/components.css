@@ -911,6 +911,17 @@
   color: #ffffff;
 }
 
+/* "Editing State 2": shown while the selected object is in one of its states. */
+.viewport-state-badge {
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+}
+
 /* Collapsible Inspector Sections */
 .inspector-collapsible-section {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
@@ -2378,6 +2389,124 @@ input[type="range"]::-moz-range-thumb {
 .mat-add-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ── OBJECT STATES (StatesPanel, and the Transform panel's state markers) ── */
+.state-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.state-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 2px 0 8px;
+  border-radius: var(--radius-sm);
+  transition: background 0.1s ease;
+}
+
+.state-row:hover {
+  background: var(--bg-hover);
+}
+
+.state-row--active,
+.state-row--active:hover {
+  background: var(--accent-dim);
+}
+
+.state-row-select {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.state-row--active .state-row-select {
+  color: var(--text-primary);
+}
+
+.state-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  padding: 0 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 12px;
+  outline: none;
+}
+
+/* .mat-add-btn grows along its row; in this column it keeps its own height. */
+.state-list .mat-add-btn {
+  flex: none;
+  margin-top: 6px;
+}
+
+.state-hint {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+.state-value-marker {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.state-reset-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 4px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  font-family: var(--font);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.state-reset-btn i {
+  font-size: 11px;
+}
+
+.state-reset-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.state-reset-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 /* ── TONE MAP BADGE ── */

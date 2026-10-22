@@ -15,6 +15,8 @@ import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHi
 import { pruneImportNodes, type PrunableNode } from "../utils/pruneImportHierarchy";
 import { takeParsedModel } from "../utils/importModel";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
+import { forgetBasePose, rememberBasePose } from "../utils/exportScene";
+import type { Pose } from "../animation/objectStates";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 type LayeredMaterial =
@@ -693,6 +695,7 @@ export class ObjectManager {
       obj.position.set(...entity.position);
       obj.rotation.set(...entity.rotation);
       obj.scale.set(...entity.scale);
+      forgetBasePose(obj);
       // Re-aim after a move so the baked rotation keeps tracking the origin.
       // (A directional light's stored entity.rotation has never affected its
       // direction — three drives that from position → target.)
@@ -1039,6 +1042,21 @@ export class ObjectManager {
       obj.rotation.set(...entity.rotation);
       obj.scale.set(...entity.scale);
     }
+  }
+
+  // Shows an object in a pose other than its own values (the state being viewed) without touching
+  // the store, so clicks, the outline, and the gizmo follow it. syncMeshes puts every object back in
+  // Base, so the caller applies the pose again after each sync. Exports and thumbnails still see
+  // Base (showBasePoses).
+  public applyPose(entityId: string, pose: Pose): void {
+    const obj = this.meshMap.get(entityId);
+    if (!obj) return;
+
+    rememberBasePose(obj);
+    obj.position.set(...pose.position);
+    obj.rotation.set(...pose.rotation);
+    obj.scale.set(...pose.scale);
+    if (obj instanceof THREE.DirectionalLight) aimDirectionalLight(obj);
   }
 
   public getObject(id: string): THREE.Object3D | undefined {
