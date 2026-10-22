@@ -1,4 +1,4 @@
-import { useEditorStore } from "../store/useEditorStore";
+import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore";
 
 // NOTE: this used to also render a `.axis-orb-gizmo` — a static, purely
 // decorative SVG "3D Axis Gizmo" with no click/drag behavior. It's been
@@ -15,9 +15,17 @@ import { useEditorStore } from "../store/useEditorStore";
 export function ViewportOverlays() {
   const projectionMode = useEditorStore((state) => state.projectionMode);
   const setEditorState = useEditorStore((state) => state.setEditorState);
+  const viewedState = useEditorStore(selectViewedObjectState);
+  const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
 
   return (
     <div className="viewport-bottom-overlays">
+      {/* So nobody edits a state thinking it's Base, even with the States section scrolled away. */}
+      {viewedState && (
+        <div className="viewport-state-badge">
+          {isReadOnly ? "Viewing" : "Editing"} {viewedState.name}
+        </div>
+      )}
       <div className="projection-toggle-capsule">
         <button
           className={`projection-btn ${projectionMode === "perspective" ? "active" : ""}`}

@@ -1,13 +1,20 @@
+import type { ReactNode } from "react";
+
 export interface Vector3InputProps {
   label: string;
   values: [number | null, number | null, number | null];
   onChange: (index: number, val: number) => void;
+  /** Shown after the label, e.g. a marker and a reset button. */
+  labelExtra?: ReactNode;
 }
 
-export function Vector3Input({ label, values, onChange }: Vector3InputProps) {
+export function Vector3Input({ label, values, onChange, labelExtra }: Vector3InputProps) {
   return (
     <div style={{ display: "grid", gap: "6px", margin: "4px 0", width: "100%" }}>
-      <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{label}</span>
+      <div style={{ display: "flex", alignItems: "center", gap: "6px", minHeight: "18px" }}>
+        <span style={{ fontSize: "11px", color: "var(--text-secondary)" }}>{label}</span>
+        {labelExtra}
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", width: "100%" }}>
         {["X", "Y", "Z"].map((axis, i) => (
           <div key={axis} style={{ position: "relative", width: "100%" }}>

@@ -1,5 +1,6 @@
 import { useEditorStore } from "../store/useEditorStore";
 import { InspectorTopbar } from "./inspector/InspectorTopbar";
+import { StatesPanel } from "./inspector/StatesPanel";
 import { TransformPanel } from "./inspector/TransformPanel";
 import { MaterialsPanel } from "./inspector/MaterialsPanel";
 import { ScenePanel } from "./inspector/ScenePanel";
@@ -51,10 +52,14 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
         </fieldset>
 
         {selectedEntities.length > 0 ? (
-          <fieldset className="inspector-fieldset" disabled={isReadOnly}>
-            <TransformPanel selectedEntities={selectedEntities} />
-            <MaterialsPanel selectedEntities={selectedEntities} />
-          </fieldset>
+          <>
+            {/* Outside the fieldset: a view-only scene can still view states (it disables its own edits). */}
+            {selectedEntities.length === 1 && <StatesPanel entity={selectedEntities[0]} />}
+            <fieldset className="inspector-fieldset" disabled={isReadOnly}>
+              <TransformPanel selectedEntities={selectedEntities} />
+              <MaterialsPanel selectedEntities={selectedEntities} />
+            </fieldset>
+          </>
         ) : (
           <CameraPanel />
         )}
