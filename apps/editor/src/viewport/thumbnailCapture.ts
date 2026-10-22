@@ -13,7 +13,7 @@
 import type * as THREE from "three";
 
 import { useEditorStore } from "../store/useEditorStore";
-import { hideEditorOnlyObjects } from "../utils/exportScene";
+import { hideEditorOnlyObjects, showBasePoses } from "../utils/exportScene";
 
 // The gallery card's 16:9 thumbnail at about twice its displayed size.
 const THUMBNAIL_WIDTH = 480;
@@ -31,7 +31,7 @@ export const hasPendingThumbnail = (): boolean => pending.length > 0;
 
 /**
  * Called by the render loop with this frame's camera: renders the scene without the editor's own
- * objects and copies it, cropped to 16:9 from the middle, into a small canvas for every waiting
+ * objects, with every object in its Base State, and copies it, cropped to 16:9 from the middle, into a small canvas for every waiting
  * request. The frame's normal render follows and replaces it on screen.
  */
 export const renderPendingThumbnail = (renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera): void => {
@@ -44,6 +44,7 @@ export const renderPendingThumbnail = (renderer: THREE.WebGLRenderer, scene: THR
   canvas.height = THUMBNAIL_HEIGHT;
   const context = canvas.getContext("2d");
   const restoreEditorOnlyObjects = hideEditorOnlyObjects(scene);
+  const restorePoses = showBasePoses(scene);
 
   try {
     renderer.render(scene, camera);
@@ -65,6 +66,7 @@ export const renderPendingThumbnail = (renderer: THREE.WebGLRenderer, scene: THR
     );
   } finally {
     restoreEditorOnlyObjects();
+    restorePoses();
   }
 
   waiting.forEach((resolve) => resolve(context && source.width > 0 && source.height > 0 ? canvas : null));

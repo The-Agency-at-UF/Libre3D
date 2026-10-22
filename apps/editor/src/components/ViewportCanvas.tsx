@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
-import { useEditorStore } from "../store/useEditorStore";
+import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore";
 import { filterMoveRoots } from "../store/entityIndex";
+import { resolveState, unwrapRotation } from "../animation/objectStates";
 import { SceneManager } from "../viewport/SceneManager";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
@@ -26,6 +27,7 @@ export function ViewportCanvas() {
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
   const entities        = useEditorStore((state) => state.entities);
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
+  const viewedObjectState = useEditorStore(selectViewedObjectState);
 
   const [autoScaleFactor, setAutoScaleFactor] = useState(1);
 
@@ -164,10 +166,12 @@ export function ViewportCanvas() {
         const updates: Record<string, any> = {};
         proxy.updateMatrixWorld(true);
         const proxyMat = proxy.matrixWorld;
+        const { entities } = useEditorStore.getState();
         getDragRootIds().forEach(id => {
           const localMat = initialOffsetsRef.current.get(id);
           const obj = objectManager.getObject(id);
-          if (localMat && obj) {
+          const entity = entities.find(e => e.id === id);
+          if (localMat && obj && entity) {
             const newWorldMat = proxyMat.clone().multiply(localMat);
             // entity.position/rotation/scale are LOCAL to the object's parent —
             // solve the local matrix against the live parent's world matrix
@@ -184,7 +188,9 @@ export function ViewportCanvas() {
             const scale = new THREE.Vector3();
             newWorldMat.decompose(pos, quat, scale);
             const rot = new THREE.Euler().setFromQuaternion(quat);
-            updates[id] = { position: pos.toArray(), rotation: rot.toArray(), scale: scale.toArray() };
+            // Wrapped to ±180° by the quaternion; keep the turn nearest the stored one (see unwrapRotation).
+            const rotation = unwrapRotation([rot.x, rot.y, rot.z], entity.rotation);
+            updates[id] = { position: pos.toArray(), rotation, scale: scale.toArray() };
           }
         });
         useEditorStore.getState().updateMultipleEntityTransforms(updates);
@@ -258,6 +264,14 @@ export function ViewportCanvas() {
 
     objectManager.syncMeshes(entities, transformTarget, isDragging);
 
+    // The selected object in the state being viewed (syncMeshes just put it in Base). Not while the
+    // gizmo drags it: the drag already put it there, and writes into the state.
+    if (viewedObjectState) {
+      const entity = entities.find((e) => e.id === viewedObjectState.targetId);
+      const isDraggedObject = isDragging && transformTarget === objectManager.getObject(viewedObjectState.targetId);
+      if (entity && !isDraggedObject) objectManager.applyPose(entity.id, resolveState(entity, viewedObjectState));
+    }
+
     const tc = transformControlsRef.current;
     const locked = selectedEntityIds.some(id => objectManager.getObject(id)?.userData.locked);
     // Preview hides the editor viewport behind the overlay but keeps the canvas
@@ -318,7 +332,7 @@ export function ViewportCanvas() {
         }
       }
     });
-  }, [entities, selectedEntityIds, objectManager, sceneManager, transformControlsRef, isPreviewMode, isReadOnly]);
+  }, [entities, selectedEntityIds, viewedObjectState, objectManager, sceneManager, transformControlsRef, isPreviewMode, isReadOnly]);
 
   // -- Resize Logic --
   useEffect(() => {

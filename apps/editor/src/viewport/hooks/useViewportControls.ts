@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { useEditorStore } from "../../store/useEditorStore";
+import { selectViewedObjectState, useEditorStore } from "../../store/useEditorStore";
+import { resolveState, unwrapRotation } from "../../animation/objectStates";
 
 export function useViewportControls(
   // Accept a ref so OrbitControls / TransformControls always use the live camera.
@@ -331,14 +332,40 @@ export function useViewportControls(
 
     transformControls.addEventListener("objectChange", () => {
       const target = transformControls.object;
-      if (target && target.userData.entityId && !target.userData.locked) {
-        useEditorStore
-          .getState()
-          .updateEntityTransform(target.userData.entityId, {
+      const store = useEditorStore.getState();
+      const entity = target?.userData.entityId
+        ? store.entities.find((e) => e.id === target.userData.entityId)
+        : undefined;
+      if (target && entity && !target.userData.locked) {
+        const viewedState = selectViewedObjectState(store);
+        const objectState = viewedState?.targetId === entity.id ? viewedState : null;
+        // The gizmo hands back rotations wrapped to ±180° (they go through a quaternion); keep the
+        // turn nearest the stored one, so a turn past 180° stays one and transitions to it don't
+        // go the long way round.
+        const rotation = unwrapRotation(
+          [target.rotation.x, target.rotation.y, target.rotation.z],
+          resolveState(entity, objectState).rotation,
+        );
+
+        if (objectState) {
+          // A state holds only what it changes: write just what this tool moves, so the rest keeps
+          // following Base.
+          const tool = transformControls.mode;
+          store.setStateValues(
+            objectState.id,
+            tool === "translate"
+              ? { position: [target.position.x, target.position.y, target.position.z] }
+              : tool === "rotate"
+                ? { rotation }
+                : { scale: [target.scale.x, target.scale.y, target.scale.z] },
+          );
+        } else {
+          store.updateEntityTransform(entity.id, {
             position: [target.position.x, target.position.y, target.position.z],
-            rotation: [target.rotation.x, target.rotation.y, target.rotation.z],
+            rotation,
             scale: [target.scale.x, target.scale.y, target.scale.z],
           });
+        }
       }
 
       if (isDragging && !hasPausedForDrag) {
