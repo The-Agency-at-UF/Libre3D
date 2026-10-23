@@ -1091,7 +1091,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
           <div className="hierarchy-empty-state">
             {trimmedQuery
               ? `No objects match “${searchQuery.trim()}”.`
-              : "Scene is empty. Add a shape with the + button, or drop a .glb file into the viewport."}
+              : "Scene is empty. Add a shape with the + button, or drop a .glb or .svg file into the viewport."}
           </div>
         )}
         {rowWindow && rowWindow.start > 0 && (
