@@ -20,13 +20,12 @@ import {
   duplicateStates,
   getViewedState,
   removeStatesOf,
-  reparentStates,
   type ObjectState,
-  type ParentChange,
   type SceneAnimation,
   type StateValueKey,
   type StateValues,
 } from "../animation/objectStates";
+import { reparentStates, type ParentChange } from "../animation/reparentStates";
 import {
   cloneTransition,
   createEvent,

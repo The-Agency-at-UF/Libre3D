@@ -9,13 +9,13 @@
  *
  * States live in the scene's `animation` section, keyed by ID, and point at their object by entity
  * ID. Nothing here depends on the store, React, or the DOM, so the events runtime (A3) and the
- * share-link viewer can use it as is.
+ * share-link viewer can use it as is. Nor on Three.js: the scene document reads states through
+ * here, so every page loads this file, and only the editor may download Three (App.tsx). The
+ * matrix math for states whose object changes parent is in reparentStates.ts.
  */
 
-import type * as THREE from "three";
-import type { Entity } from "../store/useEditorStore";
 import { createId } from "../utils/createId";
-import { composeLocalMatrix, solveLocalFromWorld, type EntityTRS } from "../utils/entityTransforms";
+import type { EntityTRS } from "../utils/entityTransforms";
 import type { SceneEvent } from "./events";
 
 /** What a state can set: transform, and a path's trim (0–1, see paths/). Colour and opacity may follow. */
@@ -52,13 +52,6 @@ export type Trim = Pick<StateValues, "trimStart" | "trimEnd">;
  * a trim only when the object or the state has one (paths).
  */
 export type Pose = EntityTRS & Trim;
-
-/** An object that moves to another parent, with its own values from before the move. */
-export interface ParentChange {
-  entity: Pick<Entity, "id" | "position" | "rotation" | "scale">;
-  from: THREE.Matrix4 | null; // the old parent's world matrix (null = the scene)
-  to: THREE.Matrix4 | null; // the new parent's
-}
 
 const FULL_TURN = Math.PI * 2;
 
@@ -223,42 +216,4 @@ export const duplicateStates = (
     states: copies.length === 0 ? states : { ...states, ...Object.fromEntries(copies.map((state) => [state.id, state])) },
     stateIdMap,
   };
-};
-
-/**
- * Keeps states in place in the world when their object moves to another parent. The store
- * re-solves the object's own values that way (reparenting, grouping, ungrouping); a state's values
- * are relative to the parent too, so without this they'd shift by the difference between the
- * parents. A state keeps setting only what it set, and keeps its other values (a trim) as they
- * were. Returns `states` itself when nothing changed.
- */
-export const reparentStates = (
-  states: Record<string, ObjectState>,
-  changes: ParentChange[],
-): Record<string, ObjectState> => {
-  const changeByTarget = new Map(changes.map((change) => [change.entity.id, change]));
-  let next: Record<string, ObjectState> | null = null;
-
-  for (const state of Object.values(states)) {
-    const change = changeByTarget.get(state.targetId);
-    const { position, rotation, scale } = state.values;
-    if (!change || (!position && !rotation && !scale)) continue;
-
-    const world = composeLocalMatrix(resolveState(change.entity, state));
-    if (change.from) world.premultiply(change.from);
-    const solved = solveLocalFromWorld(world, change.to);
-
-    next ??= { ...states };
-    next[state.id] = {
-      ...state,
-      values: {
-        ...state.values,
-        ...(position ? { position: solved.position } : null),
-        ...(rotation ? { rotation: unwrapRotation(solved.rotation, rotation) } : null),
-        ...(scale ? { scale: solved.scale } : null),
-      },
-    };
-  }
-
-  return next ?? states;
 };
