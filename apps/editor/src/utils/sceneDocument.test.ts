@@ -113,6 +113,23 @@ describe("toSceneDocument / parseSceneDocument", () => {
     expect(parsed).toEqual({ ok: true, content: { ...v1Scene, animation: undefined, viewedStates: undefined } });
   });
 
+  it("opens a v2 document (from before trim) as it was", () => {
+    const content = makeContent();
+    const parsed = parseSceneDocument({ ...toSceneDocument(content), schemaVersion: 2 });
+
+    expect(parsed).toEqual(parseSceneDocument(toSceneDocument(content)));
+    expect(parsed.ok && parsed.content.animation?.states).toEqual(content.animation.states);
+  });
+
+  it("keeps a state's trim", () => {
+    const content = makeContent();
+    content.animation.states.up.values = { trimEnd: 0 };
+
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    expect(parsed.ok && parsed.content.animation?.states?.up.values).toEqual({ trimEnd: 0 });
+  });
+
   it("reads damaged events into shape instead of passing them on", () => {
     const content = makeContent();
     const document = JSON.parse(JSON.stringify(toSceneDocument(content)));

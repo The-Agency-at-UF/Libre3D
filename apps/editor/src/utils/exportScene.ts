@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { PathMesh } from "../paths/PathMesh";
 
 type GLTFExporterResult = ArrayBuffer | Blob | string | Record<string, unknown>;
 
@@ -74,14 +75,26 @@ export const hideEditorOnlyObjects = (scene: THREE.Scene): (() => void) => {
 // The editor shows the selected object in the state being viewed by moving its Three object
 // (ObjectManager.applyPose), so clicks, the selection outline, and the gizmo all follow it. Exports
 // and the gallery thumbnail read that same scene and show every object in Base: each posed object's
-// Base transform is kept here and put back for them. A WeakMap rather than userData, which the
-// exporter writes into the file.
-const basePoses = new WeakMap<THREE.Object3D, { position: THREE.Vector3; quaternion: THREE.Quaternion; scale: THREE.Vector3 }>();
+// Base transform (and a path's Base trim) is kept here and put back for them. A WeakMap rather than
+// userData, which the exporter writes into the file.
+interface BasePose {
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+  scale: THREE.Vector3;
+  trim?: [number, number];
+}
+
+const basePoses = new WeakMap<THREE.Object3D, BasePose>();
 
 /** Call before posing an object that's still in Base. */
 export const rememberBasePose = (object: THREE.Object3D): void => {
   if (basePoses.has(object)) return;
-  basePoses.set(object, { position: object.position.clone(), quaternion: object.quaternion.clone(), scale: object.scale.clone() });
+  basePoses.set(object, {
+    position: object.position.clone(),
+    quaternion: object.quaternion.clone(),
+    scale: object.scale.clone(),
+    ...(object instanceof PathMesh ? { trim: object.getTrim() } : null),
+  });
 };
 
 /** Call when an object is put back in Base. */
@@ -101,10 +114,45 @@ export const showBasePoses = (scene: THREE.Scene): (() => void) => {
     object.position.copy(base.position);
     object.quaternion.copy(base.quaternion);
     object.scale.copy(base.scale);
+    const path = object instanceof PathMesh && base.trim ? { mesh: object, posedTrim: object.getTrim() } : null;
+    path?.mesh.setTrim(...base.trim!);
     restores.push(() => {
       object.position.copy(posed.position);
       object.quaternion.copy(posed.quaternion);
       object.scale.copy(posed.scale);
+      path?.mesh.setTrim(...path.posedTrim);
+    });
+  });
+
+  return () => restores.forEach((restore) => restore());
+};
+
+// A path is trimmed by its tube's draw range (paths/PathMesh.ts), which GLTFExporter ignores (three
+// r178 no longer reads the `truncateDrawRange` option passed below): it would write the whole tube
+// with the caps where the trim ends. For the parse, a trimmed path gets a
+// copy of its tube holding only the drawn part, and one that draws nothing is left out like a
+// hidden object. Run after showBasePoses, so it's the Base trim that's exported.
+const trimPathsForExport = (scene: THREE.Scene): (() => void) => {
+  const restores: (() => void)[] = [];
+
+  scene.traverse((object) => {
+    if (!(object instanceof PathMesh) || !object.visible) return;
+
+    if (!object.isDrawn) {
+      object.visible = false;
+      restores.push(() => {
+        object.visible = true;
+      });
+      return;
+    }
+
+    const trimmed = object.createTrimmedGeometry();
+    if (!trimmed) return;
+    const tube = object.geometry;
+    object.geometry = trimmed;
+    restores.push(() => {
+      object.geometry = tube;
+      trimmed.dispose();
     });
   });
 
@@ -191,6 +239,7 @@ export const createSceneExportBlob = async (
   const exporter = new GLTFExporter();
   const restoreEditorOnlyObjects = hideEditorOnlyObjects(scene);
   const restorePoses = showBasePoses(scene);
+  const restoreTrimmedPaths = trimPathsForExport(scene);
   const restoreEditorUserData = hideEditorUserData(scene);
 
   try {
@@ -233,6 +282,7 @@ export const createSceneExportBlob = async (
     // Restore even if the parse throws — a failed export must never leave the
     // editor's grid, helpers and gizmo invisible.
     restoreEditorOnlyObjects();
+    restoreTrimmedPaths();
     restorePoses();
     restoreEditorUserData();
   }

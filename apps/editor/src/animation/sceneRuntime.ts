@@ -16,8 +16,9 @@
  * - One transition per object: a new one replaces the one that's running. If that one hadn't
  *   finished, the new one starts from where the object is instead of its row 1, so interrupting
  *   never jumps (Spline does the same).
- * - Values change linearly after easing. Rotation changes per Euler component, so a state turned
- *   +360° about Y spins once, where the shortest way round (slerp) wouldn't move at all.
+ * - Values change linearly after easing (a path's trim too, which is how it writes itself on).
+ *   Rotation changes per Euler component, so a state turned +360° about Y spins once, where the
+ *   shortest way round (slerp) wouldn't move at all.
  * - A missing owner, target, or state (a deleted object or state, a damaged file) skips that action
  *   instead of throwing.
  */
@@ -26,13 +27,15 @@ import { normalizeEvents, type SceneEvent } from "./events";
 import { resolveState, type ObjectState, type Pose, type SceneAnimation } from "./objectStates";
 import { sampleTransition, type StateRef, type TransitionAction } from "./transitions";
 
-/** What the runtime needs of an object: where it is in Base, and its parent (for clicks). */
+/** What the runtime needs of an object: where it is in Base (and a path's trim), and its parent (for clicks). */
 export interface RuntimeEntity {
   id: string;
   parentId?: string | null;
   position: [number, number, number];
   rotation: [number, number, number];
   scale: [number, number, number];
+  trimStart?: number;
+  trimEnd?: number;
 }
 
 export interface RuntimeScene {
@@ -54,11 +57,20 @@ const lerpVector = (
   progress: number,
 ): [number, number, number] => [lerp(from[0], to[0], progress), lerp(from[1], to[1], progress), lerp(from[2], to[2], progress)];
 
-const lerpPose = (from: Pose, to: Pose, progress: number): Pose => ({
-  position: lerpVector(from.position, to.position, progress),
-  rotation: lerpVector(from.rotation, to.rotation, progress),
-  scale: lerpVector(from.scale, to.scale, progress),
-});
+const hasTrim = (pose: Pose) => pose.trimStart !== undefined || pose.trimEnd !== undefined;
+
+const lerpPose = (from: Pose, to: Pose, progress: number): Pose => {
+  const pose: Pose = {
+    position: lerpVector(from.position, to.position, progress),
+    rotation: lerpVector(from.rotation, to.rotation, progress),
+    scale: lerpVector(from.scale, to.scale, progress),
+  };
+  if (hasTrim(from) || hasTrim(to)) {
+    pose.trimStart = lerp(from.trimStart ?? 0, to.trimStart ?? 0, progress);
+    pose.trimEnd = lerp(from.trimEnd ?? 1, to.trimEnd ?? 1, progress);
+  }
+  return pose;
+};
 
 export class SceneRuntime {
   private readonly entities = new Map<string, RuntimeEntity>();

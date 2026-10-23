@@ -36,8 +36,9 @@ import {
   type SceneEvent,
 } from "../animation/events";
 import type { TransitionAction } from "../animation/transitions";
+import { clonePath, createSamplePath, DEFAULT_STROKE, type PathData, type PathStroke } from "../paths/pathGeometry";
 
-export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel" | "group";
+export type EntityType = "cube" | "sphere" | "torus" | "path" | "directionalLight" | "importedModel" | "group";
 
 /**
  * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
@@ -119,6 +120,12 @@ export interface Entity {
   parentId?: string | null;
   nodePath?: number[];
   rootEntityId?: string;
+  // Paths (type "path", see paths/pathGeometry.ts): the curve, its tube, and how much of it shows
+  // in Base (0–1 of its length; states can set their own).
+  path?: PathData;
+  stroke?: PathStroke;
+  trimStart?: number;
+  trimEnd?: number;
 }
 
 export interface ImportNodeSpec {
@@ -330,6 +337,8 @@ export interface EditorState {
   toggleLock: (id: string) => void;
   renameEntity: (id: string, newName: string) => void;
   renameEntities: (updates: Record<string, string>) => void;
+  // A path's radius or cap style (not its trim, which states can set: see updateShownTransforms).
+  updatePathStroke: (id: string, updates: Partial<PathStroke>) => void;
 
   // Viewport / Projection
   activeTransformTool: "translate" | "rotate" | "scale";
@@ -418,6 +427,10 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
     name: "Torus",
     color: "#FF7AE0",
   },
+  path: {
+    name: "Path",
+    color: "#FFC24D",
+  },
   directionalLight: {
     name: "Directional Light",
     color: "#ffffff",
@@ -490,6 +503,8 @@ const createEntity = (type: EntityType): Entity => ({
     : type === "group"
       ? null // groups are pure transform pivots — no material, no color
       : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
+  // Until the pen tool (B2) draws paths, a new one is a sample curve.
+  ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
   visible: true,
   locked: false,
 });
@@ -542,6 +557,8 @@ const cloneEntity = (entity: Entity): Entity => ({
   visible: entity.visible ?? true,
   locked: entity.locked ?? false,
   ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map((layer) => ({ ...layer })) } : null),
+  ...(entity.path ? { path: clonePath(entity.path) } : null),
+  ...(entity.stroke ? { stroke: { ...entity.stroke } } : null),
 });
 
 /** The parts of the state that are saved as the scene (see utils/sceneDocument.ts). */
@@ -1139,6 +1156,14 @@ export const useEditorStore = create<EditorState>()(
                 return newName ? { ...entity, name: newName } : entity;
               }),
             })),
+          updatePathStroke: (id, updates) =>
+            set((state) => {
+              const path = state.entities.find((entity) => entity.id === id);
+              if (path?.type !== "path") return state;
+              const stroke = { ...DEFAULT_STROKE, ...path.stroke, ...updates };
+              if (!(stroke.radius > 0)) return state; // a radius of 0 (or NaN) draws nothing
+              return { entities: state.entities.map((entity) => (entity === path ? { ...entity, stroke } : entity)) };
+            }),
           // Viewport / Projection
           activeTransformTool: "translate",
           projectionMode: "perspective",

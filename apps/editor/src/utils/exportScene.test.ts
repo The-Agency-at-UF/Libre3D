@@ -138,3 +138,71 @@ describe("createSceneExportBlob", () => {
     expect(cube.userData.selectionOutline).toBe(selectionOutline);
   });
 });
+
+describe("createSceneExportBlob with paths", () => {
+  type Gltf = {
+    nodes: { mesh?: number }[];
+    meshes: { primitives: { indices: number }[] }[];
+    accessors: { count: number }[];
+  };
+
+  const readGlb = async (glb: Blob): Promise<Gltf> => {
+    const buffer = await glb.arrayBuffer();
+    const length = new DataView(buffer).getUint32(12, true);
+    return JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, length)));
+  };
+
+  // Index counts of the meshes the file's nodes draw, one per node.
+  const drawnIndexCounts = (gltf: Gltf) =>
+    gltf.nodes.filter((node) => node.mesh !== undefined).map((node) => gltf.accessors[gltf.meshes[node.mesh!].primitives[0].indices].count);
+
+  // The default light and a sample path with the given Base trim, built by the editor itself.
+  const buildPathScene = async (trimEnd = 1) => {
+    const { useEditorStore, ObjectManager, createSceneExportBlob } = await loadModules();
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.setState({ entities: useEditorStore.getState().entities.filter((entity) => entity.type !== "cube") });
+    const pathId = useEditorStore.getState().addEntity("path");
+    useEditorStore.getState().updateShownTransforms({ [pathId]: { trimEnd } });
+
+    const scene = new THREE.Scene();
+    const meshMap = new Map<string, THREE.Object3D>();
+    const objectManager = new ObjectManager(scene, meshMap);
+    objectManager.syncMeshes(useEditorStore.getState().entities, null, false);
+    const { PathMesh } = await import("../paths/PathMesh");
+    const path = meshMap.get(pathId) as InstanceType<typeof PathMesh>;
+    expect(path).toBeInstanceOf(PathMesh);
+    return { scene, path, pathId, objectManager, createSceneExportBlob };
+  };
+
+  it("exports a path shown in a state in Base: the whole tube and both caps", async () => {
+    const { scene, path, pathId, objectManager, createSceneExportBlob } = await buildPathScene();
+    const tubeIndices = path.geometry.getIndex()!.count;
+    objectManager.applyPose(pathId, { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], trimStart: 0, trimEnd: 0 });
+
+    const counts = drawnIndexCounts(await readGlb((await createSceneExportBlob(scene, "glb"))!));
+
+    expect(Math.max(...counts)).toBe(tubeIndices);
+    expect(counts).toHaveLength(3); // the tube and its two caps
+    expect(path.getTrim()).toEqual([0, 0]); // back in the state it's shown in
+  });
+
+  it("exports only the drawn part of a path trimmed in Base, and puts its tube back", async () => {
+    const { scene, path, createSceneExportBlob } = await buildPathScene(0.5);
+    const tube = path.geometry;
+
+    const counts = drawnIndexCounts(await readGlb((await createSceneExportBlob(scene, "glb"))!));
+
+    expect(Math.max(...counts)).toBe(tube.drawRange.count);
+    expect(tube.drawRange.count).toBeLessThan(tube.getIndex()!.count);
+    expect(path.geometry).toBe(tube);
+  });
+
+  it("leaves out a path that draws nothing in Base", async () => {
+    const { scene, path, createSceneExportBlob } = await buildPathScene(0);
+
+    const gltf = await readGlb((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(drawnIndexCounts(gltf)).toEqual([]);
+    expect(path.visible).toBe(true);
+  });
+});

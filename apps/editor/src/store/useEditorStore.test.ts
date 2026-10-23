@@ -669,3 +669,81 @@ describe("events", () => {
     expect(useEditorStore.getState().animation.events).toEqual(events);
   });
 });
+
+describe("paths", () => {
+  const storeWithPath = async () => {
+    const module = await loadStore();
+    module.useEditorStore.getState().loadScene({ entities: [light] });
+    const pathId = module.useEditorStore.getState().addEntity("path");
+    return { ...module, pathId, path: () => module.useEditorStore.getState().entities.find((e) => e.id === pathId)! };
+  };
+
+  it("adds a sample path, drawn in full with round caps and the default material", async () => {
+    const { path } = await storeWithPath();
+
+    expect(path()).toMatchObject({ type: "path", name: "Path", trimStart: 0, trimEnd: 1, stroke: { radius: 0.12, caps: "round" } });
+    expect(path().path?.points).toHaveLength(3);
+    expect(path().materialLayers?.map((layer) => layer.type)).toEqual(["color", "lighting"]);
+  });
+
+  it("changes the stroke in one undo step each, ignoring a radius that draws nothing", async () => {
+    const { useEditorStore, pathId, path } = await storeWithPath();
+    const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().updatePathStroke(pathId, { radius: 0.3 });
+    useEditorStore.getState().updatePathStroke(pathId, { caps: "flat" });
+    useEditorStore.getState().updatePathStroke(pathId, { radius: 0 });
+    useEditorStore.getState().updatePathStroke(pathId, { radius: Number.NaN });
+    expect(path().stroke).toEqual({ radius: 0.3, caps: "flat" });
+
+    useEditorStore.temporal.getState().undo();
+    expect(path().stroke).toEqual({ radius: 0.3, caps: "round" });
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
+  });
+
+  it("can't change a path's stroke or trim in a view-only tab", async () => {
+    const { useEditorStore, pathId, path } = await storeWithPath();
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().updatePathStroke(pathId, { radius: 0.3 });
+    useEditorStore.getState().updateShownTransforms({ [pathId]: { trimEnd: 0.5 } });
+
+    expect(path()).toMatchObject({ stroke: { radius: 0.12 }, trimEnd: 1 });
+  });
+
+  it("sends a trim edit to the state the path is shown in, or to Base", async () => {
+    const { useEditorStore, pathId, path } = await storeWithPath();
+
+    useEditorStore.getState().updateShownTransforms({ [pathId]: { trimStart: 0.25 } });
+    const hiddenId = useEditorStore.getState().addState(pathId);
+    useEditorStore.getState().updateShownTransforms({ [pathId]: { trimEnd: 0 } });
+
+    expect(path()).toMatchObject({ trimStart: 0.25, trimEnd: 1 });
+    expect(useEditorStore.getState().animation.states[hiddenId].values).toEqual({ trimEnd: 0 });
+  });
+
+  it("gives a duplicate its own copy of the path", async () => {
+    const { useEditorStore, pathId, path } = await storeWithPath();
+
+    useEditorStore.getState().duplicateEntity([pathId]);
+    const copy = useEditorStore.getState().entities.find((e) => e.id === useEditorStore.getState().selectedEntityIds[0])!;
+
+    expect(copy.path).toEqual(path().path);
+    expect(copy.path!.points[0].position).not.toBe(path().path!.points[0].position);
+    expect(copy.stroke).not.toBe(path().stroke);
+  });
+
+  it("keeps a path and its Hidden state through save and reload", async () => {
+    const { useEditorStore, selectSceneContent, pathId } = await storeWithPath();
+    const hiddenId = useEditorStore.getState().addState(pathId);
+    useEditorStore.getState().setStateValues(hiddenId, { trimEnd: 0 });
+    const content = selectSceneContent(useEditorStore.getState());
+    const saved = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().loadScene(saved.ok ? saved.content : null);
+
+    expect(useEditorStore.getState().entities).toEqual(content.entities);
+    expect(useEditorStore.getState().animation.states[hiddenId].values).toEqual({ trimEnd: 0 });
+  });
+});

@@ -271,3 +271,39 @@ describe("SceneRuntime: dangling references", () => {
     expect(runtime.isIdle).toBe(true);
   });
 });
+
+describe("SceneRuntime: a path's trim", () => {
+  const writeOn = () =>
+    new SceneRuntime({
+      entities: [entity("path", { trimStart: 0, trimEnd: 1 })],
+      animation: {
+        states: byId(state("hidden", "path", { trimEnd: 0 })),
+        events: byId(
+          event("write", {
+            ownerId: "path",
+            actions: [transition({ targetId: "path", from: "hidden", steps: [{ to: "base", duration: 2, easing: "linear" }] })],
+          }),
+        ),
+      },
+    });
+
+  it("starts hidden before the first frame and writes itself on", () => {
+    const runtime = writeOn();
+    runtime.start();
+    expect(runtime.poses().get("path")).toMatchObject({ trimStart: 0, trimEnd: 0 });
+
+    runtime.tick(0.5);
+    expect(runtime.poses().get("path")!.trimEnd).toBeCloseTo(0.25, 6);
+    runtime.tick(1.5);
+    expect(runtime.poses().get("path")).toMatchObject({ trimStart: 0, trimEnd: 1 });
+    expect(runtime.isIdle).toBe(true);
+  });
+
+  it("gives objects without a trim no trim", () => {
+    const runtime = cubeScene([event("bob")]);
+    runtime.start();
+    runtime.tick(0.5);
+
+    expect(runtime.poses().get("cube")).not.toHaveProperty("trimEnd");
+  });
+});

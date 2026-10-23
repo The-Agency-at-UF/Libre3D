@@ -199,6 +199,28 @@ export function FloatingToolbar({
               onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               onClick={() => {
+                addEntity("path");
+                setIsShapeDropdownOpen(false);
+              }}
+            >
+              + Path
+            </button>
+            <button
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text-primary)",
+                padding: "6px 10px",
+                borderRadius: "3px",
+                textAlign: "left",
+                fontSize: "11px",
+                cursor: "pointer",
+                fontFamily: "var(--font)",
+              }}
+              type="button"
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              onClick={() => {
                 addEntity("directionalLight");
                 setIsShapeDropdownOpen(false);
               }}
