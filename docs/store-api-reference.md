@@ -72,6 +72,11 @@ previewingActionId: string | null
 The transition the Edit Event panel's ▶ is playing in the editor viewport (an action ID), or `null`. Set via `setPreviewingAction`. Not saved, not undoable, and allowed while read-only (it's looking). Play and `loadScene` clear it.
 
 ```typescript
+penTool: PenToolState | null   // { mode: "draw" | "edit", pathId: string | null, selectedPoint: number | null }
+```
+The pen tool (`viewport/hooks/useViewportPenTool.ts`): drawing paths (`pathId` is the one being drawn, or `null` between paths) or editing one path's points (`selectedPoint` is the picked point's index). Set via `setPenTool`. Not saved and not undoable. Play, a ▶ preview, entering view only, and `loadScene` turn it off.
+
+```typescript
 pendingImportCount: number
 ```
 Tracks how many GLB imports are in-flight (picked but not yet parsed). Adjusted via `adjustPendingImports(delta)`.
@@ -111,7 +116,7 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, path, directional light, or group). A path starts as a sample curve (until the pen tool can draw one), radius 0.12 with round caps, drawn in full (trim 0–1).
+Creates a single primitive entity (cube, sphere, torus, path, directional light, or group). A path from here is a sample curve (the pen tool draws its own with `addPath`), radius 0.12 with round caps, drawn in full (trim 0–1).
 - **Signature**: `(type: "cube" | "sphere" | "torus" | "path" | "directionalLight" | "group") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
@@ -119,6 +124,11 @@ Creates a single primitive entity (cube, sphere, torus, path, directional light,
   ```typescript
   const newCubeId = useEditorStore((state) => state.addEntity)("cube");
   ```
+
+#### `addPath(origin: [number, number, number], path: PathData) → string`
+Adds a path the pen tool drew: its origin at `origin` and its points (relative to it) copied in, with the default stroke and material, drawn in full. One undo step; refused in view only.
+- **Returns**: New entity ID
+- **Auto-selects**: The new path becomes selected
 
 #### `addImportedModelHierarchy(assetId: string, nodes: ImportNodeSpec[]) → string`
 Imports a GLB model hierarchy (preserves parent-child relationships).
@@ -169,6 +179,9 @@ Batch rename multiple entities.
 
 #### `updatePathStroke(id: string, updates: Partial<PathStroke>) → void`
 Change a path's radius or cap style (`"round"` | `"flat"`), one undo step. Ignored for other entity types and for a radius that isn't above 0. These belong to the path in every state; its trim (`trimStart`/`trimEnd`, 0–1) is a state value instead and goes through `updateShownTransforms`.
+
+#### `updatePath(id: string, path: PathData) → void`
+Replaces a path's points (copied in), one undo step; the pen tool's edits, made with the pure functions in `paths/pathEditing.ts`. Ignored for other entity types. The points belong to the path, so this changes them in every state.
 
 ```typescript
 // Entity fields used when type === "path" (types in paths/pathGeometry.ts)
@@ -243,7 +256,10 @@ Enter/exit play mode.
 - **active=false**: Exit play mode, return to editing (objects go back to the states picked for them)
 
 #### `setPreviewingAction(actionId: string | null) → void`
-Play one transition in the editor viewport (the Edit Event panel's ▶), or stop it (`null`). `useViewportPlay` sets it back to `null` when the preview has played through, or when an edit or another selection interrupts it.
+Play one transition in the editor viewport (the Edit Event panel's ▶), or stop it (`null`). `useViewportPlay` sets it back to `null` when the preview has played through, or when an edit or another selection interrupts it. Starting one turns the pen tool off.
+
+#### `setPenTool(penTool: PenToolState | null) → void`
+Turns the pen tool on (drawing or editing a path's points) or off. Refuses to turn it on while view only, in Play, or during a ▶ preview; turning it off always works. A transform tool (`setEditorState({ activeTransformTool, penTool: null })`) puts it down too.
 
 #### `adjustPendingImports(delta: number) → void`
 Increment/decrement pending import counter (file picked but not parsed).
