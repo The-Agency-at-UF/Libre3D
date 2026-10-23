@@ -495,7 +495,9 @@ export function ViewportCanvas() {
       const files = event.dataTransfer?.files;
       if (!files || files.length === 0) return;
       // View only: the store would drop the new entities anyway, so don't store the model's bytes.
-      if (useEditorStore.getState().readOnlyReason) return;
+      // Play is for looking, so nothing is added while it runs.
+      const store = useEditorStore.getState();
+      if (store.readOnlyReason || store.isPreviewMode) return;
 
       Array.from(files).forEach((file) => {
         useEditorStore.getState().adjustPendingImports(1);

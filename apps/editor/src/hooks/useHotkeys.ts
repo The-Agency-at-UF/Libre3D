@@ -25,6 +25,13 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
 
       const cmdOrCtrl = event.ctrlKey || event.metaKey;
 
+      // Play is for looking: Stop must find the scene and selection as they were, so only the
+      // camera zoom shortcuts work while it runs.
+      const isZoomShortcut = cmdOrCtrl && ["=", "+", "-"].includes(event.key);
+      if (useEditorStore.getState().isPreviewMode && !isZoomShortcut) {
+        return;
+      }
+
       // Ctrl/Cmd shortcuts
       if (cmdOrCtrl) {
         const key = event.key.toLowerCase();
