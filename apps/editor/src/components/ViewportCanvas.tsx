@@ -24,6 +24,7 @@ export function ViewportCanvas() {
   const activeProfileId = useEditorStore((state) => state.activeProfileId);
   const activeProfile   = useEditorStore((state) => state.cameraProfiles[activeProfileId] ?? state.cameraProfiles.personal);
   const isPreviewMode   = useEditorStore((state) => state.isPreviewMode);
+  const isPreviewingAction = useEditorStore((state) => state.previewingActionId !== null);
   const isReadOnly      = useEditorStore((state) => state.readOnlyReason !== null);
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
   const entities        = useEditorStore((state) => state.entities);
@@ -303,8 +304,9 @@ export function ViewportCanvas() {
     // Play hides the gizmo (useViewportRenderer), so detach it there: otherwise it
     // stays draggable while invisible. View only: TransformControls moves the
     // object itself before the store (which drops the change) hears of it, so
-    // there must be no gizmo to drag.
-    if (isPreviewMode || isReadOnly || locked || selectedEntityIds.length === 0) {
+    // there must be no gizmo to drag. A ▶ preview moves objects through poses
+    // that aren't theirs; a drag then would save one (useViewportPlay).
+    if (isPreviewMode || isPreviewingAction || isReadOnly || locked || selectedEntityIds.length === 0) {
       tc?.detach();
     } else if (selectedEntityIds.length === 1) {
       const selectedObj = objectManager.getObject(selectedEntityIds[0]);
@@ -357,7 +359,7 @@ export function ViewportCanvas() {
         }
       }
     });
-  }, [entities, selectedEntityIds, viewedStates, objectStates, objectManager, sceneManager, transformControlsRef, isPreviewMode, isReadOnly]);
+  }, [entities, selectedEntityIds, viewedStates, objectStates, objectManager, sceneManager, transformControlsRef, isPreviewMode, isPreviewingAction, isReadOnly]);
 
   // -- Resize Logic --
   useEffect(() => {

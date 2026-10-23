@@ -151,6 +151,15 @@ export class SceneRuntime {
     return true;
   }
 
+  /**
+   * Puts an object somewhere without a transition, as if one had left it there: a transition from
+   * Current then starts from it. The ▶ preview uses this to start from the state an object is shown
+   * in while editing. Ignored for objects that aren't in the scene.
+   */
+  place(entityId: string, pose: Pose): void {
+    if (this.entities.has(entityId)) this.current.set(entityId, lerpPose(pose, pose, 0));
+  }
+
   /** Moves time on by `dt` seconds. */
   tick(dt: number): void {
     if (!(dt > 0)) return;

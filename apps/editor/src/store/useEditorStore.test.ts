@@ -639,6 +639,24 @@ describe("events", () => {
     expect(Object.keys(useEditorStore.getState().animation.events)).toEqual([keep]);
   });
 
+  it("previews an action in a view-only tab without an undo step, until Play or another scene", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const eventId = useEditorStore.getState().addEvent("cube-1", "start");
+    const actionId = useEditorStore.getState().animation.events[eventId].actions[0].id;
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().setPreviewingAction(actionId);
+    expect(useEditorStore.getState().previewingActionId).toBe(actionId);
+    expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
+
+    useEditorStore.getState().setPreviewMode(true);
+    expect(useEditorStore.getState().previewingActionId).toBeNull();
+
+    useEditorStore.getState().setPreviewingAction(actionId);
+    useEditorStore.getState().loadScene(null);
+    expect(useEditorStore.getState().previewingActionId).toBeNull();
+  });
+
   it("keeps events through save and reload", async () => {
     const { useEditorStore, selectSceneContent } = await storeWithCube();
     useEditorStore.getState().addEvent("cube-1", "mouseDown");

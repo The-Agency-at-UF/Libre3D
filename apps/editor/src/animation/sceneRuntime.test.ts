@@ -202,6 +202,24 @@ describe("SceneRuntime: clicks", () => {
   });
 });
 
+describe("SceneRuntime: place", () => {
+  it("starts a transition from Current where an object was placed, and from row 1 otherwise", () => {
+    const runtime = cubeScene([]);
+    const shown = { position: [0, 5, 0] as [number, number, number], rotation: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] };
+    runtime.place("cube", shown);
+    runtime.place("deleted", shown);
+    shown.position[1] = 99;
+
+    runtime.run(transition({ from: "current" }));
+    expect(positionOf(runtime)).toEqual([0, 5, 0]);
+    runtime.tick(5);
+    runtime.place("cube", { ...shown, position: [0, 7, 0] });
+    runtime.run(transition());
+    expect(positionOf(runtime)).toEqual([0, 0, 0]);
+    expect(runtime.poses().has("deleted")).toBe(false);
+  });
+});
+
 describe("SceneRuntime: dangling references", () => {
   it("skips an action whose target, or one of whose states, is gone, and runs the rest", () => {
     const runtime = new SceneRuntime({

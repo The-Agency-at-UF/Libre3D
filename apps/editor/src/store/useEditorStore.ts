@@ -347,6 +347,10 @@ export interface EditorState {
   // Play Mode / Preview
   isPreviewMode: boolean;
   setPreviewMode: (active: boolean) => void;
+  // The transition the Edit Event panel's ▶ is playing in the editor viewport (useViewportPlay), by
+  // action ID, or null. Not saved and not undoable, and allowed in a view-only scene: it's looking.
+  previewingActionId: string | null;
+  setPreviewingAction: (actionId: string | null) => void;
 
   // Number of .glb imports currently being read/parsed (file picked but
   // entities not yet materialized). Not persisted — like isPreviewMode it's
@@ -398,7 +402,7 @@ export interface EditorState {
   // Replaces the whole scene with a saved one (null = a new scene's starting content) and clears
   // undo history, so Ctrl+Z can't reach into the previously open scene.
   loadScene: (content: StoredSceneContent | null) => void;
-  setEditorState:(updates: Partial<Omit<EditorState, "entities" | "animation" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
+  setEditorState:(updates: Partial<Omit<EditorState, "entities" | "animation" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "setPreviewingAction" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -1150,7 +1154,10 @@ export const useEditorStore = create<EditorState>()(
 
           // Play Mode / Preview
           isPreviewMode: false,
-          setPreviewMode: (active) => set({ isPreviewMode: active }),
+          // Play takes over from a ▶ preview, which doesn't come back after Stop.
+          setPreviewMode: (active) => set({ isPreviewMode: active, previewingActionId: null }),
+          previewingActionId: null,
+          setPreviewingAction: (actionId) => set({ previewingActionId: actionId }),
 
           readOnlyReason: null,
           setReadOnly: (reason) => {
@@ -1373,6 +1380,7 @@ export const useEditorStore = create<EditorState>()(
               viewedStates: { ...content?.viewedStates },
               selectedEntityIds: [],
               isPreviewMode: false,
+              previewingActionId: null,
             });
 
             // The editor no longer reloads the page between scenes, so history would otherwise
