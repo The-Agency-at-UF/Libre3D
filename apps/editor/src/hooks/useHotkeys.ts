@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 import { isEffectivelyLocked } from "../store/entityIndex";
+import { editPath } from "../viewport/hooks/useViewportPenTool";
 
 interface UseHotkeysProps {
   onDuplicate?: () => void;
@@ -95,15 +96,27 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
       // Single key shortcuts (no modifiers)
       if (!cmdOrCtrl && !event.altKey && !event.shiftKey) {
         switch (event.key.toLowerCase()) {
+          // A transform tool puts the pen down.
           case "w":
-            setEditorState({ activeTransformTool: "translate" });
+            setEditorState({ activeTransformTool: "translate", penTool: null });
             break;
           case "e":
-            setEditorState({ activeTransformTool: "rotate" });
+            setEditorState({ activeTransformTool: "rotate", penTool: null });
             break;
           case "r":
-            setEditorState({ activeTransformTool: "scale" });
+            setEditorState({ activeTransformTool: "scale", penTool: null });
             break;
+          case "p": {
+            const { penTool, setPenTool } = useEditorStore.getState();
+            setPenTool(penTool?.mode === "draw" ? null : { mode: "draw", pathId: null, selectedPoint: null });
+            break;
+          }
+          // Edits the selected path's points (the pen takes Enter itself while it's on).
+          case "enter": {
+            const selectedIds = useEditorStore.getState().selectedEntityIds;
+            if (selectedIds.length === 1) editPath(selectedIds[0]);
+            break;
+          }
           case "delete":
           case "backspace": {
             const { entities, selectedEntityIds } = useEditorStore.getState();

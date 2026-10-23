@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
 import { getSelectionRootId } from "../../store/entityIndex";
 import { pickEntityAt } from "../pickEntity";
+import { editPath } from "./useViewportPenTool";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 
 // Matches the existing click-tolerance below (`dist < 10`) so a genuine click with a
@@ -116,8 +117,9 @@ export function useViewportRaycaster(
     };
 
     const onPointerDown = (event: PointerEvent) => {
-      // Play's clicks go to the scene's events instead (useViewportPlay).
-      if (useEditorStore.getState().isPreviewMode) return;
+      // Play's clicks go to the scene's events instead (useViewportPlay), and the pen's to the
+      // path it's drawing or editing (useViewportPenTool).
+      if (useEditorStore.getState().isPreviewMode || useEditorStore.getState().penTool) return;
       // Left button only — middle-drag pans and right-click shouldn't box-select or pick.
       if (event.button !== 0) return;
       pointerDownTime = Date.now();
@@ -142,7 +144,7 @@ export function useViewportRaycaster(
 
     const onPointerUp = (event: PointerEvent) => {
       // Only the left button drives box-select / click-pick (see onPointerDown).
-      if (event.button !== 0) return;
+      if (event.button !== 0 || useEditorStore.getState().penTool) return;
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
 
       if (isDragSelecting) {
@@ -193,13 +195,17 @@ export function useViewportRaycaster(
 
     // Double-click drills into the exact child under the cursor (the deepest
     // tagged node), bypassing the click handler's bubble-to-root. A no-op on a
-    // miss so an empty double-click doesn't clear the current selection.
+    // miss so an empty double-click doesn't clear the current selection. On a
+    // path, it also starts editing its points (useViewportPenTool).
     const onDoubleClick = (event: MouseEvent) => {
-      if (useEditorStore.getState().isPreviewMode) return;
+      const { isPreviewMode, penTool, entities } = useEditorStore.getState();
+      if (isPreviewMode || penTool) return;
       if (transformControlsRef.current?.axis) return;
       const hitEntityId = pickEntityIdAt(event.clientX, event.clientY);
       if (hitEntityId) {
         useEditorStore.getState().selectEntity(hitEntityId, event.shiftKey);
+        const isPath = entities.some((entity) => entity.id === hitEntityId && entity.type === "path");
+        if (isPath && !event.shiftKey) editPath(hitEntityId);
       }
     };
 

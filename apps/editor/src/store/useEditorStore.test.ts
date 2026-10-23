@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
 import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
+import type { PathData, PathPoint } from "../paths/pathGeometry";
 import type { Entity } from "./useEditorStore";
 
 const EDITOR_KEY = "libre3d-scene-state";
@@ -733,6 +734,49 @@ describe("paths", () => {
     expect(copy.stroke).not.toBe(path().stroke);
   });
 
+  it("adds a drawn path at its origin, selected, in one undo step", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+    const corner = (position: [number, number, number]): PathPoint => ({ position, handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "corner" });
+    const drawn: PathData = { points: [corner([0, 0, 0]), corner([1, 1, 0])], closed: false };
+
+    const pathId = useEditorStore.getState().addPath([0, 1, 2], drawn);
+    const added = useEditorStore.getState().entities.find((e) => e.id === pathId)!;
+
+    expect(added).toMatchObject({ type: "path", position: [0, 1, 2], path: drawn, trimStart: 0, trimEnd: 1 });
+    expect(added.path!.points[1].position).not.toBe(drawn.points[1].position);
+    expect(useEditorStore.getState().selectedEntityIds).toEqual([pathId]);
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().entities.some((e) => e.id === pathId)).toBe(false);
+  });
+
+  it("replaces a path's points in one undo step, for every state", async () => {
+    const { useEditorStore, pathId, path } = await storeWithPath();
+    const before = path().path!;
+    useEditorStore.getState().addState(pathId);
+    const edited = { ...before, closed: true };
+
+    useEditorStore.getState().updatePath(pathId, edited);
+    useEditorStore.getState().updatePath("directional-light-1", edited);
+
+    expect(path().path).toEqual(edited);
+    expect(path().path).not.toBe(edited);
+    expect(useEditorStore.getState().entities.find((e) => e.id === "directional-light-1")!.path).toBeUndefined();
+    useEditorStore.temporal.getState().undo();
+    expect(path().path).toBe(before);
+  });
+
+  it("can't add or edit a drawn path in a view-only tab", async () => {
+    const { useEditorStore, pathId, path } = await storeWithPath();
+    const before = useEditorStore.getState().entities;
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().addPath([0, 0, 0], path().path!);
+    useEditorStore.getState().updatePath(pathId, { ...path().path!, closed: true });
+
+    expect(useEditorStore.getState().entities).toBe(before);
+  });
+
   it("keeps a path and its Hidden state through save and reload", async () => {
     const { useEditorStore, selectSceneContent, pathId } = await storeWithPath();
     const hiddenId = useEditorStore.getState().addState(pathId);
@@ -745,5 +789,47 @@ describe("paths", () => {
 
     expect(useEditorStore.getState().entities).toEqual(content.entities);
     expect(useEditorStore.getState().animation.states[hiddenId].values).toEqual({ trimEnd: 0 });
+  });
+});
+
+describe("pen tool", () => {
+  const drawing = { mode: "draw" as const, pathId: null, selectedPoint: null };
+
+  it("turns on and off without an undo step or a save", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+
+    useEditorStore.getState().setPenTool(drawing);
+    expect(useEditorStore.getState().penTool).toEqual(drawing);
+    useEditorStore.getState().setPenTool(null);
+
+    expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
+    expect(Object.keys(persisted().state)).not.toContain("penTool");
+  });
+
+  it("is off in Play, during a ▶ preview, and while view only, and doesn't turn on then", async () => {
+    const { useEditorStore } = await loadStore();
+    const store = () => useEditorStore.getState();
+    store().loadScene({ entities: [light] });
+
+    for (const [start, stop] of [
+      [() => store().setPreviewMode(true), () => store().setPreviewMode(false)],
+      [() => store().setPreviewingAction("action-1"), () => store().setPreviewingAction(null)],
+      [() => store().setReadOnly("openElsewhere"), () => store().setReadOnly(null)],
+    ]) {
+      store().setPenTool(drawing);
+      start();
+      expect(store().penTool).toBeNull();
+      store().setPenTool(drawing);
+      expect(store().penTool).toBeNull();
+      stop();
+    }
+  });
+
+  it("is off in a newly opened scene", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().setPenTool(drawing);
+    useEditorStore.getState().loadScene(null);
+    expect(useEditorStore.getState().penTool).toBeNull();
   });
 });

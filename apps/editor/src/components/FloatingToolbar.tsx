@@ -1,6 +1,6 @@
 import { useRef } from "react";
 import { useEditorStore } from "../store/useEditorStore";
-import { TranslateIcon, RotateIcon, ScaleIcon, PlusIcon } from "./ui/Icons";
+import { TranslateIcon, RotateIcon, ScaleIcon, PenIcon, PlusIcon } from "./ui/Icons";
 import { prepareModelImport } from "../utils/importModel";
 
 interface FloatingToolbarProps {
@@ -21,7 +21,10 @@ export function FloatingToolbar({
   // Read state and setters directly from the shared Zustand store
   const activeTransformTool = useEditorStore((state) => state.activeTransformTool);
   const transformSpace = useEditorStore((state) => state.transformSpace);
+  const isDrawing = useEditorStore((state) => state.penTool?.mode === "draw");
+  const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
   const setEditorState = useEditorStore((state) => state.setEditorState);
+  const setPenTool = useEditorStore((state) => state.setPenTool);
   const addEntity = useEditorStore((state) => state.addEntity);
   const addImportedModelHierarchy = useEditorStore((state) => state.addImportedModelHierarchy);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -44,34 +47,45 @@ export function FloatingToolbar({
 
   return (
     <div className="floating-toolbar">
-      {/* Translate Tool Button */}
+      {/* Translate Tool Button (a transform tool puts the pen down) */}
       <button
-        className={`toolbar-btn ${activeTransformTool === "translate" ? "active-translate" : ""}`}
+        className={`toolbar-btn ${activeTransformTool === "translate" && !isDrawing ? "active-translate" : ""}`}
         type="button"
         title="Translate Tool"
-        onClick={() => setEditorState({ activeTransformTool: "translate" })}
+        onClick={() => setEditorState({ activeTransformTool: "translate", penTool: null })}
       >
         <TranslateIcon />
       </button>
 
       {/* Rotate Tool Button */}
       <button
-        className={`toolbar-btn ${activeTransformTool === "rotate" ? "active-translate" : ""}`}
+        className={`toolbar-btn ${activeTransformTool === "rotate" && !isDrawing ? "active-translate" : ""}`}
         type="button"
         title="Rotate Tool"
-        onClick={() => setEditorState({ activeTransformTool: "rotate" })}
+        onClick={() => setEditorState({ activeTransformTool: "rotate", penTool: null })}
       >
         <RotateIcon />
       </button>
 
       {/* Scale Tool Button */}
       <button
-        className={`toolbar-btn ${activeTransformTool === "scale" ? "active-translate" : ""}`}
+        className={`toolbar-btn ${activeTransformTool === "scale" && !isDrawing ? "active-translate" : ""}`}
         type="button"
         title="Scale Tool"
-        onClick={() => setEditorState({ activeTransformTool: "scale" })}
+        onClick={() => setEditorState({ activeTransformTool: "scale", penTool: null })}
       >
         <ScaleIcon />
+      </button>
+
+      {/* Pen: draws paths (useViewportPenTool). Not while view only. */}
+      <button
+        className={`toolbar-btn ${isDrawing ? "active-translate" : ""}`}
+        type="button"
+        title="Pen (P)"
+        disabled={isReadOnly}
+        onClick={() => setPenTool(isDrawing ? null : { mode: "draw", pathId: null, selectedPoint: null })}
+      >
+        <PenIcon />
       </button>
 
       <div style={{ width: "1px", background: "rgba(255, 255, 255, 0.15)", margin: "4px 2px" }}></div>
