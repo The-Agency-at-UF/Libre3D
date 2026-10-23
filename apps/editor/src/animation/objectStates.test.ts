@@ -4,6 +4,7 @@ import { composeLocalMatrix, solveLocalFromWorld } from "../utils/entityTransfor
 import type { SceneEvent } from "./events";
 import {
   cloneAnimation,
+  cloneStateValues,
   createObjectState,
   duplicateStates,
   getObjectStates,
@@ -235,5 +236,53 @@ describe("cloneAnimation", () => {
     expect(copy.states.up.values.position).toEqual([0, 1, 0]);
     expect(copy.events).toEqual({ e1: event() });
     expect(cloneAnimation(undefined)).toEqual({ states: {}, events: {} });
+  });
+});
+
+describe("trim (paths)", () => {
+  const path = (overrides: Partial<Pose> = {}) => makeEntity("path", { trimStart: 0, trimEnd: 1, ...overrides });
+
+  it("is part of a path's pose, with the state's trim over its own", () => {
+    const hidden = makeState("hidden", "path", { values: { trimEnd: 0 } });
+
+    expect(resolveState(path())).toMatchObject({ trimStart: 0, trimEnd: 1 });
+    expect(resolveState(path({ trimStart: 0.2 }), hidden)).toMatchObject({ trimStart: 0.2, trimEnd: 0 });
+  });
+
+  it("isn't part of a pose for an object without one", () => {
+    expect(resolveState(makeEntity("cube"))).not.toHaveProperty("trimStart");
+    expect(resolveState(makeEntity("cube"))).not.toHaveProperty("trimEnd");
+  });
+
+  it("survives copying, a trim of 0 included", () => {
+    expect(cloneStateValues({ trimStart: 0, trimEnd: 0.5, position: [1, 2, 3] })).toEqual({
+      trimStart: 0,
+      trimEnd: 0.5,
+      position: [1, 2, 3],
+    });
+    expect(cloneAnimation({ states: statesById(makeState("hidden", "path", { values: { trimEnd: 0 } })) }).states.hidden.values).toEqual({
+      trimEnd: 0,
+    });
+  });
+
+  it("goes with a duplicated path's states", () => {
+    const states = statesById(makeState("hidden", "path", { values: { trimEnd: 0 } }));
+    const { states: next, stateIdMap } = duplicateStates(states, new Map([["path", "path-copy"]]), new Map([["path", [0.5, 0, 0.5]]]));
+
+    expect(next[stateIdMap.get("hidden")!].values).toEqual({ trimEnd: 0 });
+  });
+
+  it("stays in a state when its path moves to another parent", () => {
+    const parentWorld = composeLocalMatrix({ position: [4, 0, 0], rotation: [0, 0, 0], scale: [2, 2, 2] });
+    const states = statesById(
+      makeState("hidden", "path", { values: { trimEnd: 0 } }),
+      makeState("raised", "path", { values: { position: [1, 5, 3], trimStart: 0.5 } }),
+    );
+
+    const moved = reparentStates(states, [{ entity: path(), from: null, to: parentWorld }]);
+
+    expect(moved.hidden).toBe(states.hidden); // a trim doesn't depend on the parent
+    expect(moved.raised.values.trimStart).toBe(0.5);
+    expect(Object.keys(moved.raised.values).sort()).toEqual(["position", "trimStart"]);
   });
 });

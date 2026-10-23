@@ -15,8 +15,10 @@
  * Evolving the format:
  * - New data goes in its own optional top-level section (as `animation` did in v2), not inside
  *   entities. New optional fields on entities or settings don't need one: they're copied whole.
- * - Adding a section bumps `CURRENT_SCENE_SCHEMA_VERSION` and adds a migration. Old documents
- *   upgrade on read; nothing breaks.
+ *   New values a state can set do (as a path's trim did in v3): a state's values are copied only
+ *   as far as the build knows them (objectStates.ts, cloneStateValues).
+ * - Adding a section or a state value bumps `CURRENT_SCENE_SCHEMA_VERSION` and adds a migration.
+ *   Old documents upgrade on read; nothing breaks.
  * - A document newer than this build is refused rather than loaded: otherwise a tab still running an
  *   old bundle would drop the parts it doesn't know about (states) on its next autosave.
  *
@@ -36,7 +38,7 @@ import type {
 } from "../store/useEditorStore";
 
 export const SCENE_DOCUMENT_FORMAT = "libre3d.scene";
-export const CURRENT_SCENE_SCHEMA_VERSION = 2;
+export const CURRENT_SCENE_SCHEMA_VERSION = 3;
 
 /** The parts of the editor state that make up a scene. */
 export interface SceneContent {
@@ -78,6 +80,9 @@ const migrations: Record<number, (document: any) => any> = {
   // v2 added `scene.animation` and `scene.viewedStates`. A scene without them has no states and shows
   // everything in Base, which is what loadScene starts with anyway, so there's nothing to fill in.
   1: (document) => document,
+  // v3 lets a state set a path's trim. A v2 build would drop it on load (it copies only the state
+  // values it knows) and then autosave without it, so it has to refuse v3 instead. Nothing to fill in.
+  2: (document) => document,
 };
 
 export const toSceneDocument = (content: SceneContent): SceneDocument => ({

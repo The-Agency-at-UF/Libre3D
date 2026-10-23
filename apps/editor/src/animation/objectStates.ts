@@ -18,11 +18,13 @@ import { createId } from "../utils/createId";
 import { composeLocalMatrix, solveLocalFromWorld, type EntityTRS } from "../utils/entityTransforms";
 import type { SceneEvent } from "./events";
 
-/** What a state can set. Paths add trim (B1); colour and opacity may follow. */
+/** What a state can set: transform, and a path's trim (0–1, see paths/). Colour and opacity may follow. */
 export interface StateValues {
   position?: [number, number, number];
   rotation?: [number, number, number];
   scale?: [number, number, number];
+  trimStart?: number;
+  trimEnd?: number;
 }
 
 export type StateValueKey = keyof StateValues;
@@ -42,8 +44,14 @@ export interface SceneAnimation {
   events: Record<string, SceneEvent>; // see events.ts
 }
 
-/** An object's whole transform: its Base values with a state's on top. */
-export type Pose = EntityTRS;
+/** A path's trim: how much of it shows, from `trimStart` to `trimEnd` (0–1 of its length). */
+export type Trim = Pick<StateValues, "trimStart" | "trimEnd">;
+
+/**
+ * Where an object is and how it looks: its Base values with a state's on top. Its transform always;
+ * a trim only when the object or the state has one (paths).
+ */
+export type Pose = EntityTRS & Trim;
 
 /** An object that moves to another parent, with its own values from before the move. */
 export interface ParentChange {
@@ -58,10 +66,14 @@ const cloneVector = (vector: [number, number, number]): [number, number, number]
 
 export const createEmptyAnimation = (): SceneAnimation => ({ states: {}, events: {} });
 
+// Only the values this build knows. A document with a value added later is refused as newer
+// (sceneDocument.ts), so leaving one out can't lose it.
 export const cloneStateValues = (values: StateValues): StateValues => ({
   ...(values.position ? { position: cloneVector(values.position) } : null),
   ...(values.rotation ? { rotation: cloneVector(values.rotation) } : null),
   ...(values.scale ? { scale: cloneVector(values.scale) } : null),
+  ...(typeof values.trimStart === "number" ? { trimStart: values.trimStart } : null),
+  ...(typeof values.trimEnd === "number" ? { trimEnd: values.trimEnd } : null),
 });
 
 const cloneObjectState = (state: ObjectState): ObjectState => ({
@@ -78,11 +90,20 @@ export const cloneAnimation = (animation: Partial<SceneAnimation> | undefined): 
 });
 
 /** Where an object is in a state: the state's values over the object's own. No state = Base. */
-export const resolveState = (entity: EntityTRS, state?: ObjectState | null): Pose => ({
-  position: cloneVector(state?.values.position ?? entity.position),
-  rotation: cloneVector(state?.values.rotation ?? entity.rotation),
-  scale: cloneVector(state?.values.scale ?? entity.scale),
-});
+export const resolveState = (entity: EntityTRS & Trim, state?: ObjectState | null): Pose => {
+  const pose: Pose = {
+    position: cloneVector(state?.values.position ?? entity.position),
+    rotation: cloneVector(state?.values.rotation ?? entity.rotation),
+    scale: cloneVector(state?.values.scale ?? entity.scale),
+  };
+  const trimStart = state?.values.trimStart ?? entity.trimStart;
+  const trimEnd = state?.values.trimEnd ?? entity.trimEnd;
+  if (trimStart !== undefined || trimEnd !== undefined) {
+    pose.trimStart = trimStart ?? 0;
+    pose.trimEnd = trimEnd ?? 1;
+  }
+  return pose;
+};
 
 /**
  * The state an object is shown in while editing (`viewedStates` maps entity IDs to state IDs), or
@@ -208,7 +229,8 @@ export const duplicateStates = (
  * Keeps states in place in the world when their object moves to another parent. The store
  * re-solves the object's own values that way (reparenting, grouping, ungrouping); a state's values
  * are relative to the parent too, so without this they'd shift by the difference between the
- * parents. A state keeps setting only what it set. Returns `states` itself when nothing changed.
+ * parents. A state keeps setting only what it set, and keeps its other values (a trim) as they
+ * were. Returns `states` itself when nothing changed.
  */
 export const reparentStates = (
   states: Record<string, ObjectState>,
@@ -230,6 +252,7 @@ export const reparentStates = (
     next[state.id] = {
       ...state,
       values: {
+        ...state.values,
         ...(position ? { position: solved.position } : null),
         ...(rotation ? { rotation: unwrapRotation(solved.rotation, rotation) } : null),
         ...(scale ? { scale: solved.scale } : null),
