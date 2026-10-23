@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 import { isEffectivelyLocked } from "../store/entityIndex";
+import { editPath } from "../viewport/hooks/useViewportPenTool";
 
 interface UseHotkeysProps {
   onDuplicate?: () => void;
@@ -108,6 +109,12 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
           case "p": {
             const { penTool, setPenTool } = useEditorStore.getState();
             setPenTool(penTool?.mode === "draw" ? null : { mode: "draw", pathId: null, selectedPoint: null });
+            break;
+          }
+          // Edits the selected path's points (the pen takes Enter itself while it's on).
+          case "enter": {
+            const selectedIds = useEditorStore.getState().selectedEntityIds;
+            if (selectedIds.length === 1) editPath(selectedIds[0]);
             break;
           }
           case "delete":

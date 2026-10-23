@@ -261,6 +261,7 @@ describe("picking on screen", () => {
     const hit = nearestOnCurve(wave(), toScreen, toScreen(onCurve), 6)!;
     expect(hit.segment).toBe(1);
     expect(hit.t).toBeCloseTo(0.37, 3);
+    expect(hit.point.distanceTo(onCurve)).toBeLessThan(1e-4);
     expect(hit.distance).toBeLessThan(0.01);
     expect(nearestOnCurve(wave(), toScreen, new THREE.Vector2(0, -300), 6)).toBeNull();
   });

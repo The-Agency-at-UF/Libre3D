@@ -24,6 +24,7 @@ export type HandleSide = "in" | "out";
 export interface CurveHit {
   segment: number;
   t: number; // 0–1 along the segment's Bézier (its parameter, not its length)
+  point: THREE.Vector3; // there, in the path's space
   distance: number; // pixels from the cursor
 }
 
@@ -272,7 +273,7 @@ export const nearestOnCurve = (
     return screen ? screen.distanceTo(cursor) : Infinity;
   };
 
-  let best: CurveHit = { segment: 0, t: 0, distance: Infinity };
+  let best = { segment: 0, t: 0, distance: Infinity };
   for (let segment = 0; segment < curve.curves.length; segment += 1) {
     for (let sample = 0; sample <= CURVE_SAMPLES_PER_SEGMENT; sample += 1) {
       const t = sample / CURVE_SAMPLES_PER_SEGMENT;
@@ -293,5 +294,5 @@ export const nearestOnCurve = (
   }
   const t = (low + high) / 2;
   const distance = distanceAt(best.segment, t);
-  return distance <= radius ? { segment: best.segment, t, distance } : null;
+  return distance <= radius ? { segment: best.segment, t, point: curve.curves[best.segment].getPoint(t), distance } : null;
 };

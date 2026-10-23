@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
 import { getSelectionRootId } from "../../store/entityIndex";
 import { pickEntityAt } from "../pickEntity";
+import { editPath } from "./useViewportPenTool";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 
 // Matches the existing click-tolerance below (`dist < 10`) so a genuine click with a
@@ -194,14 +195,17 @@ export function useViewportRaycaster(
 
     // Double-click drills into the exact child under the cursor (the deepest
     // tagged node), bypassing the click handler's bubble-to-root. A no-op on a
-    // miss so an empty double-click doesn't clear the current selection.
+    // miss so an empty double-click doesn't clear the current selection. On a
+    // path, it also starts editing its points (useViewportPenTool).
     const onDoubleClick = (event: MouseEvent) => {
-      const { isPreviewMode, penTool } = useEditorStore.getState();
+      const { isPreviewMode, penTool, entities } = useEditorStore.getState();
       if (isPreviewMode || penTool) return;
       if (transformControlsRef.current?.axis) return;
       const hitEntityId = pickEntityIdAt(event.clientX, event.clientY);
       if (hitEntityId) {
         useEditorStore.getState().selectEntity(hitEntityId, event.shiftKey);
+        const isPath = entities.some((entity) => entity.id === hitEntityId && entity.type === "path");
+        if (isPath && !event.shiftKey) editPath(hitEntityId);
       }
     };
 
