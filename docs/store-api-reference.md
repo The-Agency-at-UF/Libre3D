@@ -130,6 +130,11 @@ Adds a path the pen tool drew: its origin at `origin` and its points (relative t
 - **Returns**: New entity ID
 - **Auto-selects**: The new path becomes selected
 
+#### `addImportedPaths(name: string, paths: ImportedPath[]) → string`
+Adds the paths of an imported SVG (made by `svgShapesToPaths` in `paths/svgImport.ts`: each with its origin, points, and stroke), copied in, drawn in full with the default material. One path is named `name`; several go in a group named `name` at the origin (the drawing's centre), as "Path 1", "Path 2", …. One undo step; refused in view only; puts the pen down.
+- **Returns**: ID of the path, or of the group (`""` when `paths` is empty)
+- **Auto-selects**: The path or the group becomes selected
+
 #### `addImportedModelHierarchy(assetId: string, nodes: ImportNodeSpec[]) → string`
 Imports a GLB model hierarchy (preserves parent-child relationships).
 - **Signature**: `(assetId: string, nodes: ImportNodeSpec[]) => string`
@@ -177,8 +182,8 @@ Rename a single entity. Shows in hierarchy panel.
 #### `renameEntities(updates: Record<string, string>) → void`
 Batch rename multiple entities.
 
-#### `updatePathStroke(id: string, updates: Partial<PathStroke>) → void`
-Change a path's radius or cap style (`"round"` | `"flat"`), one undo step. Ignored for other entity types and for a radius that isn't above 0. These belong to the path in every state; its trim (`trimStart`/`trimEnd`, 0–1) is a state value instead and goes through `updateShownTransforms`.
+#### `updatePathStrokes(ids: string[], updates: Partial<PathStroke>) → void`
+Change the radius or cap style (`"round"` | `"flat"`) of every path among `ids`, one undo step for all of them (the Path panel with several paths selected). Other entity types are skipped; a radius that isn't above 0 is ignored. These belong to the path in every state; its trim (`trimStart`/`trimEnd`, 0–1) is a state value instead and goes through `updateShownTransforms`.
 
 #### `updatePath(id: string, path: PathData) → void`
 Replaces a path's points (copied in), one undo step; the pen tool's edits, made with the pure functions in `paths/pathEditing.ts`. Ignored for other entity types. The points belong to the path, so this changes them in every state.
