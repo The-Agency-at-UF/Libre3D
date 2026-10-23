@@ -692,10 +692,10 @@ describe("paths", () => {
     const { useEditorStore, pathId, path } = await storeWithPath();
     const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
 
-    useEditorStore.getState().updatePathStroke(pathId, { radius: 0.3 });
-    useEditorStore.getState().updatePathStroke(pathId, { caps: "flat" });
-    useEditorStore.getState().updatePathStroke(pathId, { radius: 0 });
-    useEditorStore.getState().updatePathStroke(pathId, { radius: Number.NaN });
+    useEditorStore.getState().updatePathStrokes([pathId], { radius: 0.3 });
+    useEditorStore.getState().updatePathStrokes([pathId], { caps: "flat" });
+    useEditorStore.getState().updatePathStrokes([pathId], { radius: 0 });
+    useEditorStore.getState().updatePathStrokes([pathId], { radius: Number.NaN });
     expect(path().stroke).toEqual({ radius: 0.3, caps: "flat" });
 
     useEditorStore.temporal.getState().undo();
@@ -703,11 +703,31 @@ describe("paths", () => {
     expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
   });
 
+  it("changes the stroke of several paths in one undo step, and of nothing else", async () => {
+    const { useEditorStore, pathId, path } = await storeWithPath();
+    const otherId = useEditorStore.getState().addEntity("path");
+    const other = () => useEditorStore.getState().entities.find((e) => e.id === otherId)!;
+    const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().updatePathStrokes([pathId, otherId, "directional-light-1"], { radius: 0.05 });
+
+    expect([path().stroke, other().stroke]).toEqual([
+      { radius: 0.05, caps: "round" },
+      { radius: 0.05, caps: "round" },
+    ]);
+    expect(useEditorStore.getState().entities.find((e) => e.id === "directional-light-1")!.stroke).toBeUndefined();
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
+
+    const before = useEditorStore.getState().entities;
+    useEditorStore.getState().updatePathStrokes(["directional-light-1"], { radius: 0.2 });
+    expect(useEditorStore.getState().entities).toBe(before);
+  });
+
   it("can't change a path's stroke or trim in a view-only tab", async () => {
     const { useEditorStore, pathId, path } = await storeWithPath();
     useEditorStore.getState().setReadOnly("openElsewhere");
 
-    useEditorStore.getState().updatePathStroke(pathId, { radius: 0.3 });
+    useEditorStore.getState().updatePathStrokes([pathId], { radius: 0.3 });
     useEditorStore.getState().updateShownTransforms({ [pathId]: { trimEnd: 0.5 } });
 
     expect(path()).toMatchObject({ stroke: { radius: 0.12 }, trimEnd: 1 });

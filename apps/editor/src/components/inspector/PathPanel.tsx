@@ -37,12 +37,13 @@ interface RangeRowProps {
   max: number;
   step: number;
   value: number;
+  mixed?: boolean; // several paths with different values: the slider shows the first one's
   format: (value: number) => string;
   onChange: (value: number) => void;
 }
 
 // A slider with its value beside it. `--value-percent` fills the track up to the thumb.
-function RangeRow({ label, min, max, step, value, format, onChange }: RangeRowProps) {
+function RangeRow({ label, min, max, step, value, mixed = false, format, onChange }: RangeRowProps) {
   const percent = Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100));
   return (
     <div className="slider-row">
@@ -56,53 +57,66 @@ function RangeRow({ label, min, max, step, value, format, onChange }: RangeRowPr
         onChange={(event) => onChange(parseFloat(event.target.value))}
         style={{ "--value-percent": `${percent}%` } as CSSProperties}
       />
-      <span className="slider-val">{format(value)}</span>
+      <span className="slider-val">{mixed ? "Mixed" : format(value)}</span>
     </div>
   );
 }
 
 interface PathPanelProps {
-  entity: Entity; // a path
+  entities: Entity[]; // paths, at least one
 }
 
 /**
- * The selected path's stroke and trim (notes/animation-plan.md, B1). Trim shows as 0–100 % and is
- * stored as 0–1. Its edits go to the state the path is shown in, like the Transform panel's (a
+ * The selected paths' stroke and trim (notes/animation-plan.md, B1). Trim shows as 0–100 % and is
+ * stored as 0–1. Its edits go to the state each path is shown in, like the Transform panel's (a
  * "Hidden" state is trim end 0); radius and caps belong to the path itself, in every state.
  *
- * While its points are being edited (B2), the picked point's position (in the path's own space, from
- * its origin) and smooth / corner: typing a depth is easier than dragging the gizmo's Z arrow, which
- * points straight at you in front view. Points belong to the path too, in every state.
+ * Several paths (an imported SVG's strokes, B3) are changed together, in one undo step; a value
+ * they don't share reads "Mixed" and the slider shows the first path's.
+ *
+ * While one path's points are being edited (B2), the picked point's position (in the path's own
+ * space, from its origin) and smooth / corner: typing a depth is easier than dragging the gizmo's Z
+ * arrow, which points straight at you in front view. Points belong to the path too, in every state.
  */
-export function PathPanel({ entity }: PathPanelProps) {
-  const updatePathStroke = useEditorStore((state) => state.updatePathStroke);
+export function PathPanel({ entities }: PathPanelProps) {
+  const updatePathStrokes = useEditorStore((state) => state.updatePathStrokes);
   const updatePath = useEditorStore((state) => state.updatePath);
   const updateShownTransforms = useEditorStore((state) => state.updateShownTransforms);
   const viewedStates = useEditorStore((state) => state.viewedStates);
   const objectStates = useEditorStore((state) => state.animation.states);
+  const entity = entities[0];
   const editedPoint = useEditorStore((state) =>
-    state.penTool?.mode === "edit" && state.penTool.pathId === entity.id ? state.penTool.selectedPoint : null,
+    entities.length === 1 && state.penTool?.mode === "edit" && state.penTool.pathId === entity.id ? state.penTool.selectedPoint : null,
   );
 
-  const objectState = getViewedState(viewedStates, objectStates, entity.id);
-  const shown = resolveState(entity, objectState);
-  const stroke = entity.stroke ?? DEFAULT_STROKE;
+  const ids = entities.map((path) => path.id);
+  const shownStates = entities.map((path) => getViewedState(viewedStates, objectStates, path.id));
+  const shown = entities.map((path, i) => resolveState(path, shownStates[i]));
+  // One path shown in a state: its trim fields get a marker and a "Reset to Base".
+  const objectState = entities.length === 1 ? shownStates[0] : null;
+  const strokes = entities.map((path) => path.stroke ?? DEFAULT_STROKE);
+  const stroke = strokes[0];
+  const isMixed = (values: number[]) => values.some((value) => Math.abs(value - values[0]) > 1e-6);
   const path = entity.path;
   const point = path && editedPoint !== null ? path.points[editedPoint] : undefined;
 
-  const trimField = (field: "trimStart" | "trimEnd", label: string, value: number) => (
-    <PathField label={label} extra={<StateValueExtra objectState={objectState} field={field} />}>
-      <RangeRow
-        label={label}
-        min={0}
-        max={100}
-        step={1}
-        value={Math.round(value * 100)}
-        format={(percent) => `${percent}%`}
-        onChange={(percent) => updateShownTransforms({ [entity.id]: { [field]: percent / 100 } })}
-      />
-    </PathField>
-  );
+  const trimField = (field: "trimStart" | "trimEnd", label: string, fallback: number) => {
+    const values = shown.map((pose) => pose[field] ?? fallback);
+    return (
+      <PathField label={label} extra={<StateValueExtra objectState={objectState} field={field} />}>
+        <RangeRow
+          label={label}
+          min={0}
+          max={100}
+          step={1}
+          value={Math.round(values[0] * 100)}
+          mixed={isMixed(values)}
+          format={(percent) => `${percent}%`}
+          onChange={(percent) => updateShownTransforms(Object.fromEntries(ids.map((id) => [id, { [field]: percent / 100 }])))}
+        />
+      </PathField>
+    );
+  };
 
   return (
     <PanelSection title="Path">
@@ -113,8 +127,9 @@ export function PathPanel({ entity }: PathPanelProps) {
           max={1}
           step={0.01}
           value={stroke.radius}
+          mixed={isMixed(strokes.map((each) => each.radius))}
           format={(radius) => radius.toFixed(2)}
-          onChange={(radius) => updatePathStroke(entity.id, { radius })}
+          onChange={(radius) => updatePathStrokes(ids, { radius })}
         />
       </PathField>
       <PathField label="Caps">
@@ -122,11 +137,11 @@ export function PathPanel({ entity }: PathPanelProps) {
           className=""
           options={CAP_OPTIONS}
           value={stroke.caps}
-          onChange={(caps) => updatePathStroke(entity.id, { caps: caps as CapStyle })}
+          onChange={(caps) => updatePathStrokes(ids, { caps: caps as CapStyle })}
         />
       </PathField>
-      {trimField("trimStart", "Trim Start", shown.trimStart ?? 0)}
-      {trimField("trimEnd", "Trim End", shown.trimEnd ?? 1)}
+      {trimField("trimStart", "Trim Start", 0)}
+      {trimField("trimEnd", "Trim End", 1)}
       {path && point && editedPoint !== null && (
         <>
           <Vector3Input

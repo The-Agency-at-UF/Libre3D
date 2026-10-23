@@ -348,8 +348,9 @@ export interface EditorState {
   toggleLock: (id: string) => void;
   renameEntity: (id: string, newName: string) => void;
   renameEntities: (updates: Record<string, string>) => void;
-  // A path's radius or cap style (not its trim, which states can set: see updateShownTransforms).
-  updatePathStroke: (id: string, updates: Partial<PathStroke>) => void;
+  // The radius or cap style of every path among `ids`, in one undo step (not their trim, which
+  // states can set: see updateShownTransforms).
+  updatePathStrokes: (ids: string[], updates: Partial<PathStroke>) => void;
   // A path the pen tool drew, its origin at `origin` and its points relative to it. Selected, like
   // addEntity. Returns its ID.
   addPath: (origin: [number, number, number], path: PathData) => string;
@@ -1181,13 +1182,17 @@ export const useEditorStore = create<EditorState>()(
                 return newName ? { ...entity, name: newName } : entity;
               }),
             })),
-          updatePathStroke: (id, updates) =>
+          updatePathStrokes: (ids, updates) =>
             set((state) => {
-              const path = state.entities.find((entity) => entity.id === id);
-              if (path?.type !== "path") return state;
-              const stroke = { ...DEFAULT_STROKE, ...path.stroke, ...updates };
-              if (!(stroke.radius > 0)) return state; // a radius of 0 (or NaN) draws nothing
-              return { entities: state.entities.map((entity) => (entity === path ? { ...entity, stroke } : entity)) };
+              if (updates.radius !== undefined && !(updates.radius > 0)) return state; // a radius of 0 (or NaN) draws nothing
+              const targets = new Set(ids);
+              const isTarget = (entity: Entity) => entity.type === "path" && targets.has(entity.id);
+              if (!state.entities.some(isTarget)) return state;
+              return {
+                entities: state.entities.map((entity) =>
+                  isTarget(entity) ? { ...entity, stroke: { ...DEFAULT_STROKE, ...entity.stroke, ...updates } } : entity,
+                ),
+              };
             }),
           addPath: (origin, path) => {
             let newId = "";
