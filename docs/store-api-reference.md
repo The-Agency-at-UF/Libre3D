@@ -111,8 +111,8 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, directional light, or group).
-- **Signature**: `(type: "cube" | "sphere" | "torus" | "directionalLight" | "group") => string`
+Creates a single primitive entity (cube, sphere, torus, path, directional light, or group). A path starts as a sample curve (until the pen tool can draw one), radius 0.12 with round caps, drawn in full (trim 0–1).
+- **Signature**: `(type: "cube" | "sphere" | "torus" | "path" | "directionalLight" | "group") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
 - **Example**:
@@ -166,6 +166,17 @@ Rename a single entity. Shows in hierarchy panel.
 
 #### `renameEntities(updates: Record<string, string>) → void`
 Batch rename multiple entities.
+
+#### `updatePathStroke(id: string, updates: Partial<PathStroke>) → void`
+Change a path's radius or cap style (`"round"` | `"flat"`), one undo step. Ignored for other entity types and for a radius that isn't above 0. These belong to the path in every state; its trim (`trimStart`/`trimEnd`, 0–1) is a state value instead and goes through `updateShownTransforms`.
+
+```typescript
+// Entity fields used when type === "path" (types in paths/pathGeometry.ts)
+path?: { points: PathPoint[]; closed: boolean };  // each point: position, handleIn/handleOut (relative), mode
+stroke?: { radius: number; caps: "round" | "flat" };
+trimStart?: number; // 0–1 of the path's length, Base State value
+trimEnd?: number;
+```
 
 #### `toggleVisibility(id: string) → void`
 Toggle visibility (eye icon in hierarchy). Hides/shows in viewport.
@@ -385,7 +396,7 @@ Replace an entity's entire layer stack.
 
 ## Object States
 
-The first part of state-based animation (no keyframes or timeline). Every object has a **Base State**: its own values on the entity. A state holds only the values it changes (`position`, `rotation`, `scale`), absolute and in the same parent space as the entity's own; everything else follows Base. States live in `animation.states`, keyed by ID, and point at their entity by `targetId`. The logic (`resolveState`, naming, the rotation unwrap, keeping states right through removal, duplication, and reparenting) is in `animation/objectStates.ts`, which has no store, React, or DOM dependency.
+The first part of state-based animation (no keyframes or timeline). Every object has a **Base State**: its own values on the entity. A state holds only the values it changes (`position`, `rotation`, `scale`, and for paths `trimStart`/`trimEnd`), absolute and in the same parent space as the entity's own; everything else follows Base. States live in `animation.states`, keyed by ID, and point at their entity by `targetId`. The logic (`resolveState`, naming, the rotation unwrap, keeping states right through removal, duplication, and reparenting) is in `animation/objectStates.ts`, which has no store, React, or DOM dependency.
 
 ```typescript
 interface ObjectState {
@@ -393,7 +404,13 @@ interface ObjectState {
   targetId: string; // entity ID
   name: string;     // "State", "State 2", …
   order: number;    // position in the States list
-  values: { position?: [number, number, number]; rotation?: [number, number, number]; scale?: [number, number, number] };
+  values: {
+    position?: [number, number, number];
+    rotation?: [number, number, number];
+    scale?: [number, number, number];
+    trimStart?: number; // paths: 0–1
+    trimEnd?: number;
+  };
 }
 ```
 
@@ -410,9 +427,9 @@ Delete a state. If it was being viewed, the object goes back to Base.
 Set values in a state; the ones not passed stay as they are. Vectors are copied in.
 
 #### `updateShownTransforms(updates: Record<string, StateValues>) → void`
-Transform edits by entity ID, as the Transform panel and the gizmo (multi-select included) make them: each object's go to the state it's shown in, or to its own values in Base. One undo step for all of them. The gizmo passes only what its tool moved (a multi-select drag: only what changed), so a state never starts setting values it left to Base.
+Transform (and trim) edits by entity ID, as the Transform and Path panels and the gizmo (multi-select included) make them: each object's go to the state it's shown in, or to its own values in Base. One undo step for all of them. The gizmo passes only what its tool moved (a multi-select drag: only what changed), so a state never starts setting values it left to Base.
 
-#### `clearStateValue(stateId: string, key: "position" | "rotation" | "scale") → void`
+#### `clearStateValue(stateId: string, key: keyof StateValues) → void`
 "Reset to Base": the state stops setting that value, so it follows the object's own again.
 
 #### `setViewedState(entityId: string, stateId: string | null) → void`
