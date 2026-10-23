@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
 import { getSelectionRootId } from "../../store/entityIndex";
+import { pickEntityAt } from "../pickEntity";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 
 // Matches the existing click-tolerance below (`dist < 10`) so a genuine click with a
@@ -20,7 +21,6 @@ export function useViewportRaycaster(
     if (!renderer) return;
 
     const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
     const worldPos = new THREE.Vector3();
     const camSpace = new THREE.Vector3();
     let pointerDownTime = 0;
@@ -116,6 +116,7 @@ export function useViewportRaycaster(
     };
 
     const onPointerDown = (event: PointerEvent) => {
+      // Play's clicks go to the scene's events instead (useViewportPlay).
       if (useEditorStore.getState().isPreviewMode) return;
       // Left button only — middle-drag pans and right-click shouldn't box-select or pick.
       if (event.button !== 0) return;
@@ -176,13 +177,6 @@ export function useViewportRaycaster(
     // null on a miss. Shared by click (which bubbles to the import root) and
     // double-click (which keeps the exact child).
     const pickEntityIdAt = (clientX: number, clientY: number): string | null => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x =  ((clientX - rect.left) / rect.width)  * 2 - 1;
-      mouse.y = -((clientY - rect.top)  / rect.height) * 2 + 1;
-
-      // Always ray-cast with the current active camera.
-      raycaster.setFromCamera(mouse, cameraRef.current);
-
       const targets: THREE.Object3D[] = [];
       meshMap.forEach((obj) => {
         if (obj.visible && !obj.userData.locked) {
@@ -193,14 +187,8 @@ export function useViewportRaycaster(
         }
       });
 
-      const intersects = raycaster.intersectObjects(targets, true);
-      if (intersects.length === 0) return null;
-
-      let hitObject: THREE.Object3D | null = intersects[0].object;
-      while (hitObject && !hitObject.userData.entityId) {
-        hitObject = hitObject.parent;
-      }
-      return hitObject?.userData.entityId ?? null;
+      // Always ray-cast with the current active camera.
+      return pickEntityAt(raycaster, cameraRef.current, renderer.domElement, targets, clientX, clientY);
     };
 
     // Double-click drills into the exact child under the cursor (the deepest

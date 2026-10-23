@@ -11,6 +11,7 @@ import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
 import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
 import { useViewportGizmo } from "../viewport/hooks/useViewportGizmo";
+import { useViewportPlay } from "../viewport/hooks/useViewportPlay";
 import { prepareModelImport } from "../utils/importModel";
 
 export function ViewportCanvas() {
@@ -91,12 +92,15 @@ export function ViewportCanvas() {
   // close over this ref and pick up the gizmo once it exists — see the
   // "render ordering" note in useViewportGizmo.ts.
   const gizmoRef = useRef<ViewportGizmo | null>(null);
+  // Filled by useViewportPlay below, like gizmoRef: moves the objects Play's events are moving,
+  // before each render.
+  const playFrameRef = useRef<(() => void) | null>(null);
 
   const rendererRef = useViewportRenderer(
     containerRef,
     scene,
     cameraRef,
-    undefined,
+    () => playFrameRef.current?.(),
     // Not in Play, which shows no editor furniture (the gizmo draws whether or not it's enabled).
     () => {
       if (!useEditorStore.getState().isPreviewMode) gizmoRef.current?.render();
@@ -120,6 +124,8 @@ export function ViewportCanvas() {
     objectManager.getMeshes(),
     transformControlsRef
   );
+
+  useViewportPlay(playFrameRef, cameraRef, rendererRef, objectManager);
 
   // -- Proxy Setup --
   useEffect(() => {
