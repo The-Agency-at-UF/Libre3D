@@ -315,7 +315,7 @@ After making ANY change, run these tests to ensure you didn't break existing fea
 ### Export
 - [ ] Export GLB downloads
 - [ ] Scene URL share works
-- [ ] Play mode preview works
+- [ ] Play mode preview works: no grid, gizmos, light helpers or selection outline; objects shown in a state appear in Base; orbit works; Delete and Ctrl+Z do nothing; Stop brings back the selection, gizmo, and picked states
 
 **Time**: 10-15 minutes (comprehensive)
 

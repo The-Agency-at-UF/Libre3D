@@ -719,7 +719,7 @@
 }
 
 /* Floating Stop chip shown while previewing — the inspector (and its Play/Stop
-   button) is hidden then, so this sits above the <model-viewer> overlay. */
+   button) is hidden then, so this sits over the viewport in its place. */
 .btn-chip.preview-exit-btn {
   position: absolute;
   top: 24px;

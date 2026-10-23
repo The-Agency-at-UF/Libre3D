@@ -113,13 +113,13 @@ describe("loadScene", () => {
   it("opens a new scene with the starter content and clears selection, preview, and undo history", async () => {
     const { useEditorStore } = await loadStore();
     useEditorStore.getState().addEntity("torus");
-    useEditorStore.getState().setPreviewMode(true, "blob:preview");
+    useEditorStore.getState().setPreviewMode(true);
 
     useEditorStore.getState().loadScene(null);
 
     const state = useEditorStore.getState();
     expect(state.entities.map((e) => e.type)).toEqual(["cube", "directionalLight"]);
-    expect(state).toMatchObject({ selectedEntityIds: [], isPreviewMode: false, previewGlbUrl: null });
+    expect(state).toMatchObject({ selectedEntityIds: [], isPreviewMode: false });
     expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
   });
 

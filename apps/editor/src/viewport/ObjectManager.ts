@@ -1046,8 +1046,8 @@ export class ObjectManager {
 
   // Shows an object in a pose other than its own values (the state being viewed) without touching
   // the store, so clicks, the outline, and the gizmo follow it. syncMeshes puts every object back in
-  // Base, so the caller applies the pose again after each sync. Exports and thumbnails still see
-  // Base (showBasePoses).
+  // Base, so the caller applies the pose again after each sync (except in Play, which shows Base).
+  // Exports and thumbnails still see Base (showBasePoses).
   public applyPose(entityId: string, pose: Pose): void {
     const obj = this.meshMap.get(entityId);
     if (!obj) return;

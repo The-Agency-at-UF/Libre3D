@@ -133,13 +133,11 @@ export function useViewportGizmo(
     const resizeObserver = new ResizeObserver(() => gizmo.update());
     resizeObserver.observe(container);
 
-    // Hide during preview. The render loop already stops drawing entirely
-    // while `isPreviewMode` is true (see useViewportRenderer.ts), which
-    // blanks the gizmo's pixels along with the rest of the scene, but its
-    // DOM element (used for hit-testing/hover) would otherwise still sit on
-    // top of the opaque <model-viewer> preview overlay and intercept clicks
-    // meant for it. Mirrors the `{!isPreviewMode && <ViewportOverlays />}` /
-    // `{!isPreviewMode && <FloatingToolbar />}` pattern in App.tsx.
+    // Hide during Play, which shows no editor furniture. ViewportCanvas.tsx
+    // skips the gizmo's render then (render() draws even while disabled);
+    // this hides its DOM element (used for hit-testing/hover) and stops it
+    // answering clicks. Mirrors the `{!isPreviewMode && <ViewportOverlays />}` /
+    // `{!isPreviewMode && <FloatingToolbar />}` pattern in EditorLayout.tsx.
     const unsubscribePreview = useEditorStore.subscribe(
       (state) => state.isPreviewMode,
       (isPreviewMode) => {

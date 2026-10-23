@@ -7,7 +7,6 @@ import type { StoredSceneContent } from "../utils/sceneDocument";
 import { hasPendingSaves, type LockClaim, type OpenedScene } from "../utils/sceneLibrary";
 import { SceneLock, cancelRelease, releaseWhenSaved, type SceneLockState } from "../utils/sceneLock";
 import { fetchSceneToShow } from "./useOpenScene";
-import { usePreviewSession } from "./usePreviewSession";
 import type { EditSession } from "./useSceneAutosave";
 
 export type EditingState =
@@ -60,7 +59,6 @@ export function useSceneLock({ scene, lock, hasRecoveredEdits }: UseSceneLockOpt
   const lockRef = useRef<SceneLock | null>(null);
   // A reload of the scene is under way; lock answers meanwhile are acted on by the next one.
   const isReloadingRef = useRef(false);
-  const { stopPreview } = usePreviewSession();
 
   const setEditing = useCallback((next: EditingState) => {
     editingRef.current = next;
@@ -70,13 +68,8 @@ export function useSceneLock({ scene, lock, hasRecoveredEdits }: UseSceneLockOpt
   useEffect(() => {
     let active = true;
 
-    // Loads the cloud copy into the store, ending a preview first (loadScene leaves preview mode
-    // without freeing its blob URL).
+    // Loads the cloud copy into the store (which also ends Play).
     const showScene = (content: StoredSceneContent | null) => {
-      if (useEditorStore.getState().isPreviewMode) {
-        stopPreview();
-      }
-
       useEditorStore.getState().loadScene(content);
     };
 
@@ -191,7 +184,7 @@ export function useSceneLock({ scene, lock, hasRecoveredEdits }: UseSceneLockOpt
         releaseWhenSaved(sceneId, () => hasUnsavedLocalEdits(sceneId));
       }
     };
-  }, [sceneId, setEditing, stopPreview]);
+  }, [sceneId, setEditing]);
 
   const takeOver = useCallback(async () => {
     setIsTakingOver(true);

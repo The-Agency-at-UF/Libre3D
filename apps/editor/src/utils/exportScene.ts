@@ -52,7 +52,8 @@ export const createDownload = (content: BlobPart, fileName: string, mimeType: st
 // Objects opt out by tagging themselves `userData.editorOnly` at creation. The
 // export already runs with `onlyVisible: true`, so hiding them for the duration of
 // the parse is enough to keep them out without touching the scene graph. The gallery
-// thumbnail (viewport/thumbnailCapture.ts) hides them the same way for its render.
+// thumbnail (viewport/thumbnailCapture.ts) hides them the same way for its render, and
+// so does every Play frame (viewport/hooks/useViewportRenderer.ts).
 export const hideEditorOnlyObjects = (scene: THREE.Scene): (() => void) => {
   const hidden: THREE.Object3D[] = [];
 

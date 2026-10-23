@@ -63,9 +63,8 @@ Object states, and the state each object is shown in; both saved with the scene.
 ### Preview & Play Mode
 ```typescript
 isPreviewMode: boolean
-previewGlbUrl: string | null
 ```
-Play mode state. Set via `setPreviewMode(active, url)`. Not persisted (session-scoped).
+Play mode state. Set via `setPreviewMode(active)`. Not persisted (session-scoped). Play draws in the editor viewport: every object in its Base State, without the `editorOnly` objects, and editing hotkeys are off.
 
 ```typescript
 pendingImportCount: number
@@ -222,10 +221,10 @@ Update canvas frame size/preset.
 - **Width/height**: Only used when mode="custom"
 - **Deep merge**: Only provided fields are updated
 
-#### `setPreviewMode(active: boolean, url: string | null) → void`
+#### `setPreviewMode(active: boolean) → void`
 Enter/exit play mode.
-- **active=true, url=...**: Switch to play mode with a generated GLB preview
-- **active=false**: Exit play mode, return to editing
+- **active=true**: Switch to play mode (nothing is exported; the viewport keeps rendering)
+- **active=false**: Exit play mode, return to editing (objects go back to the states picked for them)
 
 #### `adjustPendingImports(delta: number) → void`
 Increment/decrement pending import counter (file picked but not parsed).
@@ -617,7 +616,7 @@ useEditorStore.subscribe(
 - hudOverlay, viewportZoom
 
 **NOT saved** (while the editor is open only):
-- selectedEntityIds, isPreviewMode, previewGlbUrl
+- selectedEntityIds, isPreviewMode
 - pendingImportCount, readOnlyReason, undo history
 
 ---
