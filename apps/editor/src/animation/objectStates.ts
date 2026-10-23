@@ -16,6 +16,7 @@ import type * as THREE from "three";
 import type { Entity } from "../store/useEditorStore";
 import { createId } from "../utils/createId";
 import { composeLocalMatrix, solveLocalFromWorld, type EntityTRS } from "../utils/entityTransforms";
+import type { SceneEvent } from "./events";
 
 /** What a state can set. Paths add trim (B1); colour and opacity may follow. */
 export interface StateValues {
@@ -38,9 +39,7 @@ export interface ObjectState {
 /** The scene document's `animation` section. */
 export interface SceneAnimation {
   states: Record<string, ObjectState>;
-  // Events arrive in A3. Until then they're carried whole, so a scene saved by a newer build loses
-  // none of them here.
-  events: Record<string, unknown>;
+  events: Record<string, SceneEvent>; // see events.ts
 }
 
 /** An object's whole transform: its Base values with a state's on top. */

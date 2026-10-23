@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import { composeLocalMatrix, solveLocalFromWorld } from "../utils/entityTransforms";
+import type { SceneEvent } from "./events";
 import {
   cloneAnimation,
   createObjectState,
@@ -224,14 +225,15 @@ describe("reparentStates", () => {
 describe("cloneAnimation", () => {
   it("copies states and events without sharing vectors, and fills a missing section", () => {
     const state = makeState("up", "cube", { values: { position: [0, 1, 0] } });
-    const events = { e1: { id: "e1", actions: [{ steps: [1] }] } };
+    const event = (): SceneEvent => ({ id: "e1", ownerId: "cube", trigger: "start", order: 0, actions: [] });
+    const events = { e1: event() };
     const copy = cloneAnimation({ states: statesById(state), events });
 
     state.values.position![1] = 99;
-    events.e1.actions[0].steps[0] = 99;
+    events.e1.ownerId = "other";
 
     expect(copy.states.up.values.position).toEqual([0, 1, 0]);
-    expect(copy.events).toEqual({ e1: { id: "e1", actions: [{ steps: [1] }] } });
+    expect(copy.events).toEqual({ e1: event() });
     expect(cloneAnimation(undefined)).toEqual({ states: {}, events: {} });
   });
 });

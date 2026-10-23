@@ -12,7 +12,7 @@
  * job (sceneRuntime.ts). Nothing here depends on the store, React, or the DOM.
  */
 
-import { applyEasing, type Easing } from "./easing";
+import { applyEasing, EASINGS, type Easing } from "./easing";
 
 /** A state of the target: "base" for its own values, else a state ID. */
 export type StateRef = "base" | string;
@@ -143,6 +143,40 @@ export const sampleTransition = (timing: TransitionTiming, elapsed: number): Tra
     run += 1;
   }
   return sampleRun(run, time);
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const DELAY_REPEATS: DelayRepeat[] = ["none", "start", "end", "startEnd"];
+
+/**
+ * A transition read from a document, in the shape everything else expects, or null when it isn't a
+ * transition at all. Settings that are missing or out of range get their defaults, and a row whose
+ * state isn't a string becomes "" (no state picked), so a hand-edited or damaged file can't break
+ * the panel or Play. Whether the states and target still exist is checked where they're used.
+ */
+export const normalizeTransition = (raw: unknown): TransitionAction | null => {
+  if (!isRecord(raw) || raw.type !== "transition" || typeof raw.id !== "string") return null;
+
+  const steps = Array.isArray(raw.steps) ? raw.steps.filter(isRecord) : [];
+  const easings = EASINGS.map((easing) => easing.value);
+
+  return {
+    id: raw.id,
+    type: "transition",
+    targetId: typeof raw.targetId === "string" ? raw.targetId : "",
+    from: typeof raw.from === "string" ? raw.from : "",
+    steps: steps.map((step) => ({
+      to: typeof step.to === "string" ? step.to : "",
+      duration: seconds(step.duration as number),
+      easing: easings.includes(step.easing as Easing) ? (step.easing as Easing) : "easeInOut",
+    })),
+    delay: seconds(raw.delay as number),
+    delayRepeat: DELAY_REPEATS.includes(raw.delayRepeat as DelayRepeat) ? (raw.delayRepeat as DelayRepeat) : "none",
+    loop: raw.loop === "infinite" ? "infinite" : Math.floor(seconds(raw.loop as number)),
+    cycle: raw.cycle === "pingPong" ? "pingPong" : "restart",
+  };
 };
 
 /** The states a transition goes through, row by row: row 1, then where each step ends. */
