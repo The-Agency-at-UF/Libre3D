@@ -9,7 +9,9 @@
  * depends on the store, React, or the DOM.
  */
 
-import { normalizeTransition, type TransitionAction } from "./transitions";
+import { createId } from "../utils/createId";
+import { getObjectStates, type ObjectState } from "./objectStates";
+import { normalizeTransition, type StateRef, type TransitionAction } from "./transitions";
 
 export type EventTrigger = "start" | "mouseDown";
 
@@ -29,6 +31,114 @@ export interface SceneEvent {
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** An object's events, in the order its Events list shows them. */
+export const getObjectEvents = (events: Record<string, SceneEvent>, ownerId: string): SceneEvent[] =>
+  Object.values(events)
+    .filter((event) => event.ownerId === ownerId)
+    .sort((a, b) => a.order - b.order);
+
+/**
+ * A new transition on `targetId`: from Base to its first state (no state picked yet when it has
+ * none), in 1 s with Ease In Out, played once.
+ */
+export const createTransition = (states: Record<string, ObjectState>, targetId: string): TransitionAction => ({
+  id: createId("action"),
+  type: "transition",
+  targetId,
+  from: "base",
+  steps: [{ to: getObjectStates(states, targetId)[0]?.id ?? "", duration: 1, easing: "easeInOut" }],
+  delay: 0,
+  delayRepeat: "none",
+  loop: 0,
+  cycle: "restart",
+});
+
+/** A new event on an object, last in its list, with one transition of the object itself. */
+export const createEvent = (
+  events: Record<string, SceneEvent>,
+  states: Record<string, ObjectState>,
+  ownerId: string,
+  trigger: EventTrigger,
+): SceneEvent => {
+  const siblings = getObjectEvents(events, ownerId);
+
+  return {
+    id: createId("event"),
+    ownerId,
+    trigger,
+    order: siblings.length > 0 ? siblings[siblings.length - 1].order + 1 : 0,
+    actions: [createTransition(states, ownerId)],
+  };
+};
+
+/** A copy of a transition that shares nothing with it. */
+export const cloneTransition = (action: TransitionAction): TransitionAction => ({
+  ...action,
+  steps: action.steps.map((step) => ({ ...step })),
+});
+
+/**
+ * Drops the events of removed objects, and the actions (on any object's events) that move a
+ * removed object; an event left with no actions stays. Returns `events` itself when nothing changed.
+ */
+export const removeEventsOf = (
+  events: Record<string, SceneEvent>,
+  removedIds: Set<string>,
+): Record<string, SceneEvent> => {
+  let next: Record<string, SceneEvent> | null = null;
+
+  for (const event of Object.values(events)) {
+    if (removedIds.has(event.ownerId)) {
+      next ??= { ...events };
+      delete next[event.id];
+      continue;
+    }
+    const actions = event.actions.filter((action) => !removedIds.has(action.targetId));
+    if (actions.length !== event.actions.length) {
+      next ??= { ...events };
+      next[event.id] = { ...event, actions };
+    }
+  }
+
+  return next ?? events;
+};
+
+/**
+ * Gives duplicated objects copies of their originals' events, with new IDs. `idMap` maps each
+ * original's ID to its copy's and `stateIdMap` each copied state's ID to its copy's
+ * (duplicateStates). An action moving an object that was duplicated too moves the copy, through
+ * the copy's states; one moving anything else is copied as it is. Returns `events` itself when
+ * none of the originals had any.
+ */
+export const duplicateEvents = (
+  events: Record<string, SceneEvent>,
+  idMap: Map<string, string>,
+  stateIdMap: Map<string, string>,
+): Record<string, SceneEvent> => {
+  const copies = Object.values(events)
+    .filter((event) => idMap.has(event.ownerId))
+    .map((event): SceneEvent => ({
+      ...event,
+      id: createId("event"),
+      ownerId: idMap.get(event.ownerId)!,
+      actions: event.actions.map((action) => {
+        const copy = { ...cloneTransition(action), id: createId("action") };
+        const targetCopy = idMap.get(action.targetId);
+        if (!targetCopy) return copy;
+
+        const mapRef = <T extends StateRef>(ref: T): T => (stateIdMap.get(ref) as T | undefined) ?? ref;
+        return {
+          ...copy,
+          targetId: targetCopy,
+          from: mapRef(copy.from),
+          steps: copy.steps.map((step) => ({ ...step, to: mapRef(step.to) })),
+        };
+      }),
+    }));
+
+  return copies.length === 0 ? events : { ...events, ...Object.fromEntries(copies.map((event) => [event.id, event])) };
+};
 
 /**
  * Events read from a document, in the shape everything else expects. Anything that isn't an event

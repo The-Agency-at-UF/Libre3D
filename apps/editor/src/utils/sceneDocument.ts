@@ -8,7 +8,7 @@
  *
  * Only the scene itself goes in: entities, scene/post-processing/frame settings, camera profiles,
  * animation (object states and events, keyed by ID and pointing at entities by ID; see
- * animation/objectStates.ts), and which state each object is shown in while editing, so it reopens
+ * animation/objectStates.ts and animation/events.ts), and which state each object is shown in while editing, so it reopens
  * as it was left. Selection, the transform tool, projection mode, zoom, the HUD, preview state, and
  * undo history are editor state, not scene content, and stay out. The name lives on the scene's row in DynamoDB, so renaming never rewrites the document.
  *
@@ -24,6 +24,7 @@
  * content (`loadScene`), so a field added to the defaults later keeps its default for old scenes.
  */
 
+import { normalizeEvents } from "../animation/events";
 import { pruneViewedStates, type SceneAnimation } from "../animation/objectStates";
 import type {
   CameraProfile,
@@ -137,7 +138,10 @@ export const parseSceneDocument = (raw: unknown): ParsedSceneDocument => {
         ? (scene.cameraProfiles as Record<string, CameraProfile>)
         : undefined,
       activeProfileId: typeof scene.activeProfileId === "string" ? scene.activeProfileId : undefined,
-      animation: isPlainObject(scene.animation) ? (scene.animation as Partial<SceneAnimation>) : undefined,
+      // Events are read into shape here (normalizeEvents), so a damaged one can't break the panel or Play.
+      animation: isPlainObject(scene.animation)
+        ? { ...(scene.animation as Partial<SceneAnimation>), events: normalizeEvents(scene.animation.events) }
+        : undefined,
       viewedStates: isPlainObject(scene.viewedStates) ? (scene.viewedStates as Record<string, string>) : undefined,
     },
   };

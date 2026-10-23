@@ -513,3 +513,141 @@ describe("object states", () => {
     expect(useEditorStore.getState().animation.states).toEqual({});
   });
 });
+
+describe("events", () => {
+  // A cube at (2, 0, 0) with a child sphere, a separate button cube, and the light; the cube has a State.
+  const storeWithCube = async () => {
+    const module = await loadStore();
+    module.useEditorStore.getState().loadScene({
+      entities: [
+        entity("cube-1", { position: [2, 0, 0] }),
+        entity("sphere-1", { type: "sphere", parentId: "cube-1" }),
+        entity("button-1"),
+        light,
+      ],
+    });
+    const stateId = module.useEditorStore.getState().addState("cube-1");
+    return { ...module, stateId };
+  };
+
+  it("adds an event with a transition from Base to the object's state, undoably", async () => {
+    const { useEditorStore, stateId } = await storeWithCube();
+
+    const eventId = useEditorStore.getState().addEvent("cube-1", "start");
+
+    expect(useEditorStore.getState().animation.events[eventId]).toMatchObject({
+      ownerId: "cube-1",
+      trigger: "start",
+      actions: [{ type: "transition", targetId: "cube-1", from: "base", steps: [{ to: stateId }] }],
+    });
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().animation.events).toEqual({});
+  });
+
+  it("doesn't add an event to an object that isn't there", async () => {
+    const { useEditorStore } = await storeWithCube();
+
+    expect(useEditorStore.getState().addEvent("deleted", "start")).toBe("");
+    expect(useEditorStore.getState().animation.events).toEqual({});
+  });
+
+  it("changes the trigger and replaces the actions without sharing them, one undo step each", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const eventId = useEditorStore.getState().addEvent("cube-1", "start");
+    const actions = useEditorStore.getState().animation.events[eventId].actions.map((action) => ({
+      ...action,
+      loop: "infinite" as const,
+      steps: action.steps.map((step) => ({ ...step, duration: 2 })),
+    }));
+
+    useEditorStore.getState().updateEvent(eventId, { trigger: "mouseDown" });
+    useEditorStore.getState().updateEvent(eventId, { actions });
+    actions[0].steps[0].duration = 99;
+
+    expect(useEditorStore.getState().animation.events[eventId]).toMatchObject({
+      trigger: "mouseDown",
+      actions: [{ loop: "infinite", steps: [{ duration: 2 }] }],
+    });
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().animation.events[eventId]).toMatchObject({ trigger: "mouseDown", actions: [{ loop: 0 }] });
+  });
+
+  it("removes an event", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const eventId = useEditorStore.getState().addEvent("cube-1", "start");
+
+    useEditorStore.getState().removeEvent(eventId);
+
+    expect(useEditorStore.getState().animation.events).toEqual({});
+  });
+
+  it("can't change events in a view-only tab", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const eventId = useEditorStore.getState().addEvent("cube-1", "start");
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().addEvent("cube-1", "mouseDown");
+    useEditorStore.getState().updateEvent(eventId, { trigger: "mouseDown" });
+    useEditorStore.getState().removeEvent(eventId);
+
+    expect(Object.values(useEditorStore.getState().animation.events)).toMatchObject([{ id: eventId, trigger: "start" }]);
+  });
+
+  it("removes a deleted object's events and other objects' actions that move it; one undo brings it all back", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const own = useEditorStore.getState().addEvent("sphere-1", "start");
+    const click = useEditorStore.getState().addEvent("button-1", "mouseDown");
+    const clickActions = useEditorStore.getState().animation.events[click].actions;
+    useEditorStore.getState().updateEvent(click, { actions: [{ ...clickActions[0], targetId: "sphere-1" }, clickActions[0]] });
+
+    // Deleting the cube deletes its child sphere too.
+    useEditorStore.getState().removeEntity(["cube-1"]);
+    const { events } = useEditorStore.getState().animation;
+    expect(Object.keys(events)).toEqual([click]);
+    expect(events[click].actions.map((action) => action.targetId)).toEqual(["button-1"]);
+
+    useEditorStore.temporal.getState().undo();
+    const restored = useEditorStore.getState().animation.events;
+    expect(Object.keys(restored).sort()).toEqual([own, click].sort());
+    expect(restored[click].actions.map((action) => action.targetId)).toEqual(["sphere-1", "button-1"]);
+  });
+
+  it("gives a duplicate copies of the events, moving the copy through its own states", async () => {
+    const { useEditorStore, stateId } = await storeWithCube();
+    const eventId = useEditorStore.getState().addEvent("cube-1", "start");
+
+    useEditorStore.getState().duplicateEntity(["cube-1"]);
+
+    const copyId = useEditorStore.getState().selectedEntityIds[0];
+    const { states, events } = useEditorStore.getState().animation;
+    const copiedState = Object.values(states).find((state) => state.targetId === copyId)!;
+    const copies = Object.values(events).filter((event) => event.ownerId === copyId);
+    expect(copies).toHaveLength(1);
+    expect(copies[0].id).not.toBe(eventId);
+    expect(copies[0].actions[0]).toMatchObject({ targetId: copyId, from: "base", steps: [{ to: copiedState.id }] });
+    expect(events[eventId].actions[0]).toMatchObject({ targetId: "cube-1", steps: [{ to: stateId }] });
+  });
+
+  it("drops a group's own events when it's ungrouped", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const groupId = useEditorStore.getState().groupEntities(["button-1"]);
+    useEditorStore.getState().addEvent(groupId, "start");
+    const keep = useEditorStore.getState().addEvent("cube-1", "start");
+
+    useEditorStore.getState().ungroupEntity(groupId);
+
+    expect(Object.keys(useEditorStore.getState().animation.events)).toEqual([keep]);
+  });
+
+  it("keeps events through save and reload", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithCube();
+    useEditorStore.getState().addEvent("cube-1", "mouseDown");
+    const saved = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState())))));
+    const events = useEditorStore.getState().animation.events;
+
+    useEditorStore.getState().loadScene(null);
+    expect(useEditorStore.getState().animation.events).toEqual({});
+    useEditorStore.getState().loadScene(saved.ok ? saved.content : null);
+    expect(useEditorStore.getState().animation.events).toEqual(events);
+  });
+});
