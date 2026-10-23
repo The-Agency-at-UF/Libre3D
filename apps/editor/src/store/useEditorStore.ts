@@ -337,8 +337,7 @@ export interface EditorState {
 
   // Play Mode / Preview
   isPreviewMode: boolean;
-  previewGlbUrl: string | null;
-  setPreviewMode: (active: boolean, url: string | null) => void;
+  setPreviewMode: (active: boolean) => void;
 
   // Number of .glb imports currently being read/parsed (file picked but
   // entities not yet materialized). Not persisted — like isPreviewMode it's
@@ -1113,8 +1112,7 @@ export const useEditorStore = create<EditorState>()(
 
           // Play Mode / Preview
           isPreviewMode: false,
-          previewGlbUrl: null,
-          setPreviewMode: (active, url) => set({ isPreviewMode: active, previewGlbUrl: url }),
+          setPreviewMode: (active) => set({ isPreviewMode: active }),
 
           readOnlyReason: null,
           setReadOnly: (reason) => {
@@ -1312,7 +1310,6 @@ export const useEditorStore = create<EditorState>()(
               viewedStates: { ...content?.viewedStates },
               selectedEntityIds: [],
               isPreviewMode: false,
-              previewGlbUrl: null,
             });
 
             // The editor no longer reloads the page between scenes, so history would otherwise

@@ -13,7 +13,6 @@ import { PreviewControls } from "./PreviewControls";
 // Custom state hook to manage right sidebar UI states like exporting, publishing, search, and tab selections
 import { useRightSidebarState } from "../hooks/useRightSidebarState";
 import { useHotkeys } from "../hooks/useHotkeys";
-import { usePreviewSession } from "../hooks/usePreviewSession";
 
 //import tsx utils for editor export and publish
 import { exportLiveScene, getLiveScene, createDownload } from "../utils/exportScene";
@@ -81,14 +80,9 @@ export function EditorLayout({
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
 
   // Leaving the editor (Back, or the projects button) unmounts it without a page
-  // reload, so end any preview here: otherwise its blob URL leaks and the editor
-  // reopens in preview mode next time.
-  const { stopPreview } = usePreviewSession();
-  useEffect(() => () => {
-    if (useEditorStore.getState().isPreviewMode) {
-      stopPreview();
-    }
-  }, [stopPreview]);
+  // reload, so end any preview here: otherwise the editor reopens in preview mode
+  // next time.
+  useEffect(() => () => useEditorStore.getState().setPreviewMode(false), []);
 
   // Hook for right sidebar local UI state
   const sidebarUI = useRightSidebarState();
