@@ -19,7 +19,7 @@ import { hideEditorOnlyObjects, showBasePoses } from "../utils/exportScene";
 const THUMBNAIL_WIDTH = 480;
 const THUMBNAIL_HEIGHT = 270;
 const JPEG_QUALITY = 0.85;
-// The render loop stops during preview and with the editor closed; don't wait for it forever.
+// The render loop stops with the editor closed; don't wait for it forever.
 const CAPTURE_TIMEOUT_MS = 1000;
 
 type PendingCapture = (canvas: HTMLCanvasElement | null) => void;

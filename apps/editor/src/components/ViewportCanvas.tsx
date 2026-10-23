@@ -97,7 +97,10 @@ export function ViewportCanvas() {
     scene,
     cameraRef,
     undefined,
-    () => gizmoRef.current?.render()
+    // Not in Play, which shows no editor furniture (the gizmo draws whether or not it's enabled).
+    () => {
+      if (!useEditorStore.getState().isPreviewMode) gizmoRef.current?.render();
+    }
   );
 
   const { orbitControlsRef, transformControlsRef } = useViewportControls(
@@ -278,19 +281,21 @@ export function ViewportCanvas() {
     objectManager.syncMeshes(entities, transformTarget, isDragging);
 
     // Objects shown in one of their states (syncMeshes just put everything in Base). Not the one the
-    // gizmo is dragging: the drag already put it there, and writes into the state.
-    Object.keys(viewedStates).forEach((entityId) => {
-      const objectState = getViewedState(viewedStates, objectStates, entityId);
-      const entity = objectState && entities.find((e) => e.id === entityId);
-      const isDraggedObject = isDragging && transformTarget === objectManager.getObject(entityId);
-      if (entity && !isDraggedObject) objectManager.applyPose(entityId, resolveState(entity, objectState));
-    });
+    // gizmo is dragging: the drag already put it there, and writes into the state. Play shows every
+    // object in Base; Stop runs this again, which puts each one back in the state picked for it.
+    if (!isPreviewMode) {
+      Object.keys(viewedStates).forEach((entityId) => {
+        const objectState = getViewedState(viewedStates, objectStates, entityId);
+        const entity = objectState && entities.find((e) => e.id === entityId);
+        const isDraggedObject = isDragging && transformTarget === objectManager.getObject(entityId);
+        if (entity && !isDraggedObject) objectManager.applyPose(entityId, resolveState(entity, objectState));
+      });
+    }
 
     const tc = transformControlsRef.current;
     const locked = selectedEntityIds.some(id => objectManager.getObject(id)?.userData.locked);
-    // Preview hides the editor viewport behind the overlay but keeps the canvas
-    // hit-testable for camera control, so detach the gizmo — otherwise it stays
-    // draggable while completely invisible. View only: TransformControls moves the
+    // Play hides the gizmo (useViewportRenderer), so detach it there: otherwise it
+    // stays draggable while invisible. View only: TransformControls moves the
     // object itself before the store (which drops the change) hears of it, so
     // there must be no gizmo to drag.
     if (isPreviewMode || isReadOnly || locked || selectedEntityIds.length === 0) {
@@ -522,12 +527,6 @@ export function ViewportCanvas() {
       ref={wrapperRef}
       className="viewport-sandbox-wrapper"
       style={{
-        // Never display:none, even while previewing: the preview overlay sits on
-        // top with pointer-events:none so orbit/pan/zoom keep landing on this
-        // canvas, and OrbitControls drives the preview camera. The overlay is
-        // opaque, so nothing from the editor viewport shows through. (display:none
-        // here is what broke camera control in preview — a hidden element gets no
-        // pointer events at all.)
         display:         "flex",
         width:           frame.mode === "fixed" ? frame.width  : "100%",
         height:          frame.mode === "fixed" ? frame.height : "100%",
@@ -540,7 +539,7 @@ export function ViewportCanvas() {
         className={`viewport-sandbox-container${frame.mode === "fixed" ? " fixed-bounds" : ""}`}
         style={{ width: "100%", height: "100%" }}
       />
-      {frame.mode === "fixed" && (
+      {frame.mode === "fixed" && !isPreviewMode && (
         <div className="badge green viewport-sandbox-badge">
           {frame.width.toLocaleString()} × {frame.height.toLocaleString()} ({frameScaleLabel})
         </div>

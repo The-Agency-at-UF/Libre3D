@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 // tsx components for editor scene and UI
 import { HierarchyPanel } from "./HierarchyPanel";
@@ -19,7 +19,6 @@ import { usePreviewSession } from "../hooks/usePreviewSession";
 import { exportLiveScene, getLiveScene, createDownload } from "../utils/exportScene";
 import { publishLiveScene } from "../utils/publishScene";
 import { ApiAuthError } from "../utils/apiFetch";
-import { getModelViewerCamera } from "../utils/previewCamera";
 import { getSafeColor } from "../utils/sceneColor";
 import { toggleTheme } from "../utils/theme";
 
@@ -80,12 +79,6 @@ export function EditorLayout({
   const handleToggleAxisGuides = () => updateSceneSettings({ showAxisGuides: !showAxisGuides });
 
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
-  const previewGlbUrl = useEditorStore((state) => state.previewGlbUrl);
-  const activeCameraProfile = useEditorStore((state) => state.cameraProfiles[state.activeProfileId]);
-  // Stable strings for a given profile, so React only writes the attributes when
-  // the editor camera actually moved — never mid-preview while the viewer orbits.
-  const previewCamera = activeCameraProfile ? getModelViewerCamera(activeCameraProfile) : null;
-  const modelViewerRef = useRef<(HTMLElement & { jumpCameraToGoal?: () => void }) | null>(null);
 
   // Leaving the editor (Back, or the projects button) unmounts it without a page
   // reload, so end any preview here: otherwise its blob URL leaks and the editor
@@ -96,13 +89,6 @@ export function EditorLayout({
       stopPreview();
     }
   }, [stopPreview]);
-
-  // model-viewer eases toward a new camera goal. That easing is wrong here — it is
-  // a follower of the editor's OrbitControls, so anything but an immediate jump
-  // leaves the preview trailing the viewport during a drag.
-  useEffect(() => {
-    modelViewerRef.current?.jumpCameraToGoal?.();
-  }, [previewCamera?.cameraOrbit, previewCamera?.cameraTarget, previewCamera?.fieldOfView]);
 
   // Hook for right sidebar local UI state
   const sidebarUI = useRightSidebarState();
@@ -341,54 +327,9 @@ export function EditorLayout({
                 setIsShapeDropdownOpen={sidebarUI.setIsShapeDropdownOpen}
               />
             ))}
-          
-          {isPreviewMode && previewGlbUrl && previewCamera && (
-            // On top of the viewport canvas, but pointer-events:none, so the
-            // editor's own camera controls keep working: every pointer/wheel
-            // gesture falls through to the canvas and its OrbitControls, which
-            // write to the camera profile this element follows.
-            //
-            // It has to be on top, not underneath: model-viewer stops rendering
-            // entirely while its element is occluded (its internal canvas goes
-            // display:none and only a resize re-evaluates it), so stacking it
-            // behind the canvas leaves preview blank.
-            <div
-              style={{
-                width: "100%",
-                height: "100%",
-                position: "absolute",
-                inset: 0,
-                zIndex: 10,
-                pointerEvents: "none",
-                background: getSafeColor(sceneSettings.bgColor),
-              }}
-            >
-              {/* Preview opens on the editor's own camera and holds still: no
-                  auto-fit zoom, no auto-rotate. model-viewer's own camera-controls
-                  are deliberately off — it is a follower here, driven entirely by
-                  the editor's OrbitControls, so interpolation is disabled to keep
-                  it locked to the viewport rather than easing a frame behind. */}
-              <model-viewer
-                ref={modelViewerRef}
-                src={previewGlbUrl}
-                camera-orbit={previewCamera.cameraOrbit}
-                camera-target={previewCamera.cameraTarget}
-                field-of-view={previewCamera.fieldOfView}
-                min-camera-orbit={previewCamera.minCameraOrbit}
-                max-camera-orbit={previewCamera.maxCameraOrbit}
-                min-field-of-view={previewCamera.minFieldOfView}
-                max-field-of-view={previewCamera.maxFieldOfView}
-                tone-mapping="neutral"
-                style={{ width: "100%", height: "100%", backgroundColor: getSafeColor(sceneSettings.bgColor) }}
-              >
-                {/* Replaces model-viewer's default poster, whose button is the one
-                    thing in its shadow DOM that sets pointer-events:auto and would
-                    swallow camera gestures until the model reveals. */}
-                <div slot="poster" style={{ width: "100%", height: "100%", pointerEvents: "none", background: getSafeColor(sceneSettings.bgColor) }} />
-              </model-viewer>
-            </div>
-          )}
 
+          {/* Play draws in this same viewport (without the editor's own objects), so its
+              camera is the editor's camera and OrbitControls keep working. */}
           {isPreviewMode && <PreviewControls />}
 
           <ViewportCanvas />
