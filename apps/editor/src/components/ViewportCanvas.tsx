@@ -14,6 +14,7 @@ import { useViewportGizmo } from "../viewport/hooks/useViewportGizmo";
 import { useViewportPlay } from "../viewport/hooks/useViewportPlay";
 import { useViewportPenTool } from "../viewport/hooks/useViewportPenTool";
 import { prepareModelImport } from "../utils/importModel";
+import { importSvgFile, isSvgFile } from "../utils/importSvg";
 
 export function ViewportCanvas() {
   const wrapperRef   = useRef<HTMLDivElement | null>(null);
@@ -514,7 +515,7 @@ export function ViewportCanvas() {
     };
   }, [orbitControlsRef, objectManager, cameraRef]);
 
-  // -- Drag-and-drop .glb import --
+  // -- Drag-and-drop import: .svg as paths, anything else as a model (.glb) --
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -533,6 +534,11 @@ export function ViewportCanvas() {
       if (store.readOnlyReason || store.isPreviewMode) return;
 
       Array.from(files).forEach((file) => {
+        if (isSvgFile(file)) {
+          importSvgFile(file).catch((error) => console.error("[Libre3D] Failed to import dropped SVG:", error));
+          return;
+        }
+
         useEditorStore.getState().adjustPendingImports(1);
         prepareModelImport(file)
           .then(({ assetId, nodes }) => {

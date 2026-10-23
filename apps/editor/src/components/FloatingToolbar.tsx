@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 import { TranslateIcon, RotateIcon, ScaleIcon, PenIcon, PlusIcon } from "./ui/Icons";
 import { prepareModelImport } from "../utils/importModel";
+import { importSvgFile, isSvgFile } from "../utils/importSvg";
 
 interface FloatingToolbarProps {
   isShapeDropdownOpen: boolean;
@@ -33,6 +34,11 @@ export function FloatingToolbar({
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+
+    if (isSvgFile(file)) {
+      await importSvgFile(file).catch((error) => console.error("[Libre3D] Failed to import SVG:", error));
+      return;
+    }
 
     useEditorStore.getState().adjustPendingImports(1);
     try {
@@ -261,14 +267,15 @@ export function FloatingToolbar({
                 setIsShapeDropdownOpen(false);
               }}
             >
-              Import Model...
+              Import...
             </button>
           </div>
         )}
+        {/* A model (.glb), or a drawing whose strokes become paths (.svg) */}
         <input
           ref={fileInputRef}
           type="file"
-          accept=".glb"
+          accept=".glb,.svg"
           style={{ display: "none" }}
           onChange={handleFileSelected}
         />

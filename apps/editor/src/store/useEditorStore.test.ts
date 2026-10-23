@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
 import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
 import type { PathData, PathPoint } from "../paths/pathGeometry";
+import type { ImportedPath } from "../paths/svgImport";
 import type { Entity } from "./useEditorStore";
 
 const EDITOR_KEY = "libre3d-scene-state";
@@ -691,10 +692,10 @@ describe("paths", () => {
     const { useEditorStore, pathId, path } = await storeWithPath();
     const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
 
-    useEditorStore.getState().updatePathStroke(pathId, { radius: 0.3 });
-    useEditorStore.getState().updatePathStroke(pathId, { caps: "flat" });
-    useEditorStore.getState().updatePathStroke(pathId, { radius: 0 });
-    useEditorStore.getState().updatePathStroke(pathId, { radius: Number.NaN });
+    useEditorStore.getState().updatePathStrokes([pathId], { radius: 0.3 });
+    useEditorStore.getState().updatePathStrokes([pathId], { caps: "flat" });
+    useEditorStore.getState().updatePathStrokes([pathId], { radius: 0 });
+    useEditorStore.getState().updatePathStrokes([pathId], { radius: Number.NaN });
     expect(path().stroke).toEqual({ radius: 0.3, caps: "flat" });
 
     useEditorStore.temporal.getState().undo();
@@ -702,11 +703,31 @@ describe("paths", () => {
     expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
   });
 
+  it("changes the stroke of several paths in one undo step, and of nothing else", async () => {
+    const { useEditorStore, pathId, path } = await storeWithPath();
+    const otherId = useEditorStore.getState().addEntity("path");
+    const other = () => useEditorStore.getState().entities.find((e) => e.id === otherId)!;
+    const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().updatePathStrokes([pathId, otherId, "directional-light-1"], { radius: 0.05 });
+
+    expect([path().stroke, other().stroke]).toEqual([
+      { radius: 0.05, caps: "round" },
+      { radius: 0.05, caps: "round" },
+    ]);
+    expect(useEditorStore.getState().entities.find((e) => e.id === "directional-light-1")!.stroke).toBeUndefined();
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
+
+    const before = useEditorStore.getState().entities;
+    useEditorStore.getState().updatePathStrokes(["directional-light-1"], { radius: 0.2 });
+    expect(useEditorStore.getState().entities).toBe(before);
+  });
+
   it("can't change a path's stroke or trim in a view-only tab", async () => {
     const { useEditorStore, pathId, path } = await storeWithPath();
     useEditorStore.getState().setReadOnly("openElsewhere");
 
-    useEditorStore.getState().updatePathStroke(pathId, { radius: 0.3 });
+    useEditorStore.getState().updatePathStrokes([pathId], { radius: 0.3 });
     useEditorStore.getState().updateShownTransforms({ [pathId]: { trimEnd: 0.5 } });
 
     expect(path()).toMatchObject({ stroke: { radius: 0.12 }, trimEnd: 1 });
@@ -775,6 +796,77 @@ describe("paths", () => {
     useEditorStore.getState().updatePath(pathId, { ...path().path!, closed: true });
 
     expect(useEditorStore.getState().entities).toBe(before);
+  });
+
+  describe("imported from an SVG", () => {
+    const corner = (position: [number, number, number]): PathPoint => ({ position, handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "corner" });
+    const imported = (x: number): ImportedPath => ({
+      position: [x, 0, 0],
+      path: { points: [corner([0, -1, 0]), corner([0, 1, 0])], closed: false },
+      stroke: { radius: 0.05, caps: "round" },
+      outline: false,
+    });
+    const storeWithLight = async () => {
+      const module = await loadStore();
+      module.useEditorStore.getState().loadScene({ entities: [light] });
+      return module;
+    };
+
+    it("adds a single path named after the file, selected, with its own copy of the points", async () => {
+      const { useEditorStore } = await storeWithLight();
+      const source = imported(1);
+
+      const id = useEditorStore.getState().addImportedPaths("hello", [source]);
+      const added = useEditorStore.getState().entities.find((e) => e.id === id)!;
+
+      expect(useEditorStore.getState().entities).toHaveLength(2);
+      expect(added).toMatchObject({ type: "path", name: "hello", position: [1, 0, 0], path: source.path, stroke: source.stroke, trimEnd: 1 });
+      expect(added.parentId ?? null).toBeNull();
+      expect(added.path!.points[0].position).not.toBe(source.path.points[0].position);
+      expect(added.stroke).not.toBe(source.stroke);
+      expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
+    });
+
+    it("puts several paths in a group named after the file, all in one undo step", async () => {
+      const { useEditorStore } = await storeWithLight();
+      const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
+
+      const groupId = useEditorStore.getState().addImportedPaths("hello", [imported(-1), imported(0), imported(1)]);
+      const entities = useEditorStore.getState().entities;
+      const children = entities.filter((e) => e.parentId === groupId);
+
+      expect(entities.find((e) => e.id === groupId)).toMatchObject({ type: "group", name: "hello", position: [0, 0, 0] });
+      expect(children.map((e) => [e.type, e.name, e.position[0]])).toEqual([
+        ["path", "Path 1", -1],
+        ["path", "Path 2", 0],
+        ["path", "Path 3", 1],
+      ]);
+      expect(useEditorStore.getState().selectedEntityIds).toEqual([groupId]);
+      expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
+
+      useEditorStore.temporal.getState().undo();
+      expect(useEditorStore.getState().entities.map((e) => e.id)).toEqual(["directional-light-1"]);
+    });
+
+    it("puts the pen down", async () => {
+      const { useEditorStore } = await storeWithLight();
+      useEditorStore.getState().setPenTool({ mode: "draw", pathId: null, selectedPoint: null });
+
+      useEditorStore.getState().addImportedPaths("hello", [imported(0)]);
+
+      expect(useEditorStore.getState().penTool).toBeNull();
+    });
+
+    it("adds nothing when there are no paths, or in a view-only tab", async () => {
+      const { useEditorStore } = await storeWithLight();
+      const before = useEditorStore.getState().entities;
+
+      expect(useEditorStore.getState().addImportedPaths("empty", [])).toBe("");
+      useEditorStore.getState().setReadOnly("openElsewhere");
+      useEditorStore.getState().addImportedPaths("hello", [imported(0), imported(1)]);
+
+      expect(useEditorStore.getState().entities).toBe(before);
+    });
   });
 
   it("keeps a path and its Hidden state through save and reload", async () => {
