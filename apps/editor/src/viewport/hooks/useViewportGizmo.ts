@@ -138,12 +138,18 @@ export function useViewportGizmo(
     // this hides its DOM element (used for hit-testing/hover) and stops it
     // answering clicks. Mirrors the `{!isPreviewMode && <ViewportOverlays />}` /
     // `{!isPreviewMode && <FloatingToolbar />}` pattern in EditorLayout.tsx.
+    //
+    // Orbiting in Play still updates the gizmo (the controls' "change"), and a hidden element
+    // measures 0×0, so its draw area shrank to nothing and stayed that way after Stop until the
+    // camera next moved. Measuring it again as it comes back fixes that (and catches up on the
+    // camera's orientation).
     const unsubscribePreview = useEditorStore.subscribe(
       (state) => state.isPreviewMode,
       (isPreviewMode) => {
         gizmo.enabled = !isPreviewMode;
         const el = container.querySelector<HTMLElement>(`.${GIZMO_CLASS_NAME}`);
         if (el) el.style.display = isPreviewMode ? "none" : "";
+        if (!isPreviewMode) gizmo.domUpdate().cameraUpdate();
       },
       { fireImmediately: true }
     );
