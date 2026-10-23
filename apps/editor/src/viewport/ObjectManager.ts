@@ -17,6 +17,8 @@ import { takeParsedModel } from "../utils/importModel";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
 import { forgetBasePose, rememberBasePose } from "../utils/exportScene";
 import type { Pose } from "../animation/objectStates";
+import { PathMesh } from "../paths/PathMesh";
+import { DEFAULT_STROKE, type PathData } from "../paths/pathGeometry";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 type LayeredMaterial =
@@ -48,6 +50,12 @@ function aimDirectionalLight(light: THREE.DirectionalLight): void {
   light.updateMatrixWorld();
   light.lookAt(0, 0, 0);
 }
+
+// A path entity without its path or stroke (a damaged file) draws nothing rather than failing. One
+// object each, so comparing them with the entity's tells PathMesh when to rebuild.
+const NO_PATH: PathData = { points: [], closed: false };
+const pathOf = (entity: Entity) => entity.path ?? NO_PATH;
+const strokeOf = (entity: Entity) => entity.stroke ?? DEFAULT_STROKE;
 
 export class ObjectManager {
   private scene: THREE.Scene;
@@ -383,10 +391,12 @@ export class ObjectManager {
   // free — it stays a tight, correctly oriented box even when the object is rotated,
   // matching Spline's selection indicator instead of a looser world-axis-aligned box.
   private createSelectionOutline(boundingBox: THREE.Box3, color = 0xffffff): THREE.LineSegments {
+    // An empty box (a path with nothing to draw) has a size of -Infinity; outline a point instead.
+    const box = boundingBox.isEmpty() ? new THREE.Box3(new THREE.Vector3(), new THREE.Vector3()) : boundingBox;
     const size = new THREE.Vector3();
-    boundingBox.getSize(size);
+    box.getSize(size);
     const center = new THREE.Vector3();
-    boundingBox.getCenter(center);
+    box.getCenter(center);
 
     const boxGeometry = new THREE.BoxGeometry(size.x, size.y, size.z);
     boxGeometry.translate(center.x, center.y, center.z);
@@ -462,6 +472,20 @@ export class ObjectManager {
       light.userData.helper = helper;
 
       return light;
+    } else if (entity.type === "path") {
+      // The tube and its caps (paths/PathMesh.ts). The outline is the whole path's box, also while
+      // it's trimmed: it doesn't jump while the trim is dragged, and it shows where a hidden path is.
+      const mesh = new PathMesh(pathOf(entity), strokeOf(entity), this.createMaterialFromLayers(entity.materialLayers));
+      mesh.position.set(...entity.position);
+      mesh.rotation.set(...entity.rotation);
+      mesh.scale.set(...entity.scale);
+      mesh.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
+
+      const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
+      mesh.add(outline);
+      mesh.userData.selectionOutline = outline;
+
+      return mesh;
     } else {
       const geometry = this.createGeometry(entity);
       geometry.computeBoundingBox();
@@ -629,9 +653,27 @@ export class ObjectManager {
     this.hydratingRootIds.delete(rootEntityId);
   }
 
+  // A path's tube is rebuilt when its path, radius or caps change (never for a trim). The selection
+  // outline is sized from the geometry's bounds when it's made, so it's made again too.
+  private rebuildPath(mesh: PathMesh, entity: Entity): void {
+    mesh.rebuild(pathOf(entity), strokeOf(entity));
+
+    const oldOutline = mesh.userData.selectionOutline as THREE.LineSegments | undefined;
+    const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
+    if (oldOutline) {
+      outline.visible = oldOutline.visible;
+      mesh.remove(oldOutline);
+      oldOutline.geometry.dispose();
+      (oldOutline.material as THREE.Material).dispose();
+    }
+    mesh.add(outline);
+    mesh.userData.selectionOutline = outline;
+  }
+
   public disposeSceneObject(obj: THREE.Object3D): void {
     if (obj instanceof THREE.Mesh) {
-      obj.geometry.dispose();
+      if (obj instanceof PathMesh) obj.disposeGeometry();
+      else obj.geometry.dispose();
       const material = obj.material;
       if (Array.isArray(material)) {
         material.forEach((entry) => entry.dispose());
@@ -691,10 +733,15 @@ export class ObjectManager {
     isBeingDragged: boolean,
     entities: Entity[] = useEditorStore.getState().entities,
   ): void {
+    if (obj instanceof PathMesh && (obj.path !== pathOf(entity) || obj.stroke !== strokeOf(entity))) {
+      this.rebuildPath(obj, entity);
+    }
+
     if (!isBeingDragged) {
       obj.position.set(...entity.position);
       obj.rotation.set(...entity.rotation);
       obj.scale.set(...entity.scale);
+      if (obj instanceof PathMesh) obj.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
       forgetBasePose(obj);
       // Re-aim after a move so the baked rotation keeps tracking the origin.
       // (A directional light's stored entity.rotation has never affected its
@@ -726,6 +773,7 @@ export class ObjectManager {
       if (!materialMatches) {
         const oldMaterial = obj.material as THREE.Material;
         obj.material = this.createMaterialFromLayers(entity.materialLayers);
+        if (obj instanceof PathMesh) obj.shareMaterialWithCaps();
         oldMaterial.dispose();
       } else {
         const material = obj.material as LayeredMaterial;
@@ -1044,10 +1092,11 @@ export class ObjectManager {
     }
   }
 
-  // Shows an object in a pose other than its own values (the state being viewed) without touching
-  // the store, so clicks, the outline, and the gizmo follow it. syncMeshes puts every object back in
-  // Base, so the caller applies the pose again after each sync (except in Play, which shows Base).
-  // Exports and thumbnails still see Base (showBasePoses).
+  // Shows an object in a pose other than its own values (the state being viewed, or where Play has
+  // moved it) without touching the store, so clicks, the outline, and the gizmo follow it. A path's
+  // pose includes its trim. syncMeshes puts every object back in Base, so the caller applies the
+  // pose again after each sync (except in Play, which shows Base). Exports and thumbnails still see
+  // Base (showBasePoses).
   public applyPose(entityId: string, pose: Pose): void {
     const obj = this.meshMap.get(entityId);
     if (!obj) return;
@@ -1057,6 +1106,9 @@ export class ObjectManager {
     obj.rotation.set(...pose.rotation);
     obj.scale.set(...pose.scale);
     if (obj instanceof THREE.DirectionalLight) aimDirectionalLight(obj);
+    if (obj instanceof PathMesh && (pose.trimStart !== undefined || pose.trimEnd !== undefined)) {
+      obj.setTrim(pose.trimStart ?? 0, pose.trimEnd ?? 1);
+    }
   }
 
   public getObject(id: string): THREE.Object3D | undefined {
