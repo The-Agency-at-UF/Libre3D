@@ -53,7 +53,27 @@ const makeContent = (): SceneContent => ({
     states: {
       up: { id: "up", targetId: "cube-1", name: "State", order: 0, values: { position: [1, 3, 3], rotation: [0, 1, 0] } },
     },
-    events: {},
+    events: {
+      grow: {
+        id: "grow",
+        ownerId: "cube-1",
+        trigger: "mouseDown",
+        order: 0,
+        actions: [
+          {
+            id: "action-1",
+            type: "transition",
+            targetId: "cube-1",
+            from: "current",
+            steps: [{ to: "up", duration: 0.3, easing: "easeOut" }],
+            delay: 0.5,
+            delayRepeat: "start",
+            loop: "infinite",
+            cycle: "pingPong",
+          },
+        ],
+      },
+    },
   },
   viewedStates: { "cube-1": "up" },
 });
@@ -91,6 +111,37 @@ describe("toSceneDocument / parseSceneDocument", () => {
     const parsed = parseSceneDocument({ format: SCENE_DOCUMENT_FORMAT, schemaVersion: 1, scene: v1Scene });
 
     expect(parsed).toEqual({ ok: true, content: { ...v1Scene, animation: undefined, viewedStates: undefined } });
+  });
+
+  it("reads damaged events into shape instead of passing them on", () => {
+    const content = makeContent();
+    const document = JSON.parse(JSON.stringify(toSceneDocument(content)));
+    document.scene.animation.events = {
+      grow: { ...document.scene.animation.events.grow, actions: [{ type: "sound" }, { id: "a", type: "transition", steps: [{}] }] },
+      junk: 42,
+      noTrigger: { id: "noTrigger", ownerId: "cube-1", actions: [] },
+    };
+
+    const parsed = parseSceneDocument(document);
+
+    expect(parsed.ok && parsed.content.animation?.events).toEqual({
+      grow: {
+        ...content.animation.events.grow,
+        actions: [
+          {
+            id: "a",
+            type: "transition",
+            targetId: "",
+            from: "",
+            steps: [{ to: "", duration: 0, easing: "easeInOut" }],
+            delay: 0,
+            delayRepeat: "none",
+            loop: 0,
+            cycle: "restart",
+          },
+        ],
+      },
+    });
   });
 
   it("saves only the shown states that still exist", () => {
