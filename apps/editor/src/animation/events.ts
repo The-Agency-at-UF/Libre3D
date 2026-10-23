@@ -113,6 +113,12 @@ export const transitionProblem = (
     : "state";
 };
 
+/** The events with a transition that goes through a state (deleting it leaves them a "Pick a state"). */
+export const getEventsUsingState = (events: Record<string, SceneEvent>, stateId: string): SceneEvent[] =>
+  Object.values(events).filter((event) =>
+    event.actions.some((action) => action.from === stateId || action.steps.some((step) => step.to === stateId)),
+  );
+
 /** A copy of a transition that shares nothing with it. */
 export const cloneTransition = (action: TransitionAction): TransitionAction => ({
   ...action,

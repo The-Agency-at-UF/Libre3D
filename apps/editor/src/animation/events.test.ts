@@ -3,6 +3,7 @@ import {
   createEvent,
   createTransition,
   duplicateEvents,
+  getEventsUsingState,
   getObjectEvents,
   normalizeEvents,
   removeEventsOf,
@@ -87,6 +88,19 @@ describe("transitionProblem", () => {
     expect(transitionProblem(transition({ steps: [{ to: "ballUp", duration: 1, easing: "linear" }] }), exists, states)).toBe("state");
     expect(transitionProblem(transition({ steps: [{ to: "current", duration: 1, easing: "linear" }] }), exists, states)).toBe("state");
     expect(transitionProblem(transition({ steps: [] }), exists, states)).toBe("state");
+  });
+});
+
+describe("getEventsUsingState", () => {
+  it("finds the events going through a state, in row 1 or a later row", () => {
+    const events = byId(
+      event("from", { actions: [transition({ from: "up", steps: [{ to: "base", duration: 1, easing: "linear" }] })] }),
+      event("to"),
+      event("other", { actions: [transition({ steps: [{ to: "big", duration: 1, easing: "linear" }] })] }),
+    );
+
+    expect(getEventsUsingState(events, "up").map((e) => e.id).sort()).toEqual(["from", "to"]);
+    expect(getEventsUsingState(events, "gone")).toEqual([]);
   });
 });
 
