@@ -20,6 +20,7 @@ export function ViewportOverlays() {
   const viewedStates = useEditorStore((state) => state.viewedStates);
   const objectStates = useEditorStore((state) => state.animation.states);
   const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
+  const penMode = useEditorStore((state) => state.penTool?.mode ?? null);
 
   // The selected objects shown in one of their states, where their edits go.
   const selectedInStates = selectedEntityIds
@@ -29,6 +30,8 @@ export function ViewportOverlays() {
 
   return (
     <div className="viewport-bottom-overlays">
+      {/* The pen's keys, since nothing else on screen says them. */}
+      {penMode === "draw" && <div className="viewport-state-badge">Pen: click for a corner, drag for a curve · Enter to finish</div>}
       {/* So nobody edits a state thinking it's Base, even with the States section scrolled away. */}
       {selectedInStates.length > 0 && (
         <div className="viewport-state-badge">

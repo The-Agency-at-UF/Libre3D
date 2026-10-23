@@ -116,8 +116,9 @@ export function useViewportRaycaster(
     };
 
     const onPointerDown = (event: PointerEvent) => {
-      // Play's clicks go to the scene's events instead (useViewportPlay).
-      if (useEditorStore.getState().isPreviewMode) return;
+      // Play's clicks go to the scene's events instead (useViewportPlay), and the pen's to the
+      // path it's drawing or editing (useViewportPenTool).
+      if (useEditorStore.getState().isPreviewMode || useEditorStore.getState().penTool) return;
       // Left button only — middle-drag pans and right-click shouldn't box-select or pick.
       if (event.button !== 0) return;
       pointerDownTime = Date.now();
@@ -142,7 +143,7 @@ export function useViewportRaycaster(
 
     const onPointerUp = (event: PointerEvent) => {
       // Only the left button drives box-select / click-pick (see onPointerDown).
-      if (event.button !== 0) return;
+      if (event.button !== 0 || useEditorStore.getState().penTool) return;
       renderer.domElement.removeEventListener("pointermove", onPointerMove);
 
       if (isDragSelecting) {
@@ -195,7 +196,8 @@ export function useViewportRaycaster(
     // tagged node), bypassing the click handler's bubble-to-root. A no-op on a
     // miss so an empty double-click doesn't clear the current selection.
     const onDoubleClick = (event: MouseEvent) => {
-      if (useEditorStore.getState().isPreviewMode) return;
+      const { isPreviewMode, penTool } = useEditorStore.getState();
+      if (isPreviewMode || penTool) return;
       if (transformControlsRef.current?.axis) return;
       const hitEntityId = pickEntityIdAt(event.clientX, event.clientY);
       if (hitEntityId) {

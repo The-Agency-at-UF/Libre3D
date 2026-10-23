@@ -12,6 +12,7 @@ import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
 import { useViewportGizmo } from "../viewport/hooks/useViewportGizmo";
 import { useViewportPlay } from "../viewport/hooks/useViewportPlay";
+import { useViewportPenTool } from "../viewport/hooks/useViewportPenTool";
 import { prepareModelImport } from "../utils/importModel";
 
 export function ViewportCanvas() {
@@ -26,6 +27,7 @@ export function ViewportCanvas() {
   const isPreviewMode   = useEditorStore((state) => state.isPreviewMode);
   const isPreviewingAction = useEditorStore((state) => state.previewingActionId !== null);
   const isReadOnly      = useEditorStore((state) => state.readOnlyReason !== null);
+  const isPenOn         = useEditorStore((state) => state.penTool !== null);
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
   const entities        = useEditorStore((state) => state.entities);
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
@@ -96,12 +98,17 @@ export function ViewportCanvas() {
   // Filled by useViewportPlay below, like gizmoRef: moves the objects Play's events are moving,
   // before each render.
   const playFrameRef = useRef<(() => void) | null>(null);
+  // Filled by useViewportPenTool: shows the path being drawn or edited, after Play's poses.
+  const penFrameRef = useRef<(() => void) | null>(null);
 
   const rendererRef = useViewportRenderer(
     containerRef,
     scene,
     cameraRef,
-    () => playFrameRef.current?.(),
+    () => {
+      playFrameRef.current?.();
+      penFrameRef.current?.();
+    },
     // Not in Play, which shows no editor furniture (the gizmo draws whether or not it's enabled).
     () => {
       if (!useEditorStore.getState().isPreviewMode) gizmoRef.current?.render();
@@ -127,6 +134,8 @@ export function ViewportCanvas() {
   );
 
   useViewportPlay(playFrameRef, cameraRef, rendererRef, objectManager);
+
+  useViewportPenTool(penFrameRef, cameraRef, rendererRef, scene, objectManager, orbitControlsRef, transformControlsRef);
 
   // -- Proxy Setup --
   useEffect(() => {
@@ -305,8 +314,9 @@ export function ViewportCanvas() {
     // stays draggable while invisible. View only: TransformControls moves the
     // object itself before the store (which drops the change) hears of it, so
     // there must be no gizmo to drag. A ▶ preview moves objects through poses
-    // that aren't theirs; a drag then would save one (useViewportPlay).
-    if (isPreviewMode || isPreviewingAction || isReadOnly || locked || selectedEntityIds.length === 0) {
+    // that aren't theirs; a drag then would save one (useViewportPlay). The pen
+    // clicks where the gizmo would be.
+    if (isPreviewMode || isPreviewingAction || isReadOnly || isPenOn || locked || selectedEntityIds.length === 0) {
       tc?.detach();
     } else if (selectedEntityIds.length === 1) {
       const selectedObj = objectManager.getObject(selectedEntityIds[0]);
@@ -359,7 +369,7 @@ export function ViewportCanvas() {
         }
       }
     });
-  }, [entities, selectedEntityIds, viewedStates, objectStates, objectManager, sceneManager, transformControlsRef, isPreviewMode, isPreviewingAction, isReadOnly]);
+  }, [entities, selectedEntityIds, viewedStates, objectStates, objectManager, sceneManager, transformControlsRef, isPreviewMode, isPreviewingAction, isReadOnly, isPenOn]);
 
   // -- Resize Logic --
   useEffect(() => {
