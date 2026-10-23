@@ -127,6 +127,17 @@ export interface Entity {
   trimEnd?: number;
 }
 
+/**
+ * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new paths ("draw") or editing one
+ * path's points ("edit"). `pathId` is the path being drawn (null while the pen is on between paths)
+ * or edited; `selectedPoint` is the edited path's picked point, an index into its points.
+ */
+export interface PenToolState {
+  mode: "draw" | "edit";
+  pathId: string | null;
+  selectedPoint: number | null;
+}
+
 export interface ImportNodeSpec {
   tempId: string;
   parentTempId: string | null;
@@ -338,9 +349,19 @@ export interface EditorState {
   renameEntities: (updates: Record<string, string>) => void;
   // A path's radius or cap style (not its trim, which states can set: see updateShownTransforms).
   updatePathStroke: (id: string, updates: Partial<PathStroke>) => void;
+  // A path the pen tool drew, its origin at `origin` and its points relative to it. Selected, like
+  // addEntity. Returns its ID.
+  addPath: (origin: [number, number, number], path: PathData) => string;
+  // Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
+  // the path, not to a state, so this changes them in every state.
+  updatePath: (id: string, path: PathData) => void;
 
   // Viewport / Projection
   activeTransformTool: "translate" | "rotate" | "scale";
+  // Drawing or editing paths (see PenToolState), or null. Not saved and not undoable; off in Play,
+  // during a ▶ preview, and while view only.
+  penTool: PenToolState | null;
+  setPenTool: (penTool: PenToolState | null) => void;
   projectionMode: "perspective" | "orthographic";
   transformSpace: "world" | "local";
 
@@ -502,7 +523,7 @@ const createEntity = (type: EntityType): Entity => ({
     : type === "group"
       ? null // groups are pure transform pivots — no material, no color
       : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
-  // Until the pen tool (B2) draws paths, a new one is a sample curve.
+  // The Add menu's path is a sample curve; the pen tool draws its own (addPath).
   ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
   visible: true,
   locked: false,
@@ -1163,10 +1184,31 @@ export const useEditorStore = create<EditorState>()(
               if (!(stroke.radius > 0)) return state; // a radius of 0 (or NaN) draws nothing
               return { entities: state.entities.map((entity) => (entity === path ? { ...entity, stroke } : entity)) };
             }),
+          addPath: (origin, path) => {
+            let newId = "";
+            set((state) => {
+              const entity: Entity = { ...createEntity("path"), position: cloneVector(origin), path: clonePath(path) };
+              newId = entity.id;
+              return { entities: [...state.entities, entity], selectedEntityIds: [entity.id] };
+            });
+            return newId;
+          },
+          updatePath: (id, path) =>
+            set((state) => {
+              const target = state.entities.find((entity) => entity.id === id);
+              if (target?.type !== "path") return state;
+              return { entities: state.entities.map((entity) => (entity === target ? { ...entity, path: clonePath(path) } : entity)) };
+            }),
           // Viewport / Projection
           activeTransformTool: "translate",
           projectionMode: "perspective",
           transformSpace: "world",
+          penTool: null,
+          // Playing and view only are for looking, so the pen doesn't turn on then.
+          setPenTool: (penTool) =>
+            set((state) =>
+              penTool && (state.readOnlyReason || state.isPreviewMode || state.previewingActionId) ? state : { penTool },
+            ),
 
           sceneSettings: initialSceneDefaults,
           postProcessing: initialPostProcessingDefaults,
@@ -1178,14 +1220,14 @@ export const useEditorStore = create<EditorState>()(
 
           // Play Mode / Preview
           isPreviewMode: false,
-          // Play takes over from a ▶ preview, which doesn't come back after Stop.
-          setPreviewMode: (active) => set({ isPreviewMode: active, previewingActionId: null }),
+          // Play takes over from a ▶ preview, which doesn't come back after Stop. Both end the pen.
+          setPreviewMode: (active) => set({ isPreviewMode: active, previewingActionId: null, ...(active ? { penTool: null } : null) }),
           previewingActionId: null,
-          setPreviewingAction: (actionId) => set({ previewingActionId: actionId }),
+          setPreviewingAction: (actionId) => set({ previewingActionId: actionId, ...(actionId ? { penTool: null } : null) }),
 
           readOnlyReason: null,
           setReadOnly: (reason) => {
-            api.setState({ readOnlyReason: reason });
+            api.setState({ readOnlyReason: reason, ...(reason ? { penTool: null } : null) });
 
             if (reason) {
               // There's nothing to undo into: the scene can't change here, and it's reloaded from
@@ -1405,6 +1447,7 @@ export const useEditorStore = create<EditorState>()(
               selectedEntityIds: [],
               isPreviewMode: false,
               previewingActionId: null,
+              penTool: null,
             });
 
             // The editor no longer reloads the page between scenes, so history would otherwise
