@@ -55,16 +55,21 @@ frame: FrameSettingsConfig
 Three nested config objects. **These are updated via deep merge, not replacement** — see [Deep Merge Pattern](#deep-merge-pattern).
 
 ```typescript
-animation: SceneAnimation   // { states: Record<string, ObjectState>, events: Record<string, unknown> }
+animation: SceneAnimation   // { states: Record<string, ObjectState>, events: Record<string, SceneEvent> }
 viewedStates: Record<string, string>   // entity ID → the state it's shown in while editing
 ```
-Object states, and the state each object is shown in; both saved with the scene. See [Object States](#object-states).
+Object states and events, and the state each object is shown in; all saved with the scene. See [Object States](#object-states) and [Events](#events).
 
 ### Preview & Play Mode
 ```typescript
 isPreviewMode: boolean
 ```
-Play mode state. Set via `setPreviewMode(active)`. Not persisted (session-scoped). Play draws in the editor viewport: every object in its Base State, without the `editorOnly` objects, and editing hotkeys are off.
+Play mode state. Set via `setPreviewMode(active)`. Not persisted (session-scoped). Play draws in the editor viewport: every object starts in its Base State, without the `editorOnly` objects, events run (`useViewportPlay`), and editing hotkeys are off.
+
+```typescript
+previewingActionId: string | null
+```
+The transition the Edit Event panel's ▶ is playing in the editor viewport (an action ID), or `null`. Set via `setPreviewingAction`. Not saved, not undoable, and allowed while read-only (it's looking). Play and `loadScene` clear it.
 
 ```typescript
 pendingImportCount: number
@@ -223,8 +228,11 @@ Update canvas frame size/preset.
 
 #### `setPreviewMode(active: boolean) → void`
 Enter/exit play mode.
-- **active=true**: Switch to play mode (nothing is exported; the viewport keeps rendering)
+- **active=true**: Switch to play mode (nothing is exported; the viewport keeps rendering and runs the events). Stops a ▶ preview.
 - **active=false**: Exit play mode, return to editing (objects go back to the states picked for them)
+
+#### `setPreviewingAction(actionId: string | null) → void`
+Play one transition in the editor viewport (the Edit Event panel's ▶), or stop it (`null`). `useViewportPlay` sets it back to `null` when the preview has played through, or when an edit or another selection interrupts it.
 
 #### `adjustPendingImports(delta: number) → void`
 Increment/decrement pending import counter (file picked but not parsed).
@@ -412,6 +420,47 @@ Show an object in one of its states (`null` = Base). It stays that way when the 
 
 #### `selectViewedObjectState(state, entityId) → ObjectState | null`
 Not an action: the state an object is shown in, or `null` for Base. Read it through this rather than `viewedStates`: an entry whose state was deleted (or undone) means Base, and shows that state again if an undo brings it back. Saving drops such entries.
+
+---
+
+## Events
+
+The second part of state-based animation. An event is a trigger on an object (its owner: `start` when Play begins, `mouseDown` when the owner or one of its descendants is clicked in Play) and the transitions it runs. Events live in `animation.events`, keyed by ID. A transition's actions and steps are small ordered lists inside the event, always replaced whole. The logic is in `animation/events.ts`, `animation/transitions.ts`, and `animation/sceneRuntime.ts` (what Play runs), none of which depend on the store, React, or the DOM.
+
+```typescript
+interface SceneEvent {
+  id: string;
+  ownerId: string;                  // entity ID
+  trigger: "start" | "mouseDown";
+  order: number;                    // position in the object's Events list
+  actions: TransitionAction[];
+}
+
+interface TransitionAction {
+  id: string;
+  type: "transition";
+  targetId: string;                 // the object it moves
+  from: "base" | "current" | string; // row 1: Base, wherever the target is, or a state ID
+  steps: { to: "base" | string; duration: number; easing: "linear" | "ease" | "easeIn" | "easeOut" | "easeInOut" }[];
+  delay: number;                    // seconds
+  delayRepeat: "none" | "start" | "end" | "startEnd"; // which repeats wait for the delay too
+  loop: number | "infinite";        // runs after the first; 0 = play once
+  cycle: "restart" | "pingPong";
+}
+```
+
+A row naming no state of the target (a deleted state, another object's, or `""` for none picked) or a missing target makes Play skip that transition, and the inspector says "Pick a state" / "Pick a target".
+
+#### `addEvent(ownerId: string, trigger: "start" | "mouseDown") → string`
+Add an event to an object, last in its list, with one transition of the object from Base to its first state (none picked yet if it has none), 1 s, Ease In Out. Returns its ID (`""` if the object isn't there).
+
+#### `updateEvent(eventId: string, updates: { trigger?, actions? }) → void`
+Change an event's trigger, or replace its actions (copied in). One undo step.
+
+#### `removeEvent(eventId: string) → void`
+Delete an event.
+
+`removeEntity` and `ungroupEntity` also drop the removed objects' events and the actions (on any object's events) that move them, in the same undo step; `duplicateEntity` gives the copies copies of their originals' events, moving the copy through its own states.
 
 ---
 
@@ -609,14 +658,14 @@ useEditorStore.subscribe(
 **Saved with the scene (cloud, per scene, via autosave)**:
 - entities, activeProfileId, cameraProfiles
 - sceneSettings, postProcessing, frame
-- animation (object states; events later), viewedStates
+- animation (object states and events), viewedStates
 
 **Persisted (localStorage, `persist` v17)** — editor preferences:
 - activeTransformTool, projectionMode, transformSpace
 - hudOverlay, viewportZoom
 
 **NOT saved** (while the editor is open only):
-- selectedEntityIds, isPreviewMode
+- selectedEntityIds, isPreviewMode, previewingActionId
 - pendingImportCount, readOnlyReason, undo history
 
 ---
