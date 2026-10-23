@@ -12,12 +12,12 @@ import {
   nextStateName,
   pruneViewedStates,
   removeStatesOf,
-  reparentStates,
   resolveState,
   unwrapRotation,
   type ObjectState,
   type Pose,
 } from "./objectStates";
+import { reparentStates } from "./reparentStates";
 
 const DEG = Math.PI / 180;
 
