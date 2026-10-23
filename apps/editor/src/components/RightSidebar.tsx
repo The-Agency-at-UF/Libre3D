@@ -5,6 +5,7 @@ import { StatesPanel } from "./inspector/StatesPanel";
 import { EventsPanel } from "./inspector/EventsPanel";
 import { EditEventPanel } from "./inspector/EditEventPanel";
 import { TransformPanel } from "./inspector/TransformPanel";
+import { PathPanel } from "./inspector/PathPanel";
 import { MaterialsPanel } from "./inspector/MaterialsPanel";
 import { ScenePanel } from "./inspector/ScenePanel";
 import { CameraPanel } from "./inspector/CameraPanel";
@@ -75,6 +76,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
             {selectedEntities.length === 1 && <EventsPanel entity={selectedEntities[0]} onEditEvent={setEditingEventId} />}
             <fieldset className="inspector-fieldset" disabled={isReadOnly}>
               <TransformPanel selectedEntities={selectedEntities} />
+              {selectedEntities.length === 1 && selectedEntities[0].type === "path" && <PathPanel entity={selectedEntities[0]} />}
               <MaterialsPanel selectedEntities={selectedEntities} />
             </fieldset>
           </>

@@ -2633,6 +2633,22 @@ input[type="range"]::-moz-range-thumb {
   cursor: not-allowed;
 }
 
+/* ── PATH PANEL (PathPanel) ── */
+.path-field {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.path-field-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 /* ── TONE MAP BADGE ── */
 .badge {
   font-size: 9.5px;
