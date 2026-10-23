@@ -72,6 +72,47 @@ export const createEvent = (
   };
 };
 
+/**
+ * Whether row `index` of a transition names something it can go to: Base, a state of its target,
+ * or (row 1 only) wherever the target is.
+ */
+export const isRowValid = (
+  ref: StateRef | "current",
+  index: number,
+  targetId: string,
+  states: Record<string, ObjectState>,
+): boolean => ref === "base" || (index === 0 && ref === "current") || states[ref]?.targetId === targetId;
+
+/** A row's state by name, as the inspector shows it ("Pick a state" when it names none of the target's). */
+export const stateRefLabel = (
+  ref: StateRef | "current",
+  targetId: string,
+  states: Record<string, ObjectState>,
+): string =>
+  ref === "base"
+    ? "Base State"
+    : ref === "current"
+      ? "Current"
+      : states[ref]?.targetId === targetId
+        ? states[ref].name
+        : "Pick a state";
+
+/**
+ * What keeps a transition from running in Play (the runtime skips it): its target is gone, or a
+ * row names no state of it (a deleted state, another object's, or none picked yet). Null if none.
+ */
+export const transitionProblem = (
+  action: TransitionAction,
+  entityExists: (id: string) => boolean,
+  states: Record<string, ObjectState>,
+): "target" | "state" | null => {
+  if (!entityExists(action.targetId)) return "target";
+  const rows = [action.from, ...action.steps.map((step) => step.to)];
+  return action.steps.length > 0 && rows.every((ref, index) => isRowValid(ref, index, action.targetId, states))
+    ? null
+    : "state";
+};
+
 /** A copy of a transition that shares nothing with it. */
 export const cloneTransition = (action: TransitionAction): TransitionAction => ({
   ...action,

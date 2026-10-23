@@ -6,6 +6,7 @@ import {
   getObjectEvents,
   normalizeEvents,
   removeEventsOf,
+  transitionProblem,
   type SceneEvent,
 } from "./events";
 import type { ObjectState } from "./objectStates";
@@ -68,6 +69,24 @@ describe("creating events", () => {
 
     expect(a.id).not.toBe(b.id);
     expect(a.actions[0].id).not.toBe(b.actions[0].id);
+  });
+});
+
+describe("transitionProblem", () => {
+  const states = byId(state("up", "cube"), state("ballUp", "ball"));
+  const exists = (id: string) => id === "cube" || id === "ball";
+
+  it("finds nothing wrong with Base, Current in row 1, and the target's own states", () => {
+    expect(transitionProblem(transition(), exists, states)).toBeNull();
+    expect(transitionProblem(transition({ from: "current" }), exists, states)).toBeNull();
+  });
+
+  it("finds a missing target first, then a row with no state of the target", () => {
+    expect(transitionProblem(transition({ targetId: "gone" }), exists, states)).toBe("target");
+    expect(transitionProblem(transition({ from: "" }), exists, states)).toBe("state");
+    expect(transitionProblem(transition({ steps: [{ to: "ballUp", duration: 1, easing: "linear" }] }), exists, states)).toBe("state");
+    expect(transitionProblem(transition({ steps: [{ to: "current", duration: 1, easing: "linear" }] }), exists, states)).toBe("state");
+    expect(transitionProblem(transition({ steps: [] }), exists, states)).toBe("state");
   });
 });
 

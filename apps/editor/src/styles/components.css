@@ -2471,6 +2471,130 @@ input[type="range"]::-moz-range-thumb {
   color: var(--text-tertiary);
 }
 
+/* ── EVENTS (EventsPanel's list reuses the state rows above) ── */
+.event-row-icon {
+  margin-right: 6px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.event-row-warning {
+  flex-shrink: 0;
+  margin: 0 2px;
+  font-size: 12px;
+  color: var(--amber);
+}
+
+.event-add-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* ── EDIT EVENT PANEL (EditEventPanel, in place of the inspector's panels) ── */
+.event-editor {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.event-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.event-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 16px;
+}
+
+.event-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 20px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.event-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.event-action .mat-layer-body {
+  gap: 6px;
+}
+
+.event-prop-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.transition-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.transition-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.transition-row-number {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.transition-row-spacer {
+  width: 20px;
+  flex-shrink: 0;
+}
+
+/* The duration and easing between two rows, on the dotted line joining their numbers. */
+.transition-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 6px 28px 6px 17px;
+  border-left: 1px dashed var(--border-strong);
+}
+
+.transition-step-unit {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+}
+
+.event-problem {
+  color: var(--amber);
+}
+
 .state-value-marker {
   width: 6px;
   height: 6px;
