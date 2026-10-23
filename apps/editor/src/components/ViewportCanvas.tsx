@@ -401,9 +401,10 @@ export function ViewportCanvas() {
       const rightSidebar   = document.querySelector<HTMLElement>(".right-sidebar");
       const floatingToolbar = document.querySelector<HTMLElement>(".floating-toolbar");
 
-      const leftInset  = leftSidebar    ? Math.max(0, leftSidebar.getBoundingClientRect().right    - viewportRect.left)  : 280;
-      const rightInset = rightSidebar   ? Math.max(0, viewportRect.right - rightSidebar.getBoundingClientRect().left)    : 320;
-      const topInset   = floatingToolbar ? Math.max(0, floatingToolbar.getBoundingClientRect().bottom - viewportRect.top) : 0;
+      // Play hides the sidebars and the toolbar, so the frame gets the whole viewport.
+      const leftInset  = isPreviewMode ? 0 : leftSidebar    ? Math.max(0, leftSidebar.getBoundingClientRect().right    - viewportRect.left)  : 280;
+      const rightInset = isPreviewMode ? 0 : rightSidebar   ? Math.max(0, viewportRect.right - rightSidebar.getBoundingClientRect().left)    : 320;
+      const topInset   = isPreviewMode ? 0 : floatingToolbar ? Math.max(0, floatingToolbar.getBoundingClientRect().bottom - viewportRect.top) : 0;
 
       const availableWidth  = Math.max(1, viewportRect.width  - leftInset - rightInset);
       const availableHeight = Math.max(1, viewportRect.height - topInset);
@@ -415,7 +416,7 @@ export function ViewportCanvas() {
     const observer = new ResizeObserver(updateScale);
     observer.observe(viewportHost);
     return () => observer.disconnect();
-  }, [frame.mode, frame.width, frame.height]);
+  }, [frame.mode, frame.width, frame.height, isPreviewMode]);
 
 
   // -- Viewport centering events --
