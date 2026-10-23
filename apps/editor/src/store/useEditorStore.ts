@@ -36,6 +36,7 @@ import {
 } from "../animation/events";
 import type { TransitionAction } from "../animation/transitions";
 import { clonePath, createSamplePath, DEFAULT_STROKE, type PathData, type PathStroke } from "../paths/pathGeometry";
+import type { ImportedPath } from "../paths/svgImport";
 
 export type EntityType = "cube" | "sphere" | "torus" | "path" | "directionalLight" | "importedModel" | "group";
 
@@ -355,6 +356,10 @@ export interface EditorState {
   // Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
   // the path, not to a state, so this changes them in every state.
   updatePath: (id: string, path: PathData) => void;
+  // The paths of an imported SVG (paths/svgImport.ts), in one undo step: one path named `name`, or
+  // several ("Path 1", "Path 2", …) in a group named `name`. Selects it and puts the pen down.
+  // Returns its ID ("" when there's nothing to add).
+  addImportedPaths: (name: string, paths: ImportedPath[]) => string;
 
   // Viewport / Projection
   activeTransformTool: "translate" | "rotate" | "scale";
@@ -1199,6 +1204,29 @@ export const useEditorStore = create<EditorState>()(
               if (target?.type !== "path") return state;
               return { entities: state.entities.map((entity) => (entity === target ? { ...entity, path: clonePath(path) } : entity)) };
             }),
+          addImportedPaths: (name, paths) => {
+            let rootId = "";
+            set((state) => {
+              if (paths.length === 0) return state;
+              const toEntity = (imported: ImportedPath, entityName: string, parentId?: string): Entity => ({
+                ...createEntity("path"),
+                name: entityName,
+                position: cloneVector(imported.position),
+                path: clonePath(imported.path),
+                stroke: { ...imported.stroke },
+                ...(parentId ? { parentId } : null),
+              });
+
+              // The group sits at the drawing's centre (the import's origin), so it turns the word about its middle.
+              const group = paths.length > 1 ? { ...createEntity("group"), name } : null;
+              const added = group
+                ? [group, ...paths.map((imported, i) => toEntity(imported, `Path ${i + 1}`, group.id))]
+                : [toEntity(paths[0], name)];
+              rootId = added[0].id;
+              return { entities: [...state.entities, ...added], selectedEntityIds: [rootId], penTool: null };
+            });
+            return rootId;
+          },
           // Viewport / Projection
           activeTransformTool: "translate",
           projectionMode: "perspective",

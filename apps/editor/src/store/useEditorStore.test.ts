@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
 import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
 import type { PathData, PathPoint } from "../paths/pathGeometry";
+import type { ImportedPath } from "../paths/svgImport";
 import type { Entity } from "./useEditorStore";
 
 const EDITOR_KEY = "libre3d-scene-state";
@@ -775,6 +776,77 @@ describe("paths", () => {
     useEditorStore.getState().updatePath(pathId, { ...path().path!, closed: true });
 
     expect(useEditorStore.getState().entities).toBe(before);
+  });
+
+  describe("imported from an SVG", () => {
+    const corner = (position: [number, number, number]): PathPoint => ({ position, handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "corner" });
+    const imported = (x: number): ImportedPath => ({
+      position: [x, 0, 0],
+      path: { points: [corner([0, -1, 0]), corner([0, 1, 0])], closed: false },
+      stroke: { radius: 0.05, caps: "round" },
+      outline: false,
+    });
+    const storeWithLight = async () => {
+      const module = await loadStore();
+      module.useEditorStore.getState().loadScene({ entities: [light] });
+      return module;
+    };
+
+    it("adds a single path named after the file, selected, with its own copy of the points", async () => {
+      const { useEditorStore } = await storeWithLight();
+      const source = imported(1);
+
+      const id = useEditorStore.getState().addImportedPaths("hello", [source]);
+      const added = useEditorStore.getState().entities.find((e) => e.id === id)!;
+
+      expect(useEditorStore.getState().entities).toHaveLength(2);
+      expect(added).toMatchObject({ type: "path", name: "hello", position: [1, 0, 0], path: source.path, stroke: source.stroke, trimEnd: 1 });
+      expect(added.parentId ?? null).toBeNull();
+      expect(added.path!.points[0].position).not.toBe(source.path.points[0].position);
+      expect(added.stroke).not.toBe(source.stroke);
+      expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
+    });
+
+    it("puts several paths in a group named after the file, all in one undo step", async () => {
+      const { useEditorStore } = await storeWithLight();
+      const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
+
+      const groupId = useEditorStore.getState().addImportedPaths("hello", [imported(-1), imported(0), imported(1)]);
+      const entities = useEditorStore.getState().entities;
+      const children = entities.filter((e) => e.parentId === groupId);
+
+      expect(entities.find((e) => e.id === groupId)).toMatchObject({ type: "group", name: "hello", position: [0, 0, 0] });
+      expect(children.map((e) => [e.type, e.name, e.position[0]])).toEqual([
+        ["path", "Path 1", -1],
+        ["path", "Path 2", 0],
+        ["path", "Path 3", 1],
+      ]);
+      expect(useEditorStore.getState().selectedEntityIds).toEqual([groupId]);
+      expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
+
+      useEditorStore.temporal.getState().undo();
+      expect(useEditorStore.getState().entities.map((e) => e.id)).toEqual(["directional-light-1"]);
+    });
+
+    it("puts the pen down", async () => {
+      const { useEditorStore } = await storeWithLight();
+      useEditorStore.getState().setPenTool({ mode: "draw", pathId: null, selectedPoint: null });
+
+      useEditorStore.getState().addImportedPaths("hello", [imported(0)]);
+
+      expect(useEditorStore.getState().penTool).toBeNull();
+    });
+
+    it("adds nothing when there are no paths, or in a view-only tab", async () => {
+      const { useEditorStore } = await storeWithLight();
+      const before = useEditorStore.getState().entities;
+
+      expect(useEditorStore.getState().addImportedPaths("empty", [])).toBe("");
+      useEditorStore.getState().setReadOnly("openElsewhere");
+      useEditorStore.getState().addImportedPaths("hello", [imported(0), imported(1)]);
+
+      expect(useEditorStore.getState().entities).toBe(before);
+    });
   });
 
   it("keeps a path and its Hidden state through save and reload", async () => {
