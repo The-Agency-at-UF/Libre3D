@@ -113,7 +113,9 @@ export function editPath(pathId: string): boolean {
  * plane through it facing the path's own axis nearest the view, so it keeps its depth); Alt-drag a
  * handle to move it alone. Click the curve to add a point there, double-click a point to switch it
  * between smooth and corner, Delete to remove it. The picked point gets the transform gizmo (moving
- * only), which is how a point moves in depth. Enter or Escape ends editing. The points belong to
+ * only), which is how a point moves in depth. Enter or Escape ends editing, and so does a click away
+ * from the object, which then selects or box-selects as usual (a click on the object itself only
+ * drops the picked point). The points belong to
  * the path, not to a state, and are placed from the path as it's shown, so editing works in any state.
  * A shape is edited the same way, one closed outline at a time (`contour`): its other outlines show
  * their points and curves, and picking one of those edits that outline. A shape stays flat (Z = 0).
@@ -431,9 +433,17 @@ export function useViewportPenTool(
         return true;
       }
 
-      // Empty space: no point picked. Still the pen's press, so it doesn't box-select.
-      store().setPenTool({ ...pen, selectedPoint: null });
-      return true;
+      // On the object itself (a shape's fill, away from its outlines): still editing, no point picked.
+      const shown = objectManager.getObject(id);
+      rayAt(event.clientX, event.clientY); // aims `raycaster` at the press
+      if (shown && raycaster.intersectObject(shown, true).length > 0) {
+        store().setPenTool({ ...pen, selectedPoint: null });
+        return true;
+      }
+      // Anywhere else ends editing, and the press goes on as an ordinary one: it selects what's
+      // there, clears the selection, or starts a box select.
+      store().setPenTool(null);
+      return false;
     };
 
     // Double-clicking a point switches it between smooth and corner.

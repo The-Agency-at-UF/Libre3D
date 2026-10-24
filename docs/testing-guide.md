@@ -353,7 +353,7 @@ After making ANY change, run these tests to ensure you didn't break existing fea
 - [ ] Double-click the path (or Enter with it selected) shows its points; dragging a point or a handle moves it across the view; a smooth point's other handle turns with it; Alt-drag on a handle moves it alone (the point becomes a corner)
 - [ ] Double-clicking a point switches it between smooth and corner; clicking the curve adds a point there without changing its shape; Delete removes the picked point
 - [ ] The picked point gets the move gizmo; orbit and drag its Z arrow to pull it forward, or type its Z in the Path panel's Point row
-- [ ] Each of those is one Ctrl+Z, and Ctrl+Shift+Z steps forward again; Enter or Escape ends editing and the path's gizmo comes back
+- [ ] Each of those is one Ctrl+Z, and Ctrl+Shift+Z steps forward again; Enter or Escape ends editing and the path's gizmo comes back; so does clicking away from the path (which then selects what was clicked, or clears the selection), while clicking the path itself only drops the picked point
 - [ ] With the path shown in a moved state, its points show on the moved path; editing them changes Base too
 - [ ] Play and a view-only tab turn the pen off; the Pen button is disabled in view only
 
