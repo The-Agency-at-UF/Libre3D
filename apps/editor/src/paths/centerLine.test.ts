@@ -142,6 +142,20 @@ describe("maskCenterLines", () => {
     });
   });
 
+  it("continues a stroke into a loop it runs into, rather than closing the loop on itself", () => {
+    // A tail along y = 0 into a circle that leaves and comes back to (0, 0) heading +x.
+    const tail: P[] = [
+      [-2, 0],
+      [0, 0],
+    ];
+    const loop = sampled(120, (t) => [Math.sin(2 * Math.PI * t), 1 - Math.cos(2 * Math.PI * t)]);
+    const paths = maskCenterLines(strokeMask([tail, loop]), HALF_WIDTH);
+
+    expect(paths).toHaveLength(1);
+    expect(paths[0].closed).toBe(false);
+    expect(Math.max(...along(paths[0]).map((p) => p.y))).toBeCloseTo(2, 1);
+  });
+
   it("ends a stroke that ends on another, and keeps the other one whole", () => {
     const paths = maskCenterLines(
       strokeMask([

@@ -47,6 +47,7 @@ const MERGE_LENGTH = 2.5; // half-widths: junctions this close are one crossing
 const DIRECTION_FROM = 1.5; // half-widths from a junction where a branch's direction is measured…
 const DIRECTION_TO = 5; // …to here, past where the thinning bends into the junction
 const PAIR_DOT = -0.35; // branches pair only when they leave a junction this nearly opposite (about 110°)
+const SELF_LOOP_PENALTY = 0.6; // added to a loop's own two ends' pairing, so a branch that continues it wins
 const JUNCTION_GAP = 2; // half-widths of skeleton dropped either side of a crossing (the node stays)
 const SMOOTHING_PASSES = 4;
 const FIT_TOLERANCE = 0.12; // half-widths a fitted curve may stray from the stroke
@@ -454,7 +455,10 @@ const pairEnds = (graph: Graph, halfWidth: number): Map<number, End> => {
       for (let j = i + 1; j < ends.length; j += 1) {
         const [p, q] = [ends[i].direction, ends[j].direction];
         const norm = Math.hypot(p.x, p.y) * Math.hypot(q.x, q.y) || 1;
-        candidates.push([(p.x * q.x + p.y * q.y) / norm, i, j]);
+        // A loop pairing its own two ends closes on itself; joining one of them to another branch
+        // instead makes one stroke of the two (an "o" with its exit stroke), so that wins when it can.
+        const selfLoop = ends[i].edge === ends[j].edge ? SELF_LOOP_PENALTY : 0;
+        candidates.push([(p.x * q.x + p.y * q.y) / norm + selfLoop, i, j]);
       }
     }
     candidates.sort((p, q) => p[0] - q[0]);
