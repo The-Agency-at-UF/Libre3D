@@ -19,7 +19,7 @@ const POINT_MODE_OPTIONS: { label: string; value: PathPoint["mode"] }[] = [
 ];
 
 // A label (with room for a state marker) over its control, like the Transform panel's fields.
-function PathField({ label, extra, children }: { label: string; extra?: ReactNode; children: ReactNode }) {
+export function PathField({ label, extra, children }: { label: string; extra?: ReactNode; children: ReactNode }) {
   return (
     <div className="path-field">
       <div className="path-field-header">
@@ -43,7 +43,7 @@ interface RangeRowProps {
 }
 
 // A slider with its value beside it. `--value-percent` fills the track up to the thumb.
-function RangeRow({ label, min, max, step, value, mixed = false, format, onChange }: RangeRowProps) {
+export function RangeRow({ label, min, max, step, value, mixed = false, format, onChange }: RangeRowProps) {
   const percent = Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100));
   return (
     <div className="slider-row">

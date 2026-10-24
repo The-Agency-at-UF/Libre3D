@@ -4,6 +4,7 @@ import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
 import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
 import type { PathData, PathPoint } from "../paths/pathGeometry";
 import type { ImportedPath, ImportedSvgItem } from "../paths/svgImport";
+import type { ShapeData } from "../paths/shapeGeometry";
 import type { Entity } from "./useEditorStore";
 
 const EDITOR_KEY = "libre3d-scene-state";
@@ -903,6 +904,120 @@ describe("paths", () => {
 
     expect(useEditorStore.getState().entities).toEqual(content.entities);
     expect(useEditorStore.getState().animation.states[hiddenId].values).toEqual({ trimEnd: 0 });
+  });
+});
+
+describe("shapes", () => {
+  const corner = (x: number, y: number): PathPoint => ({ position: [x, y, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "corner" });
+  const rectangle = (x0: number, y0: number, x1: number, y1: number): PathData => ({
+    points: [corner(x0, y0), corner(x1, y0), corner(x1, y1), corner(x0, y1)],
+    closed: true,
+  });
+  // A bar 4 long and 0.4 thick, and two bars apart: one stroke, and two.
+  const bar: ShapeData = { regions: [{ outline: rectangle(-2, -0.2, 2, 0.2), holes: [] }] };
+  const twoBars: ShapeData = {
+    regions: [
+      { outline: rectangle(-3, -0.1, -1, 0.1), holes: [] },
+      { outline: rectangle(1, -0.1, 3, 0.1), holes: [] },
+    ],
+  };
+  const group = entity("group-1", { type: "group", name: "hello" });
+  const shape = (id: string, data: ShapeData, overrides: Partial<Entity> = {}) =>
+    entity(id, {
+      type: "shape",
+      name: id,
+      parentId: "group-1",
+      position: [1, 2, 0],
+      shape: data,
+      extrusion: 0.2,
+      materialLayers: [{ id: `${id}-color`, type: "color", enabled: true, opacity: 1, color: "#123456" }],
+      ...overrides,
+    });
+  const storeWithShapes = async () => {
+    const module = await loadStore();
+    module.useEditorStore.getState().loadScene({ entities: [light, group, shape("bar", bar), shape("two", twoBars), entity("cube-1")] });
+    return module;
+  };
+
+  it("turns a shape into a path along its middle in place, keeping its ID, place and material", async () => {
+    const { useEditorStore } = await storeWithShapes();
+    const stateId = useEditorStore.getState().addState("bar");
+
+    expect(useEditorStore.getState().convertShapesToPaths(["bar"])).toBe(1);
+    const converted = useEditorStore.getState().entities.find((e) => e.id === "bar")!;
+
+    expect(converted).toMatchObject({ type: "path", name: "bar", parentId: "group-1", position: [1, 2, 0], trimStart: 0, trimEnd: 1 });
+    expect(converted.stroke!.radius).toBeCloseTo(0.2, 2);
+    expect(converted.stroke!.caps).toBe("round");
+    expect(converted.materialLayers![0]).toMatchObject({ color: "#123456" });
+    expect(converted.shape).toBeUndefined();
+    expect(converted.extrusion).toBeUndefined();
+    converted.path!.points.forEach(({ position }) => expect(Math.abs(position[1])).toBeLessThan(0.02));
+    // Its states stay with it.
+    expect(useEditorStore.getState().animation.states[stateId].targetId).toBe("bar");
+  });
+
+  it("converts the shapes in a selected group, adding a shape's other strokes next to it, in one undo step", async () => {
+    const { useEditorStore } = await storeWithShapes();
+    const before = useEditorStore.getState().entities;
+    const steps = useEditorStore.temporal.getState().pastStates.length;
+
+    expect(useEditorStore.getState().convertShapesToPaths(["group-1"])).toBe(2);
+    const entities = useEditorStore.getState().entities;
+
+    expect(entities.map((e) => [e.type, e.name])).toEqual([
+      ["directionalLight", "Directional Light"],
+      ["group", "hello"],
+      ["path", "bar"],
+      ["path", "two"],
+      ["path", "two (2)"],
+      ["cube", "Cube"],
+    ]);
+    const [first, second] = entities.filter((e) => e.name.startsWith("two"));
+    expect(second).toMatchObject({ parentId: "group-1", position: [1, 2, 0], stroke: first.stroke });
+    expect(second.id).not.toBe("two");
+    expect(second.materialLayers![0]).toMatchObject({ color: "#123456" });
+    expect(second.materialLayers![0].id).not.toBe(first.materialLayers![0].id);
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(steps + 1);
+
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().entities).toEqual(before);
+  });
+
+  it("converts nothing that isn't a shape, or in a view-only tab", async () => {
+    const { useEditorStore } = await storeWithShapes();
+    const before = useEditorStore.getState().entities;
+
+    expect(useEditorStore.getState().convertShapesToPaths(["cube-1"])).toBe(0);
+    useEditorStore.getState().setReadOnly("openElsewhere");
+    expect(useEditorStore.getState().convertShapesToPaths(["bar"])).toBe(0);
+    expect(useEditorStore.getState().entities).toBe(before);
+  });
+
+  it("sets the extrusion and bevel of several shapes in one undo step", async () => {
+    const { useEditorStore } = await storeWithShapes();
+    const steps = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().updateShapeSolids(["bar", "two", "cube-1"], { extrusion: 0.5, bevel: 0.02 });
+    const byId = (id: string) => useEditorStore.getState().entities.find((e) => e.id === id)!;
+
+    expect([byId("bar").extrusion, byId("bar").bevel, byId("two").extrusion]).toEqual([0.5, 0.02, 0.5]);
+    expect(byId("cube-1").extrusion).toBeUndefined();
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(steps + 1);
+
+    useEditorStore.getState().updateShapeSolids(["bar"], { extrusion: -1 });
+    expect(byId("bar").extrusion).toBe(0.5);
+  });
+
+  it("keeps a shape through save and reload", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithShapes();
+    const saved = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState())))));
+
+    useEditorStore.getState().loadScene(saved.ok ? saved.content : null);
+    const reloaded = useEditorStore.getState().entities.find((e) => e.id === "bar")!;
+
+    expect(reloaded).toMatchObject({ type: "shape", shape: bar, extrusion: 0.2 });
+    expect(reloaded.shape).not.toBe(bar);
   });
 });
 

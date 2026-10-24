@@ -36,8 +36,9 @@ import {
 } from "../animation/events";
 import type { TransitionAction } from "../animation/transitions";
 import { clonePath, createSamplePath, DEFAULT_STROKE, type PathData, type PathStroke } from "../paths/pathGeometry";
-import type { ImportedSvgItem } from "../paths/svgImport";
-import { cloneShape, type ShapeData } from "../paths/shapeGeometry";
+import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
+import { cloneShape, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
+import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
 export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "directionalLight" | "importedModel" | "group";
 
@@ -367,6 +368,14 @@ export interface EditorState {
   // or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
   // Returns its ID ("" when there's nothing to add).
   addImportedSvg: (name: string, items: ImportedSvgItem[]) => string;
+  // The extrusion (depth) or bevel of every shape among `ids`, in one undo step.
+  updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
+  // Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
+  // a path along the middle of its strokes (paths/centerLine.ts), with a tube as thick as the
+  // strokes, in one undo step. A shape keeps its ID, name, place, material, states and events; when
+  // it has several strokes, the others become paths next to it ("Shape 1 (2)"). Returns how many
+  // shapes were converted.
+  convertShapesToPaths: (ids: string[]) => number;
 
   // Viewport / Projection
   activeTransformTool: "translate" | "rotate" | "scale";
@@ -595,6 +604,7 @@ const cloneEntity = (entity: Entity): Entity => ({
   ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map((layer) => ({ ...layer })) } : null),
   ...(entity.path ? { path: clonePath(entity.path) } : null),
   ...(entity.stroke ? { stroke: { ...entity.stroke } } : null),
+  ...(entity.shape ? { shape: cloneShape(entity.shape) } : null),
 });
 
 /** The parts of the state that are saved as the scene (see utils/sceneDocument.ts). */
@@ -1247,6 +1257,50 @@ export const useEditorStore = create<EditorState>()(
               return { entities: [...state.entities, ...added], selectedEntityIds: [rootId], penTool: null };
             });
             return rootId;
+          },
+          updateShapeSolids: (ids, updates) =>
+            set((state) => {
+              const valid = Object.values(updates).every((value) => value === undefined || value >= 0);
+              const targets = new Set(ids);
+              const isTarget = (entity: Entity) => entity.type === "shape" && targets.has(entity.id);
+              if (!valid || !state.entities.some(isTarget)) return state;
+              return { entities: state.entities.map((entity) => (isTarget(entity) ? { ...entity, ...updates } : entity)) };
+            }),
+          convertShapesToPaths: (ids) => {
+            const { entities, readOnlyReason, isPreviewMode } = get();
+            if (readOnlyReason || isPreviewMode) return 0;
+            const reach = new Set([...ids, ...ids.flatMap((id) => [...getDescendantIds(entities, id)])]);
+            // The maths runs before the store is written: it's the slow part.
+            const converted = new Map<string, CenterLines>();
+            entities.forEach((entity) => {
+              if (entity.type !== "shape" || !reach.has(entity.id) || !entity.shape) return;
+              const lines = shapeCenterLines(entity.shape);
+              if (lines.paths.length > 0) converted.set(entity.id, lines);
+            });
+            if (converted.size === 0) return 0;
+
+            set((state) => ({
+              entities: state.entities.flatMap((entity) => {
+                const lines = converted.get(entity.id);
+                if (!lines || entity.type !== "shape") return [entity];
+                const stroke = { radius: Math.max(MIN_IMPORT_RADIUS, lines.radius), caps: "round" as const };
+                const { shape: _shape, extrusion: _extrusion, bevel: _bevel, ...rest } = entity;
+                const asPath = (path: PathData): Entity => ({ ...rest, type: "path", path: clonePath(path), stroke: { ...stroke }, trimStart: 0, trimEnd: 1 });
+                const [first, ...others] = lines.paths;
+                return [
+                  asPath(first),
+                  ...others.map((path, i) => ({
+                    ...cloneEntity(asPath(path)),
+                    id: createEntityId(),
+                    name: `${entity.name} (${i + 2})`,
+                    materialLayers: entity.materialLayers?.map((layer) => ({ ...layer, id: createEntityId() })),
+                  })),
+                ];
+              }),
+              // The pen was editing a shape that's now a path: start again from it.
+              penTool: state.penTool?.pathId && converted.has(state.penTool.pathId) ? null : state.penTool,
+            }));
+            return converted.size;
           },
           // Viewport / Projection
           activeTransformTool: "translate",
