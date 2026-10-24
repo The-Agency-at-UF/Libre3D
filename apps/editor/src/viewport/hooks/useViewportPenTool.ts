@@ -21,6 +21,7 @@ import {
   visibleHandles,
   type HandleSide,
 } from "../../paths/pathEditing";
+import { removeContour, replaceContour, shapeContours } from "../../paths/shapeGeometry";
 import { PathEditOverlay } from "../PathEditOverlay";
 import type { ObjectManager } from "../ObjectManager";
 
@@ -48,12 +49,50 @@ const findPath = (id: string | null): (Entity & { path: PathData }) | null => {
   return entity?.type === "path" && entity.path ? (entity as Entity & { path: PathData }) : null;
 };
 
+// What editing works on: a path's one curve, or a shape's closed outlines (shapeContours), each
+// edited like a closed path. `write` replaces one contour; `remove` takes one away (a shape loses
+// that outline, or the whole object goes when nothing would be left).
+interface Editable {
+  entity: Entity;
+  contours: PathData[];
+  minPoints: number; // a contour with fewer draws nothing
+  write: (contour: number, path: PathData) => void;
+  remove: (contour: number) => void;
+}
+
+const findEditable = (id: string | null): Editable | null => {
+  const path = findPath(id);
+  if (path) {
+    return {
+      entity: path,
+      contours: [path.path],
+      minPoints: 2,
+      write: (_, next) => store().updatePath(path.id, next),
+      remove: () => store().removeEntity([path.id]),
+    };
+  }
+  const entity = id ? store().entities.find((e) => e.id === id) : undefined;
+  const shape = entity?.type === "shape" ? entity.shape : undefined;
+  if (!entity || !shape) return null;
+  return {
+    entity,
+    contours: shapeContours(shape),
+    minPoints: 3,
+    write: (contour, next) => store().updateShape(entity.id, replaceContour(shape, contour, next)),
+    remove: (contour) => {
+      const next = removeContour(shape, contour);
+      if (next) store().updateShape(entity.id, next);
+      else store().removeEntity([entity.id]);
+    },
+  };
+};
+
 /**
- * Starts editing a path's points (double-click it, or Enter with it selected). Not for a locked path,
- * and not while view only or playing (setPenTool refuses). Returns whether editing started.
+ * Starts editing a path's or shape's points (double-click it, or Enter with it selected). Not for a
+ * locked one, and not while view only or playing (setPenTool refuses). Returns whether editing started.
  */
 export function editPath(pathId: string): boolean {
-  if (!findPath(pathId) || isEffectivelyLocked(store().entities, pathId)) return false;
+  if (!findEditable(pathId) || isEffectivelyLocked(store().entities, pathId)) return false;
   store().setPenTool({ mode: "edit", pathId, selectedPoint: null });
   return store().penTool?.mode === "edit";
 }
@@ -76,6 +115,8 @@ export function editPath(pathId: string): boolean {
  * between smooth and corner, Delete to remove it. The picked point gets the transform gizmo (moving
  * only), which is how a point moves in depth. Enter or Escape ends editing. The points belong to
  * the path, not to a state, and are placed from the path as it's shown, so editing works in any state.
+ * A shape is edited the same way, one closed outline at a time (`contour`): its other outlines show
+ * their points and curves, and picking one of those edits that outline. A shape stays flat (Z = 0).
  *
  * Pointer events: the pen listens on the canvas's container in the capture phase and stops the
  * presses it uses there, before the camera controls and click selection on the canvas see them.
@@ -295,12 +336,18 @@ export function useViewportPenTool(
 
     // -- Editing ------------------------------------------------------------------------------
 
-    // The path being edited and its world matrix as shown.
+    // The path being edited (a shape's: the outline being edited), and its world matrix as shown.
     const editedPath = () => {
       const pen = store().penTool;
-      const entity = pen?.mode === "edit" ? findPath(pen.pathId) : null;
-      return pen && entity ? { pen, entity, path: entity.path, matrix: pathMatrix(entity.id) } : null;
+      const editable = pen?.mode === "edit" ? findEditable(pen.pathId) : null;
+      if (!pen || !editable) return null;
+      const contour = Math.min(pen.contour ?? 0, editable.contours.length - 1);
+      return { pen, entity: editable.entity, editable, contour, path: editable.contours[contour], matrix: pathMatrix(editable.entity.id) };
     };
+
+    // Writes one of an object's contours as it is now (a drag reads it again on every move).
+    const currentContour = (id: string, contour: number) => findEditable(id)?.contours[contour];
+    const writeContour = (id: string, contour: number, path: PathData) => findEditable(id)?.write(contour, path);
 
     // A drag of a point or a handle tip: it moves on the plane through where it was, facing the
     // path's own axis nearest the view, keeping the distance from the cursor it was grabbed at.
@@ -327,7 +374,7 @@ export function useViewportPenTool(
     const startEditing = (event: PointerEvent): boolean => {
       const edited = editedPath();
       if (!edited) return false;
-      const { pen, entity, path, matrix } = edited;
+      const { pen, entity, editable, contour, path, matrix } = edited;
       const id = entity.id;
       const at = new THREE.Vector2(event.clientX, event.clientY);
 
@@ -338,29 +385,34 @@ export function useViewportPenTool(
       if (pickedHandle !== null) {
         const { index, side } = handles[pickedHandle];
         gesture = dragOnPlane(event, tips[pickedHandle], matrix, (tip, moveEvent) => {
-          const current = findPath(id);
-          if (!current?.path.points[index]) return;
+          const current = currentContour(id, contour);
+          if (!current?.points[index]) return;
           const shown = pathMatrix(id);
-          const handle = toTuple(handleToLocal(tip, pointWorld(current.path.points[index], shown), shown));
-          write(() => store().updatePath(id, moveHandle(current.path, index, side, handle, event.altKey || moveEvent.altKey)));
+          const handle = toTuple(handleToLocal(tip, pointWorld(current.points[index], shown), shown));
+          write(() => writeContour(id, contour, moveHandle(current, index, side, handle, event.altKey || moveEvent.altKey)));
         });
         return true;
       }
       // Alt-drag anywhere else orbits.
       if (event.altKey) return false;
 
-      const dragPoint = (index: number, from: THREE.Vector3) =>
+      const dragPoint = (inContour: number, index: number, from: THREE.Vector3) =>
         dragOnPlane(event, from, matrix, (world) => {
-          const current = findPath(id);
-          if (!current?.path.points[index]) return;
-          write(() => store().updatePath(id, movePoint(current.path, index, toTuple(toLocal(world, pathMatrix(id))))));
+          const current = currentContour(id, inContour);
+          if (!current?.points[index]) return;
+          write(() => writeContour(id, inContour, movePoint(current, index, toTuple(toLocal(world, pathMatrix(id))))));
         });
 
-      const pickedPoint = nearestScreenPoint(path.points.map((point) => toScreen(pointWorld(point, matrix))), at, PICK_RADIUS);
-      if (pickedPoint !== null) {
-        store().setPenTool({ ...pen, selectedPoint: pickedPoint });
-        gesture = dragPoint(pickedPoint, pointWorld(path.points[pickedPoint], matrix));
-        return true;
+      // The edited contour's points, then a shape's other outlines' (picking one edits that outline).
+      const others = editable.contours.map((_, i) => i).filter((i) => i !== contour);
+      for (const inContour of [contour, ...others]) {
+        const points = editable.contours[inContour].points;
+        const pickedPoint = nearestScreenPoint(points.map((point) => toScreen(pointWorld(point, matrix))), at, PICK_RADIUS);
+        if (pickedPoint !== null) {
+          store().setPenTool({ ...pen, contour: inContour, selectedPoint: pickedPoint });
+          gesture = dragPoint(inContour, pickedPoint, pointWorld(points[pickedPoint], matrix));
+          return true;
+        }
       }
 
       // The dots sit on the gizmo (a point's handles near its plane handles), so they come first;
@@ -368,12 +420,14 @@ export function useViewportPenTool(
       if (transformControlsRef.current?.axis) return false;
 
       // On the curve: a new point there, which the same press can drag.
-      const onCurve = nearestOnCurve(path, (local) => toScreen(local.clone().applyMatrix4(matrix)), at, PICK_RADIUS);
-      if (onCurve) {
-        const { path: next, index } = insertPoint(path, onCurve.segment, onCurve.t);
-        gesture = dragPoint(index, pointWorld(next.points[index], matrix));
-        write(() => store().updatePath(id, next));
-        store().setPenTool({ ...pen, selectedPoint: index });
+      for (const inContour of [contour, ...others]) {
+        const curve = editable.contours[inContour];
+        const onCurve = nearestOnCurve(curve, (local) => toScreen(local.clone().applyMatrix4(matrix)), at, PICK_RADIUS);
+        if (!onCurve) continue;
+        const { path: next, index } = insertPoint(curve, onCurve.segment, onCurve.t);
+        gesture = dragPoint(inContour, index, pointWorld(next.points[index], matrix));
+        write(() => writeContour(id, inContour, next));
+        store().setPenTool({ ...pen, contour: inContour, selectedPoint: index });
         return true;
       }
 
@@ -387,25 +441,27 @@ export function useViewportPenTool(
       const edited = editedPath();
       if (!edited || event.target !== canvas) return;
       event.stopPropagation();
-      const { entity, path, matrix } = edited;
+      const { editable, contour, path, matrix } = edited;
       const at = new THREE.Vector2(event.clientX, event.clientY);
       const index = nearestScreenPoint(path.points.map((point) => toScreen(pointWorld(point, matrix))), at, PICK_RADIUS);
       if (index === null) return;
-      store().updatePath(entity.id, setPointMode(path, index, path.points[index].mode === "smooth" ? "corner" : "smooth"));
+      editable.write(contour, setPointMode(path, index, path.points[index].mode === "smooth" ? "corner" : "smooth"));
     };
 
     // Delete while editing: the picked point goes, and its neighbours join. A path left with one
-    // point draws nothing, so it goes too.
+    // point draws nothing, so it goes too; so does a shape's outline left with two (and the shape
+    // when that was its last).
     const deleteSelectedPoint = () => {
       const edited = editedPath();
       const selected = edited?.pen.selectedPoint ?? null;
       if (!edited || selected === null) return;
-      const { pen, entity, path } = edited;
-      if (path.points.length <= 2) {
-        store().removeEntity([entity.id]);
+      const { pen, editable, contour, path } = edited;
+      if (path.points.length <= editable.minPoints) {
+        editable.remove(contour);
+        if (findEditable(pen.pathId)) store().setPenTool({ ...pen, contour: 0, selectedPoint: null });
         return;
       }
-      store().updatePath(entity.id, deletePoint(path, selected));
+      editable.write(contour, deletePoint(path, selected));
       store().setPenTool({ ...pen, selectedPoint: null });
     };
 
@@ -415,8 +471,8 @@ export function useViewportPenTool(
     const onGizmoChange = () => {
       const edited = editedPath();
       if (transformControls?.object !== anchorProxy || !edited || edited.pen.selectedPoint === null) return;
-      const { entity, path, matrix, pen } = edited;
-      store().updatePath(entity.id, movePoint(path, pen.selectedPoint!, toTuple(toLocal(anchorProxy.position, matrix))));
+      const { editable, contour, path, matrix, pen } = edited;
+      editable.write(contour, movePoint(path, pen.selectedPoint!, toTuple(toLocal(anchorProxy.position, matrix))));
       if (transformControls.dragging && !isGizmoPaused) {
         useEditorStore.temporal.getState().pause();
         isGizmoPaused = true;
@@ -543,13 +599,15 @@ export function useViewportPenTool(
       () => {
         const pen = store().penTool;
         if (!pen?.pathId) return;
-        const path = findPath(pen.pathId);
-        if (!path) {
+        const editable = pen.mode === "draw" ? (findPath(pen.pathId) && findEditable(pen.pathId)) : findEditable(pen.pathId);
+        if (!editable) {
           if (pen.mode === "draw") finishPath();
           else store().setPenTool(null);
-        } else if (pen.selectedPoint !== null && pen.selectedPoint >= path.path.points.length) {
-          store().setPenTool({ ...pen, selectedPoint: null });
+          return;
         }
+        const contour = editable.contours[pen.contour ?? 0];
+        if (!contour) store().setPenTool({ ...pen, contour: 0, selectedPoint: null });
+        else if (pen.selectedPoint !== null && pen.selectedPoint >= contour.points.length) store().setPenTool({ ...pen, selectedPoint: null });
       },
     );
     const unsubscribeSelection = useEditorStore.subscribe(
@@ -574,6 +632,23 @@ export function useViewportPenTool(
 
     // -- Each frame ---------------------------------------------------------------------------
 
+    // A shape's other outlines while one is edited: their points and curves, one overlay each, so a
+    // click on one of them edits that outline.
+    const otherOverlays: PathEditOverlay[] = [];
+    const showOtherContours = (contours: PathData[], matrix: THREE.Matrix4) => {
+      while (otherOverlays.length < contours.length) {
+        const added = new PathEditOverlay();
+        scene.add(added.object);
+        otherOverlays.push(added);
+      }
+      otherOverlays.forEach((each, i) =>
+        each.show(
+          contours[i] ? { path: contours[i], matrixWorld: matrix, selectedPoint: null, handles: [], preview: null, insertAt: null } : null,
+          renderer.getPixelRatio(),
+        ),
+      );
+    };
+
     // Editing: the path's points, the picked one's handles, where a click on the curve would add a
     // point, and the gizmo's stand-in on the picked point (left alone while the gizmo drags it).
     const showEditing = () => {
@@ -581,20 +656,26 @@ export function useViewportPenTool(
       const edited = editedPath();
       if (!edited) {
         overlay.show(null, 1);
+        showOtherContours([], new THREE.Matrix4());
         return;
       }
-      const { pen, path, matrix } = edited;
+      const { pen, editable, contour, path, matrix } = edited;
       const handles = visibleHandles(path, pen.selectedPoint);
+      const others = editable.contours.filter((_, i) => i !== contour);
+      showOtherContours(others, matrix);
 
       let insertAt: THREE.Vector3 | null = null;
       if (cursor && !gesture && !transformControlsRef.current?.axis) {
         const dots = [
-          ...path.points.map((point) => pointWorld(point, matrix)),
+          ...editable.contours.flatMap((each) => each.points.map((point) => pointWorld(point, matrix))),
           ...handles.map(({ index, side }) => handleTipWorld(path.points[index], side, matrix)),
         ];
         if (nearestScreenPoint(dots.map(toScreen), cursor, PICK_RADIUS) === null) {
-          const onCurve = nearestOnCurve(path, (local) => toScreen(local.clone().applyMatrix4(matrix)), cursor, PICK_RADIUS);
-          insertAt = onCurve?.point ?? null;
+          for (const each of [path, ...others]) {
+            const onCurve = nearestOnCurve(each, (local) => toScreen(local.clone().applyMatrix4(matrix)), cursor, PICK_RADIUS);
+            insertAt = onCurve?.point ?? null;
+            if (insertAt) break;
+          }
         }
       }
 
@@ -611,13 +692,14 @@ export function useViewportPenTool(
 
     frameRef.current = () => {
       const pen = store().penTool;
+      if (pen?.mode === "edit") {
+        showEditing();
+        return;
+      }
+      showOtherContours([], new THREE.Matrix4());
       if (!pen) {
         overlay.show(null, 1);
         overlay.showPlane(null, new THREE.Vector3());
-        return;
-      }
-      if (pen.mode === "edit") {
-        showEditing();
         return;
       }
 
@@ -680,6 +762,10 @@ export function useViewportPenTool(
       container.style.cursor = "";
       scene.remove(overlay.object, anchorProxy);
       overlay.dispose();
+      otherOverlays.forEach((each) => {
+        scene.remove(each.object);
+        each.dispose();
+      });
     };
     // Created once against the renderer, scene and controls (useViewportControls makes those first);
     // the camera is read through its ref.

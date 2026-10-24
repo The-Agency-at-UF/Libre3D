@@ -37,7 +37,7 @@ import {
 import type { TransitionAction } from "../animation/transitions";
 import { clonePath, createSamplePath, DEFAULT_STROKE, type PathData, type PathStroke } from "../paths/pathGeometry";
 import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
-import { cloneShape, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
+import { cloneShape, flattenShape, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
 import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
 export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "directionalLight" | "importedModel" | "group";
@@ -137,13 +137,16 @@ export interface Entity {
 
 /**
  * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new paths ("draw") or editing one
- * path's points ("edit"). `pathId` is the path being drawn (null while the pen is on between paths)
- * or edited; `selectedPoint` is the edited path's picked point, an index into its points.
+ * path's or shape's points ("edit"). `pathId` is the path being drawn (null while the pen is on
+ * between paths) or the path or shape edited; `selectedPoint` is the edited path's picked point, an
+ * index into its points. A shape has several closed outlines (paths/shapeGeometry.ts's
+ * shapeContours): `contour` is the one being edited, which `selectedPoint` is in (0 when missing).
  */
 export interface PenToolState {
   mode: "draw" | "edit";
   pathId: string | null;
   selectedPoint: number | null;
+  contour?: number;
 }
 
 export interface ImportNodeSpec {
@@ -364,6 +367,8 @@ export interface EditorState {
   // Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
   // the path, not to a state, so this changes them in every state.
   updatePath: (id: string, path: PathData) => void;
+  // Replaces a shape's outlines (the pen tool's edits). Flat: their points' and handles' Z is dropped.
+  updateShape: (id: string, shape: ShapeData) => void;
   // The shapes and paths of an imported SVG (paths/svgImport.ts), in one undo step: one named `name`,
   // or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
   // Returns its ID ("" when there's nothing to add).
@@ -1228,6 +1233,12 @@ export const useEditorStore = create<EditorState>()(
               const target = state.entities.find((entity) => entity.id === id);
               if (target?.type !== "path") return state;
               return { entities: state.entities.map((entity) => (entity === target ? { ...entity, path: clonePath(path) } : entity)) };
+            }),
+          updateShape: (id, shape) =>
+            set((state) => {
+              const target = state.entities.find((entity) => entity.id === id);
+              if (target?.type !== "shape") return state;
+              return { entities: state.entities.map((entity) => (entity === target ? { ...entity, shape: flattenShape(shape) } : entity)) };
             }),
           addImportedSvg: (name, items) => {
             let rootId = "";

@@ -1009,6 +1009,21 @@ describe("shapes", () => {
     expect(byId("bar").extrusion).toBe(0.5);
   });
 
+  it("replaces a shape's outlines flat, for the pen tool", async () => {
+    const { useEditorStore } = await storeWithShapes();
+    const lifted: ShapeData = {
+      regions: [{ outline: { ...rectangle(0, 0, 1, 1), points: rectangle(0, 0, 1, 1).points.map((p) => ({ ...p, position: [p.position[0], p.position[1], 0.5] as [number, number, number] })) }, holes: [] }],
+    };
+
+    useEditorStore.getState().updateShape("bar", lifted);
+    useEditorStore.getState().updateShape("cube-1", lifted);
+    const byId = (id: string) => useEditorStore.getState().entities.find((e) => e.id === id)!;
+
+    expect(byId("bar").shape).toEqual({ regions: [{ outline: rectangle(0, 0, 1, 1), holes: [] }] });
+    expect(byId("cube-1").shape).toBeUndefined();
+    expect(lifted.regions[0].outline.points[0].position[2]).toBe(0.5);
+  });
+
   it("keeps a shape through save and reload", async () => {
     const { useEditorStore, selectSceneContent } = await storeWithShapes();
     const saved = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState())))));

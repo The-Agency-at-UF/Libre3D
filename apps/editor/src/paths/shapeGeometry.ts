@@ -37,6 +37,21 @@ export const cloneShape = (shape: ShapeData): ShapeData => ({
   regions: shape.regions.map((region) => ({ outline: clonePath(region.outline), holes: region.holes.map(clonePath) })),
 });
 
+/** A copy of the shape in its own XY plane: every point's and handle's Z is 0. */
+export const flattenShape = (shape: ShapeData): ShapeData => {
+  const flat = cloneShape(shape);
+  flat.regions.forEach((region) =>
+    [region.outline, ...region.holes].forEach((contour) =>
+      contour.points.forEach((point) => {
+        point.position[2] = 0;
+        point.handleIn[2] = 0;
+        point.handleOut[2] = 0;
+      }),
+    ),
+  );
+  return flat;
+};
+
 /** Every closed outline in a shape, in order: each region's outline, then its holes. The pen tool edits them by this index. */
 export const shapeContours = (shape: ShapeData): PathData[] => shape.regions.flatMap((region) => [region.outline, ...region.holes]);
 
