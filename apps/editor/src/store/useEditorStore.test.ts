@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
 import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
 import type { PathData, PathPoint } from "../paths/pathGeometry";
-import type { ImportedPath } from "../paths/svgImport";
+import type { ImportedPath, ImportedSvgItem } from "../paths/svgImport";
 import type { Entity } from "./useEditorStore";
 
 const EDITOR_KEY = "libre3d-scene-state";
@@ -801,10 +801,10 @@ describe("paths", () => {
   describe("imported from an SVG", () => {
     const corner = (position: [number, number, number]): PathPoint => ({ position, handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "corner" });
     const imported = (x: number): ImportedPath => ({
+      kind: "path",
       position: [x, 0, 0],
       path: { points: [corner([0, -1, 0]), corner([0, 1, 0])], closed: false },
       stroke: { radius: 0.05, caps: "round" },
-      outline: false,
     });
     const storeWithLight = async () => {
       const module = await loadStore();
@@ -816,7 +816,7 @@ describe("paths", () => {
       const { useEditorStore } = await storeWithLight();
       const source = imported(1);
 
-      const id = useEditorStore.getState().addImportedPaths("hello", [source]);
+      const id = useEditorStore.getState().addImportedSvg("hello", [source]);
       const added = useEditorStore.getState().entities.find((e) => e.id === id)!;
 
       expect(useEditorStore.getState().entities).toHaveLength(2);
@@ -831,7 +831,7 @@ describe("paths", () => {
       const { useEditorStore } = await storeWithLight();
       const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
 
-      const groupId = useEditorStore.getState().addImportedPaths("hello", [imported(-1), imported(0), imported(1)]);
+      const groupId = useEditorStore.getState().addImportedSvg("hello", [imported(-1), imported(0), imported(1)]);
       const entities = useEditorStore.getState().entities;
       const children = entities.filter((e) => e.parentId === groupId);
 
@@ -848,11 +848,33 @@ describe("paths", () => {
       expect(useEditorStore.getState().entities.map((e) => e.id)).toEqual(["directional-light-1"]);
     });
 
+    it("adds a filled shape in its fill colour, shown from both sides, numbered apart from the paths", async () => {
+      const { useEditorStore } = await storeWithLight();
+      const square = { points: [corner([-1, -1, 0]), corner([1, -1, 0]), corner([1, 1, 0])], closed: true };
+      const shape: ImportedSvgItem = { kind: "shape", position: [2, 0, 0], shape: { regions: [{ outline: square, holes: [] }] }, color: "#123456" };
+
+      const groupId = useEditorStore.getState().addImportedSvg("hello", [shape, imported(0), shape]);
+      const children = useEditorStore.getState().entities.filter((e) => e.parentId === groupId);
+
+      expect(children.map((e) => [e.type, e.name])).toEqual([
+        ["shape", "Shape 1"],
+        ["path", "Path 1"],
+        ["shape", "Shape 2"],
+      ]);
+      expect(children[0]).toMatchObject({ position: [2, 0, 0], shape: { regions: [{ outline: square, holes: [] }] } });
+      expect(children[0].shape!.regions[0].outline.points[0].position).not.toBe(square.points[0].position);
+      expect(children[0].materialLayers).toEqual([
+        expect.objectContaining({ type: "color", color: "#123456", doubleSided: true }),
+        expect.objectContaining({ type: "lighting" }),
+      ]);
+      expect(children[0].stroke).toBeUndefined();
+    });
+
     it("puts the pen down", async () => {
       const { useEditorStore } = await storeWithLight();
       useEditorStore.getState().setPenTool({ mode: "draw", pathId: null, selectedPoint: null });
 
-      useEditorStore.getState().addImportedPaths("hello", [imported(0)]);
+      useEditorStore.getState().addImportedSvg("hello", [imported(0)]);
 
       expect(useEditorStore.getState().penTool).toBeNull();
     });
@@ -861,9 +883,9 @@ describe("paths", () => {
       const { useEditorStore } = await storeWithLight();
       const before = useEditorStore.getState().entities;
 
-      expect(useEditorStore.getState().addImportedPaths("empty", [])).toBe("");
+      expect(useEditorStore.getState().addImportedSvg("empty", [])).toBe("");
       useEditorStore.getState().setReadOnly("openElsewhere");
-      useEditorStore.getState().addImportedPaths("hello", [imported(0), imported(1)]);
+      useEditorStore.getState().addImportedSvg("hello", [imported(0), imported(1)]);
 
       expect(useEditorStore.getState().entities).toBe(before);
     });

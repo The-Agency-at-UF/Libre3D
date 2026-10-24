@@ -6,9 +6,10 @@ import {
   ellipseSweep,
   IMPORT_SIZE,
   MIN_IMPORT_RADIUS,
-  svgShapesToPaths,
+  svgShapesToItems,
   type Cubic,
   type ImportedPath,
+  type ImportedShape,
   type SvgShape,
   type SvgStyle,
 } from "./svgImport";
@@ -17,15 +18,19 @@ type Vector = [number, number, number];
 
 const STROKE: SvgStyle = { fill: "none", stroke: "#000", strokeWidth: 2 };
 
-// A shape as SVGLoader hands it over: a ShapePath's subpaths and the style in userData.
+// A shape as utils/importSvg.ts hands it over: a ShapePath's subpaths, the style in userData, and
+// its filled areas (ShapePath.toShapes stands in for SVGLoader.createShapes, which needs the file).
 const svgShape = (draw: (shape: THREE.ShapePath) => void, style: SvgStyle = STROKE): SvgShape => {
   const shapePath = new THREE.ShapePath();
   draw(shapePath);
-  return { subPaths: shapePath.subPaths, userData: { style } };
+  return { subPaths: shapePath.subPaths, userData: { style }, fills: shapePath.toShapes(true) };
 };
 
+const pathsOf = (shapes: SvgShape[]) => svgShapesToItems(shapes).filter((item): item is ImportedPath => item.kind === "path");
+const shapesOf = (shapes: SvgShape[]) => svgShapesToItems(shapes).filter((item): item is ImportedShape => item.kind === "shape");
+
 const importOne = (shape: SvgShape): ImportedPath => {
-  const paths = svgShapesToPaths([shape]);
+  const paths = pathsOf([shape]);
   expect(paths).toHaveLength(1);
   return paths[0];
 };
@@ -113,7 +118,7 @@ describe("curveToCubics", () => {
   });
 });
 
-describe("svgShapesToPaths", () => {
+describe("svgShapesToItems: strokes", () => {
   it("makes one straight path from a line, centred and scaled to the import size", () => {
     const imported = importOne(svgShape((shape) => shape.moveTo(0, 0).lineTo(10, 0)));
 
@@ -138,7 +143,7 @@ describe("svgShapesToPaths", () => {
   });
 
   it("scales the longer side to the import size and centres the whole drawing", () => {
-    const paths = svgShapesToPaths([
+    const paths = pathsOf([
       svgShape((shape) => {
         shape.moveTo(100, 100).lineTo(300, 100);
         shape.moveTo(100, 200).lineTo(300, 200);
@@ -156,7 +161,7 @@ describe("svgShapesToPaths", () => {
   });
 
   it("puts each path's origin at the centre of its own bounds", () => {
-    const [left, right] = svgShapesToPaths([
+    const [left, right] = pathsOf([
       svgShape((shape) => {
         shape.moveTo(0, 0).lineTo(0, 10);
         shape.moveTo(20, 0).lineTo(30, 10);
@@ -276,30 +281,93 @@ describe("svgShapesToPaths", () => {
 
     expect(thick.stroke).toEqual({ radius: expect.closeTo(0.12, 9), caps: "round" });
     expect(hairline.stroke.radius).toBe(MIN_IMPORT_RADIUS);
-    expect(thick.outline).toBe(false);
   });
 
-  it("brings in a filled shape with no stroke as its outline, at the default radius", () => {
-    const filled = importOne(svgShape((shape) => shape.moveTo(0, 0).lineTo(10, 0).lineTo(10, 10), { fill: "#000" }));
+  it("brings in a stroke that's also filled as a path", () => {
     // SVG fills black by default, so a stroked path without fill="none" is filled too: still a stroke.
-    const both = importOne(svgShape((shape) => shape.moveTo(0, 0).lineTo(10, 0), { fill: "#000", stroke: "red", strokeWidth: 1 }));
+    const both = svgShapesToItems([svgShape((shape) => shape.moveTo(0, 0).lineTo(10, 0).lineTo(10, 10), { fill: "#000", stroke: "red", strokeWidth: 1 })]);
 
-    expect(filled).toMatchObject({ outline: true, stroke: { radius: 0.12, caps: "round" } });
-    expect(both.outline).toBe(false);
+    expect(both.map((item) => item.kind)).toEqual(["path"]);
   });
 
   it("skips shapes that draw nothing", () => {
     const line = (shape: THREE.ShapePath) => shape.moveTo(0, 0).lineTo(10, 0);
 
-    expect(svgShapesToPaths([svgShape(line, { fill: "none" })])).toEqual([]);
-    expect(svgShapesToPaths([svgShape(line, { fill: "none", stroke: "#000", strokeWidth: 0 })])).toEqual([]);
-    expect(svgShapesToPaths([svgShape(line, { ...STROKE, visibility: "hidden" })])).toEqual([]);
-    expect(svgShapesToPaths([svgShape(line, {})])).toEqual([]);
+    expect(pathsOf([svgShape(line, { fill: "none" })])).toEqual([]);
+    expect(pathsOf([svgShape(line, { fill: "none", stroke: "#000", strokeWidth: 0 })])).toEqual([]);
+    expect(pathsOf([svgShape(line, { ...STROKE, visibility: "hidden" })])).toEqual([]);
+    expect(pathsOf([svgShape(line, {})])).toEqual([]);
   });
 
   it("is empty when there's nothing to draw", () => {
-    expect(svgShapesToPaths([])).toEqual([]);
-    expect(svgShapesToPaths([svgShape((shape) => shape.moveTo(5, 5))])).toEqual([]);
-    expect(svgShapesToPaths([svgShape((shape) => shape.moveTo(5, 5).lineTo(5, 5))])).toEqual([]);
+    expect(pathsOf([])).toEqual([]);
+    expect(pathsOf([svgShape((shape) => shape.moveTo(5, 5))])).toEqual([]);
+    expect(pathsOf([svgShape((shape) => shape.moveTo(5, 5).lineTo(5, 5))])).toEqual([]);
+  });
+});
+
+describe("svgShapesToItems: fills", () => {
+  const FILL: SvgStyle = { fill: "black" };
+  // A 10-wide square with a 4-wide square hole, drawn the other way round (as fonts draw counters).
+  const ring = (shape: THREE.ShapePath) => {
+    shape.moveTo(0, 0).lineTo(10, 0).lineTo(10, 10).lineTo(0, 10).lineTo(0, 0);
+    shape.moveTo(3, 3).lineTo(3, 7).lineTo(7, 7).lineTo(7, 3).lineTo(3, 3);
+  };
+
+  it("brings in a filled shape with no stroke as a shape, with its holes", () => {
+    const [imported] = shapesOf([svgShape(ring, FILL)]);
+
+    expect(imported.position).toEqual([0, 0, 0]);
+    expect(imported.shape.regions).toHaveLength(1);
+    const [{ outline, holes }] = imported.shape.regions;
+    expect(outline.closed).toBe(true);
+    expect(outline.points.map((point) => point.position)).toEqual(
+      expect.arrayContaining([
+        [-2, -2, 0],
+        [2, 2, 0],
+      ]),
+    );
+    expect(holes).toHaveLength(1);
+    expect(holes[0].points.map((point) => point.position.map(Math.abs))).toEqual(
+      Array.from({ length: 4 }, () => [expect.closeTo(0.8, 9), expect.closeTo(0.8, 9), 0]),
+    );
+  });
+
+  it("keeps the fill colour", () => {
+    const colour = (fill: string) => shapesOf([svgShape(ring, { fill })])[0].color;
+
+    expect(colour("black")).toBe("#000000");
+    expect(colour("#f80")).toBe("#ff8800");
+    expect(colour("rgb(255, 0, 0)")).toBe("#ff0000");
+    expect(colour("currentColor")).toBe("#000000");
+  });
+
+  it("gives a contour at least three points", () => {
+    // A circle from two half arcs: two segments, split into four.
+    const [imported] = shapesOf([
+      svgShape((shape) => {
+        shape.moveTo(5, 0);
+        shape.currentPath!.absarc(0, 0, 5, 0, Math.PI, false);
+        shape.currentPath!.absarc(0, 0, 5, Math.PI, Math.PI * 2, false);
+      }, FILL),
+    ]);
+
+    expect(imported.shape.regions[0].outline.points.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("puts each shape's origin at its own centre, in drawing order with paths", () => {
+    const items = svgShapesToItems([
+      svgShape((shape) => shape.moveTo(0, 0).lineTo(10, 0).lineTo(10, 10).lineTo(0, 10).lineTo(0, 0), FILL),
+      svgShape((shape) => shape.moveTo(30, 0).lineTo(40, 10)),
+    ]);
+
+    expect(items.map((item) => item.kind)).toEqual(["shape", "path"]);
+    // 40 wide → 4 units around (20, 5).
+    expectTuple(items[0].position, [-1.5, 0, 0]);
+    expectTuple(items[1].position, [1.5, 0, 0]);
+  });
+
+  it("drops contours that enclose nothing", () => {
+    expect(shapesOf([svgShape((shape) => shape.moveTo(0, 0).lineTo(10, 0).lineTo(0, 0), FILL)])).toEqual([]);
   });
 });
