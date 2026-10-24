@@ -37,8 +37,9 @@ import {
 import type { TransitionAction } from "../animation/transitions";
 import { clonePath, createSamplePath, DEFAULT_STROKE, type PathData, type PathStroke } from "../paths/pathGeometry";
 import type { ImportedPath } from "../paths/svgImport";
+import type { ShapeData } from "../paths/shapeGeometry";
 
-export type EntityType = "cube" | "sphere" | "torus" | "path" | "directionalLight" | "importedModel" | "group";
+export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "directionalLight" | "importedModel" | "group";
 
 /**
  * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
@@ -126,6 +127,11 @@ export interface Entity {
   stroke?: PathStroke;
   trimStart?: number;
   trimEnd?: number;
+  // Shapes (type "shape", see paths/shapeGeometry.ts): a filled outline with holes, flat in its own
+  // XY plane unless it has an extrusion (its depth) or a bevel.
+  shape?: ShapeData;
+  extrusion?: number;
+  bevel?: number;
 }
 
 /**
@@ -456,6 +462,10 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   path: {
     name: "Path",
     color: "#FFC24D",
+  },
+  shape: {
+    name: "Shape",
+    color: "#9AA4B2",
   },
   directionalLight: {
     name: "Directional Light",

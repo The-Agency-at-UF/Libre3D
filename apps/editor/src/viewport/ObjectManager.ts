@@ -19,6 +19,8 @@ import { forgetBasePose, rememberBasePose } from "../utils/exportScene";
 import type { Pose } from "../animation/objectStates";
 import { PathMesh } from "../paths/PathMesh";
 import { DEFAULT_STROKE, type PathData } from "../paths/pathGeometry";
+import { ShapeMesh } from "../paths/ShapeMesh";
+import type { ShapeData, ShapeSolid } from "../paths/shapeGeometry";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 type LayeredMaterial =
@@ -56,6 +58,10 @@ function aimDirectionalLight(light: THREE.DirectionalLight): void {
 const NO_PATH: PathData = { points: [], closed: false };
 const pathOf = (entity: Entity) => entity.path ?? NO_PATH;
 const strokeOf = (entity: Entity) => entity.stroke ?? DEFAULT_STROKE;
+// Likewise a shape without its outline draws nothing.
+const NO_SHAPE: ShapeData = { regions: [] };
+const shapeOf = (entity: Entity) => entity.shape ?? NO_SHAPE;
+const solidOf = (entity: Entity): ShapeSolid => ({ extrusion: entity.extrusion ?? 0, bevel: entity.bevel ?? 0 });
 
 export class ObjectManager {
   private scene: THREE.Scene;
@@ -486,6 +492,18 @@ export class ObjectManager {
       mesh.userData.selectionOutline = outline;
 
       return mesh;
+    } else if (entity.type === "shape") {
+      // A filled outline (paths/ShapeMesh.ts), flat or extruded.
+      const mesh = new ShapeMesh(shapeOf(entity), solidOf(entity), this.createMaterialFromLayers(entity.materialLayers));
+      mesh.position.set(...entity.position);
+      mesh.rotation.set(...entity.rotation);
+      mesh.scale.set(...entity.scale);
+
+      const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
+      mesh.add(outline);
+      mesh.userData.selectionOutline = outline;
+
+      return mesh;
     } else {
       const geometry = this.createGeometry(entity);
       geometry.computeBoundingBox();
@@ -657,7 +675,16 @@ export class ObjectManager {
   // outline is sized from the geometry's bounds when it's made, so it's made again too.
   private rebuildPath(mesh: PathMesh, entity: Entity): void {
     mesh.rebuild(pathOf(entity), strokeOf(entity));
+    this.replaceSelectionOutline(mesh);
+  }
 
+  // A shape's geometry is rebuilt when its outline, extrusion or bevel changes, and its outline with it.
+  private rebuildShape(mesh: ShapeMesh, entity: Entity): void {
+    mesh.rebuild(shapeOf(entity), solidOf(entity));
+    this.replaceSelectionOutline(mesh);
+  }
+
+  private replaceSelectionOutline(mesh: THREE.Mesh): void {
     const oldOutline = mesh.userData.selectionOutline as THREE.LineSegments | undefined;
     const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
     if (oldOutline) {
@@ -735,6 +762,9 @@ export class ObjectManager {
   ): void {
     if (obj instanceof PathMesh && (obj.path !== pathOf(entity) || obj.stroke !== strokeOf(entity))) {
       this.rebuildPath(obj, entity);
+    }
+    if (obj instanceof ShapeMesh && !obj.isBuiltFrom(shapeOf(entity), solidOf(entity))) {
+      this.rebuildShape(obj, entity);
     }
 
     if (!isBeingDragged) {
