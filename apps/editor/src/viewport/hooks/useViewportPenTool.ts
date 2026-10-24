@@ -108,6 +108,8 @@ export function editPath(pathId: string): boolean {
  * second point (one point draws nothing), with its origin at the orbit target, and each point after
  * that is one undo step. Clicking the first point closes the path; clicking the last point, Enter or
  * Escape finishes it, and the pen stays on for the next one. Backspace takes the last point back.
+ * While the pen is on, a dot under the cursor shows where the next click puts a point, or the
+ * point a click closes or finishes at.
  *
  * Editing (`editPath`) shows one path's points. Drag a point or a handle across the view (on the
  * plane through it facing the path's own axis nearest the view, so it keeps its depth); Alt-drag a
@@ -166,6 +168,8 @@ export function useViewportPenTool(
     let pendingMove: PointerEvent | null = null;
     let moveFrame = 0;
     let isSpacePressed = false;
+    let isAltPressed = false;
+    let isOrbiting = false;
 
     // -- Where things are --------------------------------------------------------------------
 
@@ -287,6 +291,17 @@ export function useViewportPenTool(
       end: then,
     });
 
+    // What a press at `at` does instead of adding a point: close the path (on its first point, once
+    // it has 3) or finish it (on its last point).
+    const endAt = (drawn: NonNullable<ReturnType<typeof drawnPath>>, at: THREE.Vector2): { index: number; closes: boolean } | null => {
+      const { path, matrix, id } = drawn;
+      const screen = path.points.map((point) => toScreen(pointWorld(point, matrix)));
+      const picked = nearestScreenPoint(screen, at, PICK_RADIUS);
+      if (id && picked === 0 && path.points.length >= 3) return { index: 0, closes: true };
+      if (picked === path.points.length - 1) return { index: picked, closes: false };
+      return null;
+    };
+
     const startDrawing = (event: PointerEvent): boolean => {
       // Alt-drag orbits, also while drawing.
       if (event.altKey) return false;
@@ -304,17 +319,15 @@ export function useViewportPenTool(
       }
 
       const { path, matrix, id } = drawn;
-      const screen = path.points.map((point) => toScreen(pointWorld(point, matrix)));
-      const picked = nearestScreenPoint(screen, at, PICK_RADIUS);
-      const lastIndex = path.points.length - 1;
+      const end = endAt(drawn, at);
 
       // The first point closes the path (a drag there shapes its handles), the last one finishes it.
-      if (id && picked === 0 && path.points.length >= 3) {
+      if (id && end?.closes) {
         gesture = dragHandlesGesture(at, 0, pointWorld(path.points[0], matrix), finishPath);
         write(() => store().updatePath(id, { ...path, closed: true }));
         return true;
       }
-      if (picked === lastIndex) {
+      if (end) {
         finishPath();
         return true;
       }
@@ -545,6 +558,7 @@ export function useViewportPenTool(
 
     const onHover = (event: PointerEvent) => {
       cursor = event.target === canvas ? new THREE.Vector2(event.clientX, event.clientY) : null;
+      isAltPressed = event.altKey;
     };
     const onLeave = () => {
       cursor = null;
@@ -559,6 +573,7 @@ export function useViewportPenTool(
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code === "Space") isSpacePressed = true;
+      if (event.key === "Alt") isAltPressed = true;
       const pen = store().penTool;
       if (!pen || isTyping() || event.ctrlKey || event.metaKey || event.altKey) return;
 
@@ -595,10 +610,23 @@ export function useViewportPenTool(
 
     const onKeyUp = (event: KeyboardEvent) => {
       if (event.code === "Space") isSpacePressed = false;
+      if (event.key === "Alt") isAltPressed = false;
     };
     const onBlur = () => {
       isSpacePressed = false;
+      isAltPressed = false;
     };
+
+    // The cursor's dot hides while the camera moves (Alt-drag, Space-drag, the middle button, wheel).
+    const orbitControls = orbitControlsRef.current;
+    const onOrbitStart = () => {
+      isOrbiting = true;
+    };
+    const onOrbitEnd = () => {
+      isOrbiting = false;
+    };
+    orbitControls?.addEventListener("start", onOrbitStart);
+    orbitControls?.addEventListener("end", onOrbitEnd);
 
     // -- Store --------------------------------------------------------------------------------
 
@@ -700,8 +728,22 @@ export function useViewportPenTool(
       overlay.show({ path, matrixWorld: matrix, selectedPoint: pen.selectedPoint, handles, preview: null, insertAt }, renderer.getPixelRatio());
     };
 
+    // Where the pen's next click puts a point, for the dot under the cursor: on the drawing plane, or
+    // on the point a click there closes or finishes the path at. Null when a press wouldn't draw: off
+    // the canvas, while the camera moves, with Alt or Space held (orbit, pan), or while a point's
+    // handles are being dragged out.
+    const cursorTarget = (drawn: ReturnType<typeof drawnPath>, drawPlane: THREE.Plane | null) => {
+      if (!cursor || gesture || isOrbiting || isAltPressed || isSpacePressed || !drawPlane) return null;
+      const end = drawn && endAt(drawn, cursor);
+      if (drawn && end) return { position: pointWorld(drawn.path.points[end.index], drawn.matrix), end };
+      const hit = projectOntoPlane(rayAt(cursor.x, cursor.y), drawPlane);
+      return hit && { position: hit, end: null };
+    };
+
     frameRef.current = () => {
       const pen = store().penTool;
+      const pixelRatio = renderer.getPixelRatio();
+      if (pen?.mode !== "draw") overlay.showCursor(null, false, pixelRatio);
       if (pen?.mode === "edit") {
         showEditing();
         return;
@@ -716,18 +758,22 @@ export function useViewportPenTool(
       const drawn = drawnPath();
       // Before a path's first point, the plane follows the view.
       const planeCentre = drawn ? new THREE.Vector3().setFromMatrixPosition(drawn.matrix) : orbitTarget();
-      overlay.showPlane(drawn ? plane : drawingPlane(viewDirection(), planeCentre), planeCentre);
+      const drawPlane = drawn ? plane : drawingPlane(viewDirection(), planeCentre);
+      overlay.showPlane(drawPlane, planeCentre);
+      const target = cursorTarget(drawn, drawPlane);
+      overlay.showCursor(target?.position ?? null, !!target?.end, pixelRatio);
       if (!drawn) {
-        overlay.show(null, renderer.getPixelRatio());
+        overlay.show(null, pixelRatio);
         return;
       }
 
-      // The point being placed shows its handles; the cursor shows the next segment.
+      // The point being placed shows its handles; the cursor shows the next segment (none when a
+      // click finishes the path).
       const { path, matrix } = drawn;
       const lastIndex = path.points.length - 1;
       const sides: HandleSide[] = path.points[lastIndex].mode === "smooth" && !path.closed ? ["in", "out"] : [];
       const handles = sides.map((side) => ({ index: lastIndex, side }));
-      const hit = !gesture && cursor && plane ? projectOntoPlane(rayAt(cursor.x, cursor.y), plane) : null;
+      const hit = target && (!target.end || target.end.closes) ? target.position : null;
 
       overlay.show(
         {
@@ -738,7 +784,7 @@ export function useViewportPenTool(
           preview: hit ? toLocal(hit, matrix) : null,
           insertAt: null,
         },
-        renderer.getPixelRatio(),
+        pixelRatio,
       );
     };
 
@@ -755,6 +801,8 @@ export function useViewportPenTool(
       container.removeEventListener("dblclick", onDoubleClick, true);
       transformControls?.removeEventListener("objectChange", onGizmoChange);
       transformControls?.removeEventListener("dragging-changed", onGizmoDragging);
+      orbitControls?.removeEventListener("start", onOrbitStart);
+      orbitControls?.removeEventListener("end", onOrbitEnd);
       canvas.removeEventListener("pointermove", onHover);
       canvas.removeEventListener("pointerleave", onLeave);
       window.removeEventListener("keydown", onKeyDown, true);

@@ -2,7 +2,8 @@
  * PURPOSE: What the pen tool draws over the viewport (notes/animation-plan.md, B2): a path's points
  * and handles as dots that keep their size on screen, the lines out to the handles, a thin line
  * along the whole curve (also where a trim hides the tube), the next segment while drawing, the dot
- * where a click would add a point, and the faint plane points are drawn on.
+ * where a click would add a point, the dot under the cursor where the pen's next click puts one, and
+ * the faint plane points are drawn on.
  *
  * The dots and lines live in the path's own space, in a group that takes the path object's world
  * matrix, so they follow the object as it's shown (its state, its parents). They're drawn over
@@ -27,6 +28,7 @@ export interface PathOverlayView {
 const ANCHOR_SIZE = 10; // pixels
 const HANDLE_SIZE = 7;
 const INSERT_SIZE = 8;
+const CURSOR_HIGHLIGHT_SIZE = 14; // the cursor's dot on a point a click would close or finish the path at
 const LINE_SEGMENTS_PER_CURVE = 24;
 const ACCENT = new THREE.Color(0x0a84ff); // --accent
 const WHITE = new THREE.Color(0xffffff);
@@ -111,6 +113,8 @@ export class PathEditOverlay {
   private readonly handleLines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   private readonly curveLine: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   private readonly previewLine: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
+  // In the world, not the path's space: before a path's first point there's no path.
+  private readonly cursorDot: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
   private readonly plane: THREE.GridHelper;
   // What was last shown, so a frame with nothing new does nothing.
   private shownPath: PathData | null = null;
@@ -141,18 +145,27 @@ export class PathEditOverlay {
     [this.dots, this.handleLines, this.curveLine, this.previewLine].forEach((part) => (part.frustumCulled = false));
     this.pathSpace.add(this.curveLine, this.previewLine, this.handleLines, this.dots);
 
+    this.cursorDot = new THREE.Points(new THREE.BufferGeometry(), this.dots.material);
+    this.cursorDot.renderOrder = RENDER_ORDER + 2;
+    this.cursorDot.frustumCulled = false;
+    this.cursorDot.visible = false;
+
     this.plane = new THREE.GridHelper(PLANE_SIZE, PLANE_DIVISIONS, ACCENT, WHITE);
     const planeMaterial = this.plane.material as THREE.LineBasicMaterial;
     Object.assign(planeMaterial, { transparent: true, opacity: 0.18, depthWrite: false, toneMapped: false });
     this.plane.visible = false;
 
-    this.object.add(this.pathSpace, this.plane);
+    this.object.add(this.pathSpace, this.plane, this.cursorDot);
+  }
+
+  private updateVisible(): void {
+    this.object.visible = this.pathSpace.visible || this.plane.visible || this.cursorDot.visible;
   }
 
   /** Shows a path's points (or nothing, with null). Cheap to call every frame. */
   show(view: PathOverlayView | null, pixelRatio: number): void {
     this.pathSpace.visible = !!view;
-    this.object.visible = this.pathSpace.visible || this.plane.visible;
+    this.updateVisible();
     if (!view) return;
 
     this.pathSpace.matrix.copy(view.matrixWorld);
@@ -212,13 +225,30 @@ export class PathEditOverlay {
   /** Shows the plane points are drawn on, centred where it meets `centre`'s perpendicular, or hides it. */
   showPlane(plane: THREE.Plane | null, centre: THREE.Vector3): void {
     this.plane.visible = !!plane;
-    this.object.visible = this.pathSpace.visible || this.plane.visible;
+    this.updateVisible();
     if (!plane) return;
     this.plane.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), plane.normal);
     plane.projectPoint(centre, this.plane.position);
   }
 
+  /**
+   * Shows the dot where the pen's next click puts a point, in the world, or hides it. `highlight`:
+   * the click closes or finishes the path there instead, so the dot is the point's, picked.
+   */
+  showCursor(position: THREE.Vector3 | null, highlight: boolean, pixelRatio: number): void {
+    this.cursorDot.visible = !!position;
+    this.updateVisible();
+    if (!position) return;
+    this.dots.material.uniforms.pixelRatio.value = pixelRatio;
+    const geometry = reserve(this.cursorDot, 1, DOT_ATTRIBUTES);
+    write(geometry, "position", position.toArray());
+    write(geometry, "fill", srgb(highlight ? ACCENT : WHITE));
+    write(geometry, "ring", srgb(highlight ? WHITE : ACCENT));
+    write(geometry, "size", [highlight ? CURSOR_HIGHLIGHT_SIZE : ANCHOR_SIZE]);
+  }
+
   dispose(): void {
+    this.cursorDot.geometry.dispose(); // its material is the dots'
     [this.dots, this.handleLines, this.curveLine, this.previewLine, this.plane].forEach((part) => {
       part.geometry.dispose();
       (part.material as THREE.Material).dispose();
