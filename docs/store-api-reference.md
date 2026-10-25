@@ -116,7 +116,7 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, path, directional light, or group). A path from here is a sample curve (the pen tool draws its own with `addPath`), radius 0.12 with round caps, drawn in full (trim 0–1).
+Creates a single primitive entity (cube, sphere, torus, path, directional light, or group). A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
 - **Signature**: `(type: "cube" | "sphere" | "torus" | "path" | "directionalLight" | "group") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
@@ -125,10 +125,10 @@ Creates a single primitive entity (cube, sphere, torus, path, directional light,
   const newCubeId = useEditorStore((state) => state.addEntity)("cube");
   ```
 
-#### `addPath(origin: [number, number, number], path: PathData) → string`
-Adds a path the pen tool drew: its origin at `origin` and its points (relative to it) copied in, with the default stroke and material, drawn in full. One undo step; refused in view only.
+#### `addShape(origin: [number, number, number], rotation: [number, number, number], outline: PathData) → string`
+Adds a shape the pen tool drew: one region with `outline` (in the shape's own XY plane, copied in and flattened) and no holes, at `origin`, turned by `rotation` so that plane lies on the one it was drawn on. The default shape colour, filled from both sides like an imported shape. One undo step; refused in view only.
 - **Returns**: New entity ID
-- **Auto-selects**: The new path becomes selected
+- **Auto-selects**: The new shape becomes selected
 
 #### `addImportedSvg(name: string, items: ImportedSvgItem[]) → string`
 Adds the shapes and paths of an imported SVG (made by `svgShapesToItems` in `paths/svgImport.ts`: each with its origin and its outlines or points), copied in. A shape gets its fill colour, shown from both sides; a path its stroke, drawn in full with the default material. One item is named `name`; several go in a group named `name` at the origin (the drawing's centre), as "Shape 1", "Path 1", … (numbered per kind). One undo step; refused in view only; puts the pen down.

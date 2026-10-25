@@ -361,9 +361,10 @@ export interface EditorState {
   // The radius or cap style of every path among `ids`, in one undo step (not their trim, which
   // states can set: see updateShownTransforms).
   updatePathStrokes: (ids: string[], updates: Partial<PathStroke>) => void;
-  // A path the pen tool drew, its origin at `origin` and its points relative to it. Selected, like
-  // addEntity. Returns its ID.
-  addPath: (origin: [number, number, number], path: PathData) => string;
+  // A shape the pen tool drew: one outline (`outline`, in the shape's own XY plane, so turned by
+  // `rotation`), its origin at `origin`. Filled in the default shape colour from both sides, like an
+  // imported one. Selected, like addEntity. Returns its ID.
+  addShape: (origin: [number, number, number], rotation: [number, number, number], outline: PathData) => string;
   // Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
   // the path, not to a state, so this changes them in every state.
   updatePath: (id: string, path: PathData) => void;
@@ -553,7 +554,7 @@ const createEntity = (type: EntityType): Entity => ({
     : type === "group"
       ? null // groups are pure transform pivots — no material, no color
       : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
-  // The Add menu's path is a sample curve; the pen tool draws its own (addPath).
+  // The Add menu's path is a sample curve.
   ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
   visible: true,
   locked: false,
@@ -1219,10 +1220,16 @@ export const useEditorStore = create<EditorState>()(
                 ),
               };
             }),
-          addPath: (origin, path) => {
+          addShape: (origin, rotation, outline) => {
             let newId = "";
             set((state) => {
-              const entity: Entity = { ...createEntity("path"), position: cloneVector(origin), path: clonePath(path) };
+              const entity: Entity = {
+                ...createEntity("shape"),
+                position: cloneVector(origin),
+                rotation: cloneVector(rotation),
+                shape: flattenShape({ regions: [{ outline, holes: [] }] }),
+                materialLayers: [{ ...createColorLayer(ENTITY_DEFAULTS.shape.color, 1), doubleSided: true }, createLightingLayer()],
+              };
               newId = entity.id;
               return { entities: [...state.entities, entity], selectedEntityIds: [entity.id] };
             });
