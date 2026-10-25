@@ -399,6 +399,24 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
                       value={firstLighting.metalness ?? 0.08}
                       onChange={(val) => applyLightingUpdate({ metalness: val })}
                     />
+                    <Slider
+                      label="Clearcoat"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={firstLighting.clearcoat ?? 0}
+                      onChange={(val) => applyLightingUpdate({ clearcoat: val })}
+                    />
+                    {(firstLighting.clearcoat ?? 0) > 0 && (
+                      <Slider
+                        label="Coat Rough."
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={firstLighting.clearcoatRoughness ?? 0}
+                        onChange={(val) => applyLightingUpdate({ clearcoatRoughness: val })}
+                      />
+                    )}
                   </>
                 )}
 

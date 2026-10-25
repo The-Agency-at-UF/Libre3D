@@ -84,6 +84,11 @@ export interface LightingLayer {
   model: LightingModel;
   roughness: number; // only meaningful when model === "physical"
   metalness: number; // only meaningful when model === "physical"
+  // A clear lacquer over the material (glTF's KHR_materials_clearcoat), physical only. Above 0 it
+  // takes a MeshPhysicalMaterial. Undefined on layers from before it (an imported mesh's then keeps
+  // the clearcoat its glTF material came with).
+  clearcoat?: number;
+  clearcoatRoughness?: number;
   shininess: number; // only meaningful when model === "phong"
   emissive: string;
   emissiveIntensity: number; // ignored when model === "none"
@@ -525,6 +530,8 @@ const createLightingLayer = (overrides: Partial<LightingLayer> = {}): LightingLa
   model: "physical",
   roughness: 0.45,
   metalness: 0.08,
+  clearcoat: 0,
+  clearcoatRoughness: 0,
   shininess: 30,
   emissive: "#000000",
   emissiveIntensity: 1,

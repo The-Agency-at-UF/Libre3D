@@ -20,11 +20,13 @@ class BlobReader {
 }
 
 // A GLB is a 12-byte header, then the JSON chunk's length and type (8 bytes), then the JSON.
-const readGlbNodes = async (glb: Blob): Promise<GltfNode[]> => {
+const readGlbJson = async (glb: Blob) => {
   const buffer = await glb.arrayBuffer();
   const length = new DataView(buffer).getUint32(12, true);
-  return JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, length))).nodes;
+  return JSON.parse(new TextDecoder().decode(new Uint8Array(buffer, 20, length)));
 };
+
+const readGlbNodes = async (glb: Blob): Promise<GltfNode[]> => (await readGlbJson(glb)).nodes;
 
 // The store reads localStorage while its module loads, so the browser goes in first.
 const loadModules = async () => {
@@ -48,7 +50,7 @@ const buildStarterScene = async () => {
 
   const cube = meshMap.get(entities.find((entity) => entity.type === "cube")!.id)!;
   const light = meshMap.get(entities.find((entity) => entity.type === "directionalLight")!.id)!;
-  return { scene, cube, light, createSceneExportBlob };
+  return { scene, cube, light, createSceneExportBlob, useEditorStore, ObjectManager };
 };
 
 beforeEach(() => {
@@ -71,6 +73,20 @@ describe("createSceneExportBlob", () => {
 
     expect(nodes.length).toBeGreaterThan(0);
     expect(nodes.filter((node) => node.extras)).toEqual([]);
+  });
+
+  it("writes a clearcoat as KHR_materials_clearcoat", async () => {
+    const { useEditorStore, ObjectManager, createSceneExportBlob } = await buildStarterScene();
+    const cube = useEditorStore.getState().entities.find((entity) => entity.type === "cube")!;
+    const lighting = cube.materialLayers!.find((layer) => layer.type === "lighting")!;
+    useEditorStore.getState().updateMaterialLayer(cube.id, lighting.id, { clearcoat: 1, clearcoatRoughness: 0.05 });
+    const scene = new THREE.Scene();
+    new ObjectManager(scene, new Map()).syncMeshes(useEditorStore.getState().entities, null, false);
+
+    const { materials, extensionsUsed } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(extensionsUsed).toContain("KHR_materials_clearcoat");
+    expect(materials[0].extensions.KHR_materials_clearcoat).toEqual({ clearcoatFactor: 1, clearcoatRoughnessFactor: 0.05 });
   });
 
   it("keeps the extras an imported glTF node brought with it", async () => {

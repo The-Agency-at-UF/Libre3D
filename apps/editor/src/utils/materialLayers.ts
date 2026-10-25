@@ -34,8 +34,8 @@ const createLayerId = (): string => createId("layer");
 
 // Maps a parsed material's class to our LightingModel, mirroring
 // ObjectManager.materialClassForModel in reverse. MeshPhysicalMaterial extends
-// MeshStandardMaterial and both map to "physical" (advanced physical-only
-// features like clearcoat aren't surfaced as layers yet, but the base PBR is).
+// MeshStandardMaterial and both map to "physical" (clearcoat is read into the
+// lighting layer; other physical-only features like sheen aren't surfaced yet).
 export function lightingModelForMaterial(material: THREE.Material): LightingModel {
   if (material instanceof THREE.MeshStandardMaterial) return "physical"; // incl. MeshPhysicalMaterial
   if (material instanceof THREE.MeshPhongMaterial) return "phong";
@@ -86,6 +86,8 @@ function lightingLayerFromMaterial(material: THREE.Material, model: LightingMode
     model,
     roughness: typeof std.roughness === "number" ? std.roughness : 0.45,
     metalness: typeof std.metalness === "number" ? std.metalness : 0.08,
+    clearcoat: material instanceof THREE.MeshPhysicalMaterial ? material.clearcoat : 0,
+    clearcoatRoughness: material instanceof THREE.MeshPhysicalMaterial ? material.clearcoatRoughness : 0,
     shininess: typeof phong.shininess === "number" ? phong.shininess : 30,
     emissive: `#${emissive}`,
     emissiveIntensity:

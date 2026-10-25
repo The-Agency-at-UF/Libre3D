@@ -28,10 +28,16 @@ type LayeredMaterial =
   | THREE.MeshLambertMaterial
   | THREE.MeshPhongMaterial
   | THREE.MeshStandardMaterial
+  | THREE.MeshPhysicalMaterial
   | THREE.MeshToonMaterial;
 
-const materialClassForModel = (model: LightingLayer["model"]) => {
-  switch (model) {
+// Physical builds the cheaper MeshStandardMaterial unless the layer asks for a clearcoat.
+const wantsClearcoat = (lightingLayer: LightingLayer | undefined): boolean =>
+  (lightingLayer?.model ?? "physical") === "physical" && (lightingLayer?.clearcoat ?? 0) > 0;
+
+const materialClassForLayer = (lightingLayer: LightingLayer | undefined) => {
+  if (wantsClearcoat(lightingLayer)) return THREE.MeshPhysicalMaterial;
+  switch (lightingLayer?.model ?? "physical") {
     case "lambert":
       return THREE.MeshLambertMaterial;
     case "phong":
@@ -124,7 +130,7 @@ export class ObjectManager {
     const colorLayer = layers?.find((layer): layer is ColorLayer => layer.type === "color");
     const lightingLayer = layers?.find((layer): layer is LightingLayer => layer.type === "lighting");
     const model = lightingLayer?.model ?? "physical";
-    const MaterialClass = materialClassForModel(model);
+    const MaterialClass = materialClassForLayer(lightingLayer);
     const opacity = colorLayer?.opacity ?? 1;
     const alphaState = this.computeAlphaBlendState(colorLayer, opacity);
 
@@ -381,6 +387,13 @@ export class ObjectManager {
     if (model === "physical" && material instanceof THREE.MeshStandardMaterial) {
       material.roughness = lightingLayer?.roughness ?? 0.45;
       material.metalness = lightingLayer?.metalness ?? 0.08;
+    }
+    // Left alone when the layer has no value, so an imported glTF clearcoat survives layers made
+    // before clearcoat was one. Turning it back to 0 keeps the physical material: three compiles it
+    // without the coat, and swapping materials mid-drag would recompile anyway.
+    if (model === "physical" && material instanceof THREE.MeshPhysicalMaterial && lightingLayer?.clearcoat !== undefined) {
+      material.clearcoat = lightingLayer.clearcoat;
+      material.clearcoatRoughness = lightingLayer.clearcoatRoughness ?? 0;
     }
     if (model === "phong" && material instanceof THREE.MeshPhongMaterial) {
       material.shininess = lightingLayer?.shininess ?? 30;
@@ -789,15 +802,16 @@ export class ObjectManager {
       const colorLayer = entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
       const lightingLayer = entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
       const model = lightingLayer?.model ?? "physical";
-      const MaterialClass = materialClassForModel(model);
+      const MaterialClass = materialClassForLayer(lightingLayer);
 
       // A parsed glTF PBR material is often MeshPhysicalMaterial (a subclass of
       // MeshStandardMaterial). Treat that as already matching "physical" so we take
       // the in-place branch and keep its textures/advanced features, rather than
       // rebuilding it into a plain textureless MeshStandardMaterial on first sync.
+      // A clearcoat needs the physical one, so a standard material is rebuilt when one is added.
       const materialMatches =
         model === "physical"
-          ? obj.material instanceof THREE.MeshStandardMaterial
+          ? obj.material instanceof (wantsClearcoat(lightingLayer) ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial)
           : obj.material.constructor === MaterialClass;
 
       if (!materialMatches) {
