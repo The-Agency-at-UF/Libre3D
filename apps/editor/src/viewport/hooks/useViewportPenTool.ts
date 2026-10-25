@@ -690,7 +690,6 @@ export function useViewportPenTool(
     // Editing: the path's points, the picked one's handles, where a click on the curve would add a
     // point, and the gizmo's stand-in on the picked point (left alone while the gizmo drags it).
     const showEditing = () => {
-      overlay.showPlane(null, new THREE.Vector3());
       const edited = editedPath();
       if (!edited) {
         overlay.show(null, 1);
@@ -751,15 +750,12 @@ export function useViewportPenTool(
       showOtherContours([], new THREE.Matrix4());
       if (!pen) {
         overlay.show(null, 1);
-        overlay.showPlane(null, new THREE.Vector3());
         return;
       }
 
       const drawn = drawnPath();
       // Before a path's first point, the plane follows the view.
-      const planeCentre = drawn ? new THREE.Vector3().setFromMatrixPosition(drawn.matrix) : orbitTarget();
-      const drawPlane = drawn ? plane : drawingPlane(viewDirection(), planeCentre);
-      overlay.showPlane(drawPlane, planeCentre);
+      const drawPlane = drawn ? plane : drawingPlane(viewDirection(), orbitTarget());
       const target = cursorTarget(drawn, drawPlane);
       overlay.showCursor(target?.position ?? null, !!target?.end, pixelRatio);
       if (!drawn) {
