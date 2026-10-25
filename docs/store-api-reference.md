@@ -130,10 +130,20 @@ Adds a path the pen tool drew: its origin at `origin` and its points (relative t
 - **Returns**: New entity ID
 - **Auto-selects**: The new path becomes selected
 
-#### `addImportedPaths(name: string, paths: ImportedPath[]) → string`
-Adds the paths of an imported SVG (made by `svgShapesToPaths` in `paths/svgImport.ts`: each with its origin, points, and stroke), copied in, drawn in full with the default material. One path is named `name`; several go in a group named `name` at the origin (the drawing's centre), as "Path 1", "Path 2", …. One undo step; refused in view only; puts the pen down.
-- **Returns**: ID of the path, or of the group (`""` when `paths` is empty)
-- **Auto-selects**: The path or the group becomes selected
+#### `addImportedSvg(name: string, items: ImportedSvgItem[]) → string`
+Adds the shapes and paths of an imported SVG (made by `svgShapesToItems` in `paths/svgImport.ts`: each with its origin and its outlines or points), copied in. A shape gets its fill colour, shown from both sides; a path its stroke, drawn in full with the default material. One item is named `name`; several go in a group named `name` at the origin (the drawing's centre), as "Shape 1", "Path 1", … (numbered per kind). One undo step; refused in view only; puts the pen down.
+- **Returns**: ID of the item, or of the group (`""` when `items` is empty)
+- **Auto-selects**: The item or the group becomes selected
+
+#### `updateShapeSolids(ids: string[], updates: Partial<ShapeSolid>) → void`
+Sets the `extrusion` (depth) or `bevel` of every shape among `ids`, one undo step. Other entity types are skipped; a negative value is ignored.
+
+#### `updateShape(id: string, shape: ShapeData) → void`
+Replaces a shape's outlines (copied in, every Z set to 0), one undo step; the pen tool's edits. Ignored for other entity types.
+
+#### `convertShapesToPaths(ids: string[]) → number`
+Convert to Path: every shape among `ids` and among their descendants becomes a path along the middle of its strokes (`shapeCenterLines` in `paths/centerLine.ts`), with round caps and the strokes' half-width as radius (at least 0.01), drawn in full. The shape keeps its ID, name, parent, transform and material, so its states and events stay; extra strokes become paths right after it ("Shape 1 (2)", …) with the same place and a copy of the material. One undo step; does nothing in view only or Play, or for a shape with no strokes; ends the pen if it was editing a converted shape.
+- **Returns**: How many shapes were converted
 
 #### `addImportedModelHierarchy(assetId: string, nodes: ImportNodeSpec[]) → string`
 Imports a GLB model hierarchy (preserves parent-child relationships).

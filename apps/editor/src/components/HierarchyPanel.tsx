@@ -84,6 +84,8 @@ const iconClassForEntity = (entity: Entity): string => {
       return "ti ti-torus";
     case "path":
       return "ti ti-vector-spline";
+    case "shape":
+      return "ti ti-vector-bezier";
     case "directionalLight":
       return "ti ti-sun";
     case "group":

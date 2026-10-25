@@ -6,6 +6,8 @@ import { EventsPanel } from "./inspector/EventsPanel";
 import { EditEventPanel } from "./inspector/EditEventPanel";
 import { TransformPanel } from "./inspector/TransformPanel";
 import { PathPanel } from "./inspector/PathPanel";
+import { ShapePanel } from "./inspector/ShapePanel";
+import { getDescendantIds } from "../store/entityIndex";
 import { MaterialsPanel } from "./inspector/MaterialsPanel";
 import { ScenePanel } from "./inspector/ScenePanel";
 import { CameraPanel } from "./inspector/CameraPanel";
@@ -28,6 +30,12 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
   const events = useEditorStore((state) => state.animation.events);
 
   const selectedEntities = entities.filter((e) => selectedEntityIds.includes(e.id));
+  // The Shape panel acts on selected shapes and on the shapes in selected groups (an SVG import
+  // selects its group), when nothing else is selected.
+  const reachedIds = new Set([...selectedEntityIds, ...selectedEntityIds.flatMap((id) => getDescendantIds(entities, id))]);
+  const reachedShapes = selectedEntities.every((e) => e.type === "shape" || e.type === "group")
+    ? entities.filter((e) => e.type === "shape" && reachedIds.has(e.id))
+    : [];
 
   // The event open in the Edit Event panel. It shows only while its object is the one selected, and
   // closes when that changes or the event is gone (deleted, undone).
@@ -77,6 +85,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
             <fieldset className="inspector-fieldset" disabled={isReadOnly}>
               <TransformPanel selectedEntities={selectedEntities} />
               {selectedEntities.every((entity) => entity.type === "path") && <PathPanel entities={selectedEntities} />}
+              {reachedShapes.length > 0 && <ShapePanel shapes={reachedShapes} selectedIds={selectedEntityIds} />}
               <MaterialsPanel selectedEntities={selectedEntities} />
             </fieldset>
           </>

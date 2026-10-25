@@ -196,7 +196,7 @@ export function useViewportRaycaster(
     // Double-click drills into the exact child under the cursor (the deepest
     // tagged node), bypassing the click handler's bubble-to-root. A no-op on a
     // miss so an empty double-click doesn't clear the current selection. On a
-    // path, it also starts editing its points (useViewportPenTool).
+    // path or shape, it also starts editing its points (useViewportPenTool).
     const onDoubleClick = (event: MouseEvent) => {
       const { isPreviewMode, penTool, entities } = useEditorStore.getState();
       if (isPreviewMode || penTool) return;
@@ -204,7 +204,7 @@ export function useViewportRaycaster(
       const hitEntityId = pickEntityIdAt(event.clientX, event.clientY);
       if (hitEntityId) {
         useEditorStore.getState().selectEntity(hitEntityId, event.shiftKey);
-        const isPath = entities.some((entity) => entity.id === hitEntityId && entity.type === "path");
+        const isPath = entities.some((entity) => entity.id === hitEntityId && (entity.type === "path" || entity.type === "shape"));
         if (isPath && !event.shiftKey) editPath(hitEntityId);
       }
     };

@@ -36,9 +36,11 @@ import {
 } from "../animation/events";
 import type { TransitionAction } from "../animation/transitions";
 import { clonePath, createSamplePath, DEFAULT_STROKE, type PathData, type PathStroke } from "../paths/pathGeometry";
-import type { ImportedPath } from "../paths/svgImport";
+import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
+import { cloneShape, flattenShape, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
+import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
-export type EntityType = "cube" | "sphere" | "torus" | "path" | "directionalLight" | "importedModel" | "group";
+export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "directionalLight" | "importedModel" | "group";
 
 /**
  * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
@@ -126,17 +128,25 @@ export interface Entity {
   stroke?: PathStroke;
   trimStart?: number;
   trimEnd?: number;
+  // Shapes (type "shape", see paths/shapeGeometry.ts): a filled outline with holes, flat in its own
+  // XY plane unless it has an extrusion (its depth) or a bevel.
+  shape?: ShapeData;
+  extrusion?: number;
+  bevel?: number;
 }
 
 /**
  * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new paths ("draw") or editing one
- * path's points ("edit"). `pathId` is the path being drawn (null while the pen is on between paths)
- * or edited; `selectedPoint` is the edited path's picked point, an index into its points.
+ * path's or shape's points ("edit"). `pathId` is the path being drawn (null while the pen is on
+ * between paths) or the path or shape edited; `selectedPoint` is the edited path's picked point, an
+ * index into its points. A shape has several closed outlines (paths/shapeGeometry.ts's
+ * shapeContours): `contour` is the one being edited, which `selectedPoint` is in (0 when missing).
  */
 export interface PenToolState {
   mode: "draw" | "edit";
   pathId: string | null;
   selectedPoint: number | null;
+  contour?: number;
 }
 
 export interface ImportNodeSpec {
@@ -357,10 +367,20 @@ export interface EditorState {
   // Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
   // the path, not to a state, so this changes them in every state.
   updatePath: (id: string, path: PathData) => void;
-  // The paths of an imported SVG (paths/svgImport.ts), in one undo step: one path named `name`, or
-  // several ("Path 1", "Path 2", …) in a group named `name`. Selects it and puts the pen down.
+  // Replaces a shape's outlines (the pen tool's edits). Flat: their points' and handles' Z is dropped.
+  updateShape: (id: string, shape: ShapeData) => void;
+  // The shapes and paths of an imported SVG (paths/svgImport.ts), in one undo step: one named `name`,
+  // or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
   // Returns its ID ("" when there's nothing to add).
-  addImportedPaths: (name: string, paths: ImportedPath[]) => string;
+  addImportedSvg: (name: string, items: ImportedSvgItem[]) => string;
+  // The extrusion (depth) or bevel of every shape among `ids`, in one undo step.
+  updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
+  // Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
+  // a path along the middle of its strokes (paths/centerLine.ts), with a tube as thick as the
+  // strokes, in one undo step. A shape keeps its ID, name, place, material, states and events; when
+  // it has several strokes, the others become paths next to it ("Shape 1 (2)"). Returns how many
+  // shapes were converted.
+  convertShapesToPaths: (ids: string[]) => number;
 
   // Viewport / Projection
   activeTransformTool: "translate" | "rotate" | "scale";
@@ -456,6 +476,10 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   path: {
     name: "Path",
     color: "#FFC24D",
+  },
+  shape: {
+    name: "Shape",
+    color: "#9AA4B2",
   },
   directionalLight: {
     name: "Directional Light",
@@ -585,6 +609,7 @@ const cloneEntity = (entity: Entity): Entity => ({
   ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map((layer) => ({ ...layer })) } : null),
   ...(entity.path ? { path: clonePath(entity.path) } : null),
   ...(entity.stroke ? { stroke: { ...entity.stroke } } : null),
+  ...(entity.shape ? { shape: cloneShape(entity.shape) } : null),
 });
 
 /** The parts of the state that are saved as the scene (see utils/sceneDocument.ts). */
@@ -1209,28 +1234,84 @@ export const useEditorStore = create<EditorState>()(
               if (target?.type !== "path") return state;
               return { entities: state.entities.map((entity) => (entity === target ? { ...entity, path: clonePath(path) } : entity)) };
             }),
-          addImportedPaths: (name, paths) => {
+          updateShape: (id, shape) =>
+            set((state) => {
+              const target = state.entities.find((entity) => entity.id === id);
+              if (target?.type !== "shape") return state;
+              return { entities: state.entities.map((entity) => (entity === target ? { ...entity, shape: flattenShape(shape) } : entity)) };
+            }),
+          addImportedSvg: (name, items) => {
             let rootId = "";
             set((state) => {
-              if (paths.length === 0) return state;
-              const toEntity = (imported: ImportedPath, entityName: string, parentId?: string): Entity => ({
-                ...createEntity("path"),
+              if (items.length === 0) return state;
+              const toEntity = (imported: ImportedSvgItem, entityName: string, parentId?: string): Entity => ({
+                ...createEntity(imported.kind),
                 name: entityName,
                 position: cloneVector(imported.position),
-                path: clonePath(imported.path),
-                stroke: { ...imported.stroke },
+                ...(imported.kind === "path"
+                  ? { path: clonePath(imported.path), stroke: { ...imported.stroke } }
+                  : {
+                      shape: cloneShape(imported.shape),
+                      // A flat shape shows from both sides.
+                      materialLayers: [{ ...createColorLayer(imported.color, 1), doubleSided: true }, createLightingLayer()],
+                    }),
                 ...(parentId ? { parentId } : null),
               });
 
               // The group sits at the drawing's centre (the import's origin), so it turns the word about its middle.
-              const group = paths.length > 1 ? { ...createEntity("group"), name } : null;
+              const group = items.length > 1 ? { ...createEntity("group"), name } : null;
+              const counts = { path: 0, shape: 0 };
               const added = group
-                ? [group, ...paths.map((imported, i) => toEntity(imported, `Path ${i + 1}`, group.id))]
-                : [toEntity(paths[0], name)];
+                ? [group, ...items.map((imported) => toEntity(imported, `${ENTITY_DEFAULTS[imported.kind].name} ${++counts[imported.kind]}`, group.id))]
+                : [toEntity(items[0], name)];
               rootId = added[0].id;
               return { entities: [...state.entities, ...added], selectedEntityIds: [rootId], penTool: null };
             });
             return rootId;
+          },
+          updateShapeSolids: (ids, updates) =>
+            set((state) => {
+              const valid = Object.values(updates).every((value) => value === undefined || value >= 0);
+              const targets = new Set(ids);
+              const isTarget = (entity: Entity) => entity.type === "shape" && targets.has(entity.id);
+              if (!valid || !state.entities.some(isTarget)) return state;
+              return { entities: state.entities.map((entity) => (isTarget(entity) ? { ...entity, ...updates } : entity)) };
+            }),
+          convertShapesToPaths: (ids) => {
+            const { entities, readOnlyReason, isPreviewMode } = get();
+            if (readOnlyReason || isPreviewMode) return 0;
+            const reach = new Set([...ids, ...ids.flatMap((id) => [...getDescendantIds(entities, id)])]);
+            // The maths runs before the store is written: it's the slow part.
+            const converted = new Map<string, CenterLines>();
+            entities.forEach((entity) => {
+              if (entity.type !== "shape" || !reach.has(entity.id) || !entity.shape) return;
+              const lines = shapeCenterLines(entity.shape);
+              if (lines.paths.length > 0) converted.set(entity.id, lines);
+            });
+            if (converted.size === 0) return 0;
+
+            set((state) => ({
+              entities: state.entities.flatMap((entity) => {
+                const lines = converted.get(entity.id);
+                if (!lines || entity.type !== "shape") return [entity];
+                const stroke = { radius: Math.max(MIN_IMPORT_RADIUS, lines.radius), caps: "round" as const };
+                const { shape: _shape, extrusion: _extrusion, bevel: _bevel, ...rest } = entity;
+                const asPath = (path: PathData): Entity => ({ ...rest, type: "path", path: clonePath(path), stroke: { ...stroke }, trimStart: 0, trimEnd: 1 });
+                const [first, ...others] = lines.paths;
+                return [
+                  asPath(first),
+                  ...others.map((path, i) => ({
+                    ...cloneEntity(asPath(path)),
+                    id: createEntityId(),
+                    name: `${entity.name} (${i + 2})`,
+                    materialLayers: entity.materialLayers?.map((layer) => ({ ...layer, id: createEntityId() })),
+                  })),
+                ];
+              }),
+              // The pen was editing a shape that's now a path: start again from it.
+              penTool: state.penTool?.pathId && converted.has(state.penTool.pathId) ? null : state.penTool,
+            }));
+            return converted.size;
           },
           // Viewport / Projection
           activeTransformTool: "translate",
