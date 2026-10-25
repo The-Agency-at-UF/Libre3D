@@ -231,6 +231,13 @@ export interface SceneSettingsConfig {
   wireframe: boolean;
   fogEnabled: boolean;
   showAxisGuides?: boolean;
+  // Image-based light from a generated room (viewport/sceneEnvironment.ts): soft fill and reflections
+  // for Physical materials. Replaces the ambient light while on. Older scenes open with it off
+  // (scene document v4), new ones with it on.
+  environment: {
+    enabled: boolean;
+    intensity: number;
+  };
   lights: {
     intensity: number;
     color: string;
@@ -309,6 +316,10 @@ export const initialSceneDefaults: SceneSettingsConfig = {
   wireframe: false,
   fogEnabled: false,
   showAxisGuides: false,
+  environment: {
+    enabled: true,
+    intensity: 1,
+  },
   lights: {
     intensity: 0.75,
     color: "#ffffff",

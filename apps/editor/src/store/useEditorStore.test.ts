@@ -126,6 +126,21 @@ describe("loadScene", () => {
     expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
   });
 
+  it("lights a new scene with the environment, and an old one the way it was saved", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    const { parseSceneDocument, toSceneDocument } = await import("../utils/sceneDocument");
+
+    useEditorStore.getState().loadScene(null);
+    expect(useEditorStore.getState().sceneSettings.environment).toEqual({ enabled: true, intensity: 1 });
+
+    const { environment: _environment, ...v3Settings } = useEditorStore.getState().sceneSettings;
+    const v3 = { ...toSceneDocument({ ...selectSceneContent(useEditorStore.getState()), sceneSettings: v3Settings as never }), schemaVersion: 3 };
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(v3)));
+    useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+
+    expect(useEditorStore.getState().sceneSettings.environment).toEqual({ enabled: false, intensity: 1 });
+  });
+
   it("gives every new scene a fresh cube ID", async () => {
     const { useEditorStore } = await loadStore();
 

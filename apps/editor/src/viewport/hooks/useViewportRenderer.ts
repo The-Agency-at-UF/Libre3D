@@ -51,9 +51,11 @@ export function useViewportRenderer(
     // editor has to apply it too. That element pins `tone-mapping="neutral"` so this
     // pairing can't drift if a future model-viewer redefines "auto".
     //
-    // NOTE: this only matches the tone *curve*. The editor still lights with an
-    // AmbientLight while model-viewer lights with a generated environment map, so
-    // the two are not yet identical — that gap needs a shared IBL environment.
+    // NOTE: this only matches the tone *curve*. model-viewer always lights with its
+    // own generated "neutral" environment. The editor lights with a generated room
+    // when the scene's environment setting is on (sceneEnvironment.ts, close to
+    // model-viewer's "legacy" one) and with an AmbientLight when it's off, so the
+    // two are close with it on but not identical.
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = MODEL_VIEWER_NEUTRAL_EXPOSURE;
     renderer.domElement.style.width   = "100%";

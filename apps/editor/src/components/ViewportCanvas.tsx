@@ -5,6 +5,7 @@ import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore
 import { filterMoveRoots } from "../store/entityIndex";
 import { getViewedState, resolveState, unwrapRotation, type StateValues } from "../animation/objectStates";
 import { SceneManager } from "../viewport/SceneManager";
+import { createRoomEnvironment } from "../viewport/sceneEnvironment";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
@@ -116,6 +117,19 @@ export function ViewportCanvas() {
       if (!useEditorStore.getState().isPreviewMode) gizmoRef.current?.render();
     }
   );
+
+  // The environment light is made once the renderer exists (it renders the room on the GPU), and
+  // shown or hidden by the scene settings below.
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    const environment = createRoomEnvironment(renderer);
+    sceneManager.setEnvironmentMap(environment.texture);
+    return () => {
+      sceneManager.setEnvironmentMap(null);
+      environment.dispose();
+    };
+  }, [sceneManager, rendererRef]);
 
   const { orbitControlsRef, transformControlsRef } = useViewportControls(
     cameraRef,
@@ -245,6 +259,7 @@ export function ViewportCanvas() {
     sceneManager.updateBackground(sceneSettings.bgColor);
     sceneManager.updateFog(sceneSettings.fogEnabled, sceneSettings.bgColor);
     sceneManager.updateLightIntensity(sceneSettings.lights.intensity);
+    sceneManager.updateEnvironment(sceneSettings.environment.enabled, sceneSettings.environment.intensity);
     sceneManager.updateGridVisibility(sceneSettings.showGrid !== false);
 
     // Wireframe sync
