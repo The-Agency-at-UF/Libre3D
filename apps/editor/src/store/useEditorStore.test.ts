@@ -756,20 +756,28 @@ describe("paths", () => {
     expect(copy.stroke).not.toBe(path().stroke);
   });
 
-  it("adds a drawn path at its origin, selected, in one undo step", async () => {
+  it("adds a drawn shape at its origin and turn, flat, filled from both sides, selected, in one undo step", async () => {
     const { useEditorStore } = await loadStore();
     useEditorStore.getState().loadScene({ entities: [light] });
     const corner = (position: [number, number, number]): PathPoint => ({ position, handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "corner" });
-    const drawn: PathData = { points: [corner([0, 0, 0]), corner([1, 1, 0])], closed: false };
+    const drawn: PathData = { points: [corner([0, 0, 0]), corner([1, 1, 0]), corner([1, 0, 0.001])], closed: false };
 
-    const pathId = useEditorStore.getState().addPath([0, 1, 2], drawn);
-    const added = useEditorStore.getState().entities.find((e) => e.id === pathId)!;
+    const shapeId = useEditorStore.getState().addShape([0, 1, 2], [0, Math.PI / 2, 0], drawn);
+    const added = useEditorStore.getState().entities.find((e) => e.id === shapeId)!;
 
-    expect(added).toMatchObject({ type: "path", position: [0, 1, 2], path: drawn, trimStart: 0, trimEnd: 1 });
-    expect(added.path!.points[1].position).not.toBe(drawn.points[1].position);
-    expect(useEditorStore.getState().selectedEntityIds).toEqual([pathId]);
+    expect(added).toMatchObject({ type: "shape", name: "Shape", position: [0, 1, 2], rotation: [0, Math.PI / 2, 0] });
+    expect(added.shape!.regions).toHaveLength(1);
+    expect(added.shape!.regions[0].holes).toEqual([]);
+    expect(added.shape!.regions[0].outline.points.map((point) => point.position)).toEqual([
+      [0, 0, 0],
+      [1, 1, 0],
+      [1, 0, 0], // flat: Z dropped
+    ]);
+    expect(added.shape!.regions[0].outline.points[1].position).not.toBe(drawn.points[1].position);
+    expect(added.materialLayers![0]).toMatchObject({ type: "color", doubleSided: true });
+    expect(useEditorStore.getState().selectedEntityIds).toEqual([shapeId]);
     useEditorStore.temporal.getState().undo();
-    expect(useEditorStore.getState().entities.some((e) => e.id === pathId)).toBe(false);
+    expect(useEditorStore.getState().entities.some((e) => e.id === shapeId)).toBe(false);
   });
 
   it("replaces a path's points in one undo step, for every state", async () => {
@@ -788,12 +796,12 @@ describe("paths", () => {
     expect(path().path).toBe(before);
   });
 
-  it("can't add or edit a drawn path in a view-only tab", async () => {
+  it("can't draw a shape or edit a path's points in a view-only tab", async () => {
     const { useEditorStore, pathId, path } = await storeWithPath();
     const before = useEditorStore.getState().entities;
     useEditorStore.getState().setReadOnly("openElsewhere");
 
-    useEditorStore.getState().addPath([0, 0, 0], path().path!);
+    useEditorStore.getState().addShape([0, 0, 0], [0, 0, 0], path().path!);
     useEditorStore.getState().updatePath(pathId, { ...path().path!, closed: true });
 
     expect(useEditorStore.getState().entities).toBe(before);

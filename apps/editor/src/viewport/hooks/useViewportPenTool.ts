@@ -49,6 +49,13 @@ const findPath = (id: string | null): (Entity & { path: PathData }) | null => {
   return entity?.type === "path" && entity.path ? (entity as Entity & { path: PathData }) : null;
 };
 
+// The shape being drawn and its outline: the pen draws a shape with one outline, its first region's.
+const findDrawn = (id: string | null): { entity: Entity; outline: PathData } | null => {
+  const entity = id ? store().entities.find((e) => e.id === id) : undefined;
+  const outline = entity?.type === "shape" ? entity.shape?.regions[0]?.outline : undefined;
+  return entity && outline ? { entity, outline } : null;
+};
+
 // What editing works on: a path's one curve, or a shape's closed outlines (shapeContours), each
 // edited like a closed path. `write` replaces one contour; `remove` takes one away (a shape loses
 // that outline, or the whole object goes when nothing would be left).
@@ -102,12 +109,14 @@ export function editPath(pathId: string): boolean {
  * useViewportPenTool — drawing and editing paths in the viewport (B2)
  * ============================================================================
  *
- * The pen (`penTool` in the store) draws a path a point at a time: click for a corner, press and
- * drag for a smooth point. Points land on a plane through the orbit target facing the axis nearest
- * the view; a path's first point fixes the plane for that path. The path entity is made by the
- * second point (one point draws nothing), with its origin at the orbit target, and each point after
- * that is one undo step. Clicking the first point closes the path; clicking the last point, Enter or
- * Escape finishes it, and the pen stays on for the next one. Backspace takes the last point back.
+ * The pen (`penTool` in the store) draws a shape's outline a point at a time: click for a corner,
+ * press and drag for a smooth point. Points land on a plane through the orbit target facing the axis
+ * nearest the view; the first point fixes the plane, and the shape is turned so its own XY plane
+ * (where a shape is flat) lies on it. The shape entity is made by the second point (one point draws
+ * nothing), with its origin at the orbit target, and each point after that is one undo step. It fills
+ * as it's drawn. Clicking the first point closes the outline; clicking the last point, Enter or
+ * Escape finishes it (closing it, since a shape's outlines are closed), and the pen stays on for the
+ * next one. Backspace takes the last point back. Convert to Path makes a tube of a shape.
  * While the pen is on, a dot under the cursor shows where the next click puts a point, or the
  * point a click closes or finishes at.
  *
@@ -158,9 +167,9 @@ export function useViewportPenTool(
     scene.add(anchorProxy);
     const raycaster = new THREE.Raycaster();
 
-    // The pen's own state, beside the store's: a path's first point before the path exists (with
-    // the origin the path will get), the plane the path is drawn on, the cursor, and the gesture.
-    let draft: { origin: THREE.Vector3; point: PathPoint } | null = null;
+    // The pen's own state, beside the store's: a shape's first point before the shape exists (with
+    // the origin and turn the shape will get), the plane it's drawn on, the cursor, and the gesture.
+    let draft: { origin: THREE.Vector3; rotation: THREE.Quaternion; point: PathPoint } | null = null;
     let plane: THREE.Plane | null = null;
     let cursor: THREE.Vector2 | null = null;
     let gesture: Gesture | null = null;
@@ -194,7 +203,7 @@ export function useViewportPenTool(
     const orbitTarget = () => orbitControlsRef.current?.target.clone() ?? new THREE.Vector3();
 
     // The path's world matrix as it's shown (its state, its parents). Before ViewportCanvas has made
-    // its Three object (the frame after addPath), from the store.
+    // its Three object (the frame after addShape), from the store.
     const pathMatrix = (id: string): THREE.Matrix4 => {
       const object = objectManager.getObject(id);
       if (!object) return getEntityWorldMatrix(store().entities, id);
@@ -202,15 +211,19 @@ export function useViewportPenTool(
       return object.matrixWorld.clone();
     };
 
-    // The path being drawn, as a path and its matrix: the store's, or the lone first point's.
+    // The outline being drawn, as a path and its matrix: the store's shape's, or the lone first point's.
     const drawnPath = (): { path: PathData; matrix: THREE.Matrix4; id: string | null } | null => {
       const pen = store().penTool;
       if (pen?.mode !== "draw") return null;
-      const entity = findPath(pen.pathId);
-      if (entity) return { path: entity.path, matrix: pathMatrix(entity.id), id: entity.id };
-      if (draft) return { path: { points: [draft.point], closed: false }, matrix: new THREE.Matrix4().makeTranslation(draft.origin), id: null };
+      const drawn = findDrawn(pen.pathId);
+      if (drawn) return { path: drawn.outline, matrix: pathMatrix(drawn.entity.id), id: drawn.entity.id };
+      if (draft) return { path: { points: [draft.point], closed: false }, matrix: draftMatrix(draft), id: null };
       return null;
     };
+
+    // Where the shape will be before it exists: at its origin, turned onto the drawing plane.
+    const draftMatrix = ({ origin, rotation }: { origin: THREE.Vector3; rotation: THREE.Quaternion }) =>
+      new THREE.Matrix4().compose(origin, rotation, new THREE.Vector3(1, 1, 1));
 
     const pointWorld = (point: PathPoint, matrix: THREE.Matrix4) => toVector3(point.position).applyMatrix4(matrix);
     const toLocal = (world: THREE.Vector3, matrix: THREE.Matrix4) => world.clone().applyMatrix4(matrix.clone().invert());
@@ -244,7 +257,30 @@ export function useViewportPenTool(
       historyPaused = false;
     };
 
-    // Ends the path being drawn; the pen stays on for the next one.
+    // Replaces the outline of the shape being drawn.
+    const writeDrawn = (id: string, outline: PathData) => {
+      const shape = findDrawn(id)?.entity.shape;
+      if (shape) store().updateShape(id, replaceContour(shape, 0, outline));
+    };
+
+    // A shape's outlines are closed, so finishing one closes it, in the undo step of its last point
+    // (written with history paused); one with under 3 points fills nothing, so it goes. Called after
+    // the store update that ended drawing, not from inside it: zundo would record a write made inside
+    // another set as that set's own undo step. Not in Play or while view only (the pen goes off then).
+    const closeDrawn = (id: string) => {
+      const drawn = findDrawn(id);
+      const { readOnlyReason, isPreviewMode, previewingActionId } = store();
+      if (!drawn || drawn.outline.closed || readOnlyReason || isPreviewMode || previewingActionId) return;
+      const history = useEditorStore.temporal.getState();
+      // Mid-gesture history is paused already, and resumes on up.
+      const isTracking = history.isTracking;
+      if (isTracking) history.pause();
+      if (drawn.outline.points.length < 3) store().removeEntity([id]);
+      else writeDrawn(id, { ...drawn.outline, closed: true });
+      if (isTracking) history.resume();
+    };
+
+    // Ends the shape being drawn; the pen stays on for the next one.
     const finishPath = () => {
       draft = null;
       plane = null;
@@ -252,8 +288,8 @@ export function useViewportPenTool(
       if (pen?.mode === "draw" && pen.pathId) store().setPenTool(DRAWING);
     };
 
-    // Backspace while drawing: takes the last point back. A path down to one point goes back to
-    // being the lone first point (the path entity goes, since one point draws nothing).
+    // Backspace while drawing: takes the last point back. A shape down to one point goes back to
+    // being the lone first point (the shape entity goes, since one point draws nothing).
     const removeLastPoint = () => {
       const drawn = drawnPath();
       if (!drawn) return;
@@ -262,9 +298,9 @@ export function useViewportPenTool(
         draft = null;
         plane = null;
       } else if (path.points.length > 2) {
-        store().updatePath(id, deletePoint(path, path.points.length - 1));
+        writeDrawn(id, deletePoint(path, path.points.length - 1));
       } else {
-        draft = { origin: new THREE.Vector3().setFromMatrixPosition(matrix), point: path.points[0] };
+        draft = { origin: new THREE.Vector3().setFromMatrixPosition(matrix), rotation: rotationOf(matrix), point: path.points[0] };
         store().setPenTool(DRAWING);
         store().removeEntity([id]);
       }
@@ -283,7 +319,7 @@ export function useViewportPenTool(
         const handle = toTuple(handleToLocal(hit, anchorWorld, drawn.matrix));
         if (drawn.id) {
           const id = drawn.id;
-          write(() => store().updatePath(id, dragOutHandles(drawn.path, index, handle)));
+          write(() => writeDrawn(id, dragOutHandles(drawn.path, index, handle)));
         } else if (draft) {
           draft.point = dragOutHandles(drawn.path, 0, handle).points[0];
         }
@@ -312,8 +348,10 @@ export function useViewportPenTool(
       const at = new THREE.Vector2(event.clientX, event.clientY);
 
       if (!drawn) {
-        const origin = orbitTarget();
-        draft = { origin, point: appendPoint({ points: [], closed: false }, toTuple(hit.clone().sub(origin))).points[0] };
+        // The shape's own Z (it's flat in its XY plane) faces the plane's way.
+        const placed = { origin: orbitTarget(), rotation: new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), plane!.normal) };
+        const local = toLocal(hit, draftMatrix(placed)).setZ(0);
+        draft = { ...placed, point: appendPoint({ points: [], closed: false }, toTuple(local)).points[0] };
         gesture = dragHandlesGesture(at, 0, hit);
         return true;
       }
@@ -321,10 +359,10 @@ export function useViewportPenTool(
       const { path, matrix, id } = drawn;
       const end = endAt(drawn, at);
 
-      // The first point closes the path (a drag there shapes its handles), the last one finishes it.
+      // The first point closes the outline (a drag there shapes its handles), the last one finishes it.
       if (id && end?.closes) {
         gesture = dragHandlesGesture(at, 0, pointWorld(path.points[0], matrix), finishPath);
-        write(() => store().updatePath(id, { ...path, closed: true }));
+        write(() => writeDrawn(id, { ...path, closed: true }));
         return true;
       }
       if (end) {
@@ -335,14 +373,15 @@ export function useViewportPenTool(
       const next = appendPoint(path, toTuple(toLocal(hit, matrix)));
       if (id) {
         gesture = dragHandlesGesture(at, next.points.length - 1, hit);
-        write(() => store().updatePath(id, next));
+        write(() => writeDrawn(id, next));
       } else if (draft) {
-        // The second point makes the path.
-        const origin = draft.origin;
+        // The second point makes the shape.
+        const { origin, rotation } = draft;
         draft = null;
         gesture = dragHandlesGesture(at, 1, hit);
         write(() => {
-          const pathId = store().addPath(toTuple(origin), next);
+          const euler = new THREE.Euler().setFromQuaternion(rotation, "XYZ");
+          const pathId = store().addShape(toTuple(origin), [euler.x, euler.y, euler.z], next);
           store().setPenTool({ ...DRAWING, pathId });
         });
       }
@@ -637,7 +676,7 @@ export function useViewportPenTool(
       () => {
         const pen = store().penTool;
         if (!pen?.pathId) return;
-        const editable = pen.mode === "draw" ? (findPath(pen.pathId) && findEditable(pen.pathId)) : findEditable(pen.pathId);
+        const editable = pen.mode === "draw" ? (findDrawn(pen.pathId) && findEditable(pen.pathId)) : findEditable(pen.pathId);
         if (!editable) {
           if (pen.mode === "draw") finishPath();
           else store().setPenTool(null);
@@ -659,7 +698,10 @@ export function useViewportPenTool(
     );
     const unsubscribePen = useEditorStore.subscribe(
       (state) => state.penTool,
-      (pen) => {
+      (pen, previous) => {
+        // Backspace back to the lone first point removes the shape straight after, so it's gone by then.
+        const finished = previous?.mode === "draw" && previous.pathId !== pen?.pathId ? previous.pathId : null;
+        if (finished) queueMicrotask(() => closeDrawn(finished));
         if (pen?.mode !== "draw") {
           draft = null;
           plane = null;
