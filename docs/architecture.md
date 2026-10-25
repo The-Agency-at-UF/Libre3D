@@ -108,7 +108,9 @@ grid: InfiniteGrid           // public — shader-drawn infinite XZ grid (X axis
 
 updateBackground(color: string)
 updateFog(enabled: boolean, color: string)
-updateLightIntensity(intensity: number)
+updateLightIntensity(intensity: number)        // the ambient light, used while the environment is off
+updateEnvironment(enabled: boolean, intensity: number)
+setEnvironmentMap(map: THREE.Texture | null)   // made by ViewportCanvas once the renderer exists (sceneEnvironment.ts)
 updateGridVisibility(visible: boolean)
 dispose()
 ```
@@ -208,7 +210,7 @@ addEntity("cube");
 | **The scene** | `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId`, `animation`, `viewedStates` (`selectSceneContent`) | autosave, to the cloud per scene (`/api/scenes/:id`) | a versioned scene document, `utils/sceneDocument.ts` |
 | **Editor preferences** | transform tool and space, projection, HUD, zoom | `persist`, to this browser's localStorage | persist's own `version` + `migrate` |
 
-A new field on an entity is saved automatically (it's part of `entities`). A new value a state can set is not: state values are copied only as far as the running build knows them (`cloneStateValues`), so it needs a schema bump, as a path's trim did (v3). A new top-level piece of the scene (as `animation` was) goes into `SceneContent`, `selectSceneContent`, and `loadScene`, and into the document as its own section. Selection, preview state, and undo history are neither: they last only while the editor is open.
+A new field on an entity is saved automatically (it's part of `entities`). A new value a state can set is not: state values are copied only as far as the running build knows them (`cloneStateValues`), so it needs a schema bump, as a path's trim did (v3). So does a new setting whose default shouldn't apply to scenes saved before it: `loadScene` fills a missing setting with its default, so the migration writes the old behaviour in (the environment light, v4). A new top-level piece of the scene (as `animation` was) goes into `SceneContent`, `selectSceneContent`, and `loadScene`, and into the document as its own section. Selection, preview state, and undo history are neither: they last only while the editor is open.
 
 **Object states** (`animation.states`, logic in `animation/objectStates.ts`) hold only the values they change over an object's own (its Base State). Each object can be shown in one of its states (`viewedStates`, entity ID → state ID), which stays when it's deselected and is saved with the scene, but isn't undoable or blocked in view only. Showing a state never writes the entity: after every sync `ViewportCanvas` puts each such object's Three object in its state with `ObjectManager.applyPose`, so the raycaster, the selection outline, and the gizmo follow it. Transform edits (inspector and gizmo, multi-select included) go through `updateShownTransforms`, which sends each object's to the state it's shown in, or to Base. Exports and the gallery thumbnail put every object back in Base (`showBasePoses`), next to hiding `editorOnly` objects.
 

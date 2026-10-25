@@ -299,8 +299,11 @@ Update background color, grid, fog, lighting, physics, etc.
 - `wireframe`: Render all objects in wireframe mode
 - `fogEnabled`: Enable atmospheric fog
 - `showAxisGuides`: Show red/green/blue axis highlights
+- **environment** (nested): image-based light from a generated room (`viewport/sceneEnvironment.ts`), for Physical materials. Replaces the ambient light while on. New scenes start with it on; scenes saved before scene document v4 open with it off.
+  - `enabled`: Light the scene with the environment
+  - `intensity`: Its strength (0-2, default 1), `scene.environmentIntensity`
 - **lights** (nested):
-  - `intensity`: Ambient light strength (0-2)
+  - `intensity`: Ambient light strength (0-2); the ambient light is off while the environment is on
   - `color`: Hex color
   - `ambientEnabled`: Enable ambient light
   - `directionalEnabled`: Enable default directional light
@@ -403,6 +406,8 @@ Replace an entity's entire layer stack.
   model: "none" | "lambert" | "phong" | "physical" | "toon";
   roughness: number; // 0-1, for physical
   metalness: number; // 0-1, for physical
+  clearcoat?: number; // 0-1, for physical: above 0 builds a MeshPhysicalMaterial (KHR_materials_clearcoat in a GLB)
+  clearcoatRoughness?: number; // 0-1
   shininess: number; // for phong
   emissive: string; // hex color
   emissiveIntensity: number;

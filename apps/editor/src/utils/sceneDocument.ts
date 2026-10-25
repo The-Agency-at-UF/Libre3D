@@ -16,7 +16,9 @@
  * - New data goes in its own optional top-level section (as `animation` did in v2), not inside
  *   entities. New optional fields on entities or settings don't need one: they're copied whole.
  *   New values a state can set do (as a path's trim did in v3): a state's values are copied only
- *   as far as the build knows them (objectStates.ts, cloneStateValues).
+ *   as far as the build knows them (objectStates.ts, cloneStateValues). So does a new setting whose
+ *   default shouldn't apply to older scenes (the environment light, v4): the migration writes the
+ *   old behaviour in.
  * - Adding a section or a state value bumps `CURRENT_SCENE_SCHEMA_VERSION` and adds a migration.
  *   Old documents upgrade on read; nothing breaks.
  * - A document newer than this build is refused rather than loaded: otherwise a tab still running an
@@ -38,7 +40,7 @@ import type {
 } from "../store/useEditorStore";
 
 export const SCENE_DOCUMENT_FORMAT = "libre3d.scene";
-export const CURRENT_SCENE_SCHEMA_VERSION = 3;
+export const CURRENT_SCENE_SCHEMA_VERSION = 4;
 
 /** The parts of the editor state that make up a scene. */
 export interface SceneContent {
@@ -83,6 +85,17 @@ const migrations: Record<number, (document: any) => any> = {
   // v3 lets a state set a path's trim. A v2 build would drop it on load (it copies only the state
   // values it knows) and then autosave without it, so it has to refuse v3 instead. Nothing to fill in.
   2: (document) => document,
+  // v4 lights new scenes with an environment (sceneSettings.environment, on by default). Scenes from
+  // before keep the look they were made with: loadScene would otherwise fill in the new default.
+  3: (document) => {
+    const scene = document?.scene;
+    if (!isPlainObject(scene) || !isPlainObject(scene.sceneSettings)) return document;
+    const environment = isPlainObject(scene.sceneSettings.environment) ? scene.sceneSettings.environment : {};
+    return {
+      ...document,
+      scene: { ...scene, sceneSettings: { ...scene.sceneSettings, environment: { enabled: false, ...environment } } },
+    };
+  },
 };
 
 export const toSceneDocument = (content: SceneContent): SceneDocument => ({

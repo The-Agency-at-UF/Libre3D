@@ -31,6 +31,7 @@ const makeContent = (): SceneContent => ({
     showGrid: true,
     wireframe: false,
     fogEnabled: false,
+    environment: { enabled: true, intensity: 0.8 },
     lights: { intensity: 1, color: "#ffffff", ambientEnabled: true, directionalEnabled: true, shadow: "Soft" },
     physics: { enabled: false, gravityY: -9.8, collisionType: "Mesh" },
   },
@@ -119,6 +120,20 @@ describe("toSceneDocument / parseSceneDocument", () => {
 
     expect(parsed).toEqual(parseSceneDocument(toSceneDocument(content)));
     expect(parsed.ok && parsed.content.animation?.states).toEqual(content.animation.states);
+  });
+
+  it("opens a v3 document (from before the environment light) with the environment off", () => {
+    const { environment: _environment, ...v3Settings } = makeContent().sceneSettings;
+    const content = { ...makeContent(), sceneSettings: v3Settings };
+    const parsed = parseSceneDocument({ ...toSceneDocument(content as SceneContent), schemaVersion: 3 });
+
+    expect(parsed.ok && parsed.content.sceneSettings).toEqual({ ...v3Settings, environment: { enabled: false } });
+  });
+
+  it("keeps an environment setting an older document already has", () => {
+    const parsed = parseSceneDocument({ ...toSceneDocument(makeContent()), schemaVersion: 3 });
+
+    expect(parsed.ok && parsed.content.sceneSettings?.environment).toEqual({ enabled: true, intensity: 0.8 });
   });
 
   it("keeps a state's trim", () => {
