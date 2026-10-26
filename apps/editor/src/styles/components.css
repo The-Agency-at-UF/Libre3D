@@ -846,6 +846,48 @@
   color: #ffffff;
 }
 
+/* The pen's menu: what it draws (FloatingToolbar) */
+.pen-menu {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 100;
+  min-width: 120px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.pen-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  padding: 6px 10px 6px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+
+.pen-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.pen-menu-check {
+  display: flex;
+  width: 12px;
+}
+
 /* Bottom Overlays */
 .viewport-bottom-overlays {
   position: absolute;

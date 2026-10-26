@@ -141,9 +141,10 @@ export interface Entity {
 }
 
 /**
- * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new paths ("draw") or editing one
- * path's or shape's points ("edit"). `pathId` is the path being drawn (null while the pen is on
- * between paths) or the path or shape edited; `selectedPoint` is the edited path's picked point, an
+ * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new shapes or paths ("draw") or editing
+ * one path's or shape's points ("edit"). While drawing, `draws` is what it draws: a filled shape (the
+ * default) or a tube path. `pathId` is the shape or path being drawn (null while the pen is on
+ * between them) or the path or shape edited; `selectedPoint` is the edited path's picked point, an
  * index into its points. A shape has several closed outlines (paths/shapeGeometry.ts's
  * shapeContours): `contour` is the one being edited, which `selectedPoint` is in (0 when missing).
  */
@@ -152,6 +153,7 @@ export interface PenToolState {
   pathId: string | null;
   selectedPoint: number | null;
   contour?: number;
+  draws?: "shape" | "path";
 }
 
 export interface ImportNodeSpec {
@@ -381,6 +383,9 @@ export interface EditorState {
   // `rotation`), its origin at `origin`. Filled in the default shape colour from both sides, like an
   // imported one. Selected, like addEntity. Returns its ID.
   addShape: (origin: [number, number, number], rotation: [number, number, number], outline: PathData) => string;
+  // A path the pen tool drew (the Path pen), its origin at `origin` and its points relative to it.
+  // Selected, like addEntity. Returns its ID.
+  addPath: (origin: [number, number, number], path: PathData) => string;
   // Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
   // the path, not to a state, so this changes them in every state.
   updatePath: (id: string, path: PathData) => void;
@@ -572,7 +577,7 @@ const createEntity = (type: EntityType): Entity => ({
     : type === "group"
       ? null // groups are pure transform pivots — no material, no color
       : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
-  // The Add menu's path is a sample curve.
+  // The Add menu's path is a sample curve; the Path pen draws its own (addPath).
   ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
   visible: true,
   locked: false,
@@ -1248,6 +1253,15 @@ export const useEditorStore = create<EditorState>()(
                 shape: flattenShape({ regions: [{ outline, holes: [] }] }),
                 materialLayers: [{ ...createColorLayer(ENTITY_DEFAULTS.shape.color, 1), doubleSided: true }, createLightingLayer()],
               };
+              newId = entity.id;
+              return { entities: [...state.entities, entity], selectedEntityIds: [entity.id] };
+            });
+            return newId;
+          },
+          addPath: (origin, path) => {
+            let newId = "";
+            set((state) => {
+              const entity: Entity = { ...createEntity("path"), position: cloneVector(origin), path: clonePath(path) };
               newId = entity.id;
               return { entities: [...state.entities, entity], selectedEntityIds: [entity.id] };
             });

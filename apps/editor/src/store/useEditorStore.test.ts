@@ -795,6 +795,22 @@ describe("paths", () => {
     expect(useEditorStore.getState().entities.some((e) => e.id === shapeId)).toBe(false);
   });
 
+  it("adds a drawn path at its origin, selected, in one undo step", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+    const corner = (position: [number, number, number]): PathPoint => ({ position, handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "corner" });
+    const drawn: PathData = { points: [corner([0, 0, 0]), corner([1, 1, 0])], closed: false };
+
+    const pathId = useEditorStore.getState().addPath([0, 1, 2], drawn);
+    const added = useEditorStore.getState().entities.find((e) => e.id === pathId)!;
+
+    expect(added).toMatchObject({ type: "path", position: [0, 1, 2], path: drawn, trimStart: 0, trimEnd: 1 });
+    expect(added.path!.points[1].position).not.toBe(drawn.points[1].position);
+    expect(useEditorStore.getState().selectedEntityIds).toEqual([pathId]);
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().entities.some((e) => e.id === pathId)).toBe(false);
+  });
+
   it("replaces a path's points in one undo step, for every state", async () => {
     const { useEditorStore, pathId, path } = await storeWithPath();
     const before = path().path!;
@@ -817,6 +833,7 @@ describe("paths", () => {
     useEditorStore.getState().setReadOnly("openElsewhere");
 
     useEditorStore.getState().addShape([0, 0, 0], [0, 0, 0], path().path!);
+    useEditorStore.getState().addPath([0, 0, 0], path().path!);
     useEditorStore.getState().updatePath(pathId, { ...path().path!, closed: true });
 
     expect(useEditorStore.getState().entities).toBe(before);
