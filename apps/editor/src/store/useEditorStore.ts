@@ -48,7 +48,7 @@ export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "direc
  */
 export type ReadOnlyReason = "openElsewhere";
 
-export type MaterialLayerType = "color" | "lighting" | "image";
+export type MaterialLayerType = "color" | "lighting" | "image" | "depth";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
 
 // Which glTF texture channel an ImageLayer feeds. "metallicRoughness" is a
@@ -109,7 +109,31 @@ export interface ImageLayer {
   wrapT: number;
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer;
+// Colours the object by distance (like Spline's Depth layer, Vector origin, Local): each vertex's
+// distance from `origin` in the object's own space, straight out ("radial") or along `direction`
+// ("linear"), is placed on the ramp between `near` (its first stop) and `far` (its last). It's
+// painted as vertex colours (utils/depthColors.ts), so it exports and publishes; over the Color
+// layer's colour by `opacity`. At most one per object.
+export interface DepthStop {
+  color: string;
+  position: number; // 0-1 along the ramp
+}
+
+export interface DepthLayer {
+  id: string;
+  type: "depth";
+  enabled: boolean;
+  opacity: number;
+  gradientType: "radial" | "linear";
+  origin: [number, number, number];
+  direction: [number, number, number]; // only meaningful when gradientType === "linear"
+  near: number;
+  far: number;
+  stops: DepthStop[]; // 2-10
+  smooth: boolean; // eased blends between stops
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer;
 
 export interface Entity {
   id: string;
@@ -141,9 +165,10 @@ export interface Entity {
 }
 
 /**
- * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new paths ("draw") or editing one
- * path's or shape's points ("edit"). `pathId` is the path being drawn (null while the pen is on
- * between paths) or the path or shape edited; `selectedPoint` is the edited path's picked point, an
+ * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new shapes or paths ("draw") or editing
+ * one path's or shape's points ("edit"). While drawing, `draws` is what it draws: a filled shape (the
+ * default) or a tube path. `pathId` is the shape or path being drawn (null while the pen is on
+ * between them) or the path or shape edited; `selectedPoint` is the edited path's picked point, an
  * index into its points. A shape has several closed outlines (paths/shapeGeometry.ts's
  * shapeContours): `contour` is the one being edited, which `selectedPoint` is in (0 when missing).
  */
@@ -152,6 +177,7 @@ export interface PenToolState {
   pathId: string | null;
   selectedPoint: number | null;
   contour?: number;
+  draws?: "shape" | "path";
 }
 
 export interface ImportNodeSpec {
@@ -381,6 +407,9 @@ export interface EditorState {
   // `rotation`), its origin at `origin`. Filled in the default shape colour from both sides, like an
   // imported one. Selected, like addEntity. Returns its ID.
   addShape: (origin: [number, number, number], rotation: [number, number, number], outline: PathData) => string;
+  // A path the pen tool drew (the Path pen), its origin at `origin` and its points relative to it.
+  // Selected, like addEntity. Returns its ID.
+  addPath: (origin: [number, number, number], path: PathData) => string;
   // Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
   // the path, not to a state, so this changes them in every state.
   updatePath: (id: string, path: PathData) => void;
@@ -405,6 +434,11 @@ export interface EditorState {
   // during a ▶ preview, and while view only.
   penTool: PenToolState | null;
   setPenTool: (penTool: PenToolState | null) => void;
+  // Editing an object's Depth layer in the viewport (useViewportDepthGizmo): its handles show, and
+  // the transform gizmo moves the layer's origin instead of the object. The object's ID, or null.
+  // Not saved and not undoable; off like the pen, and the pen and it end each other.
+  depthEdit: string | null;
+  setDepthEdit: (entityId: string | null) => void;
   projectionMode: "perspective" | "orthographic";
   transformSpace: "world" | "local";
 
@@ -522,6 +556,30 @@ const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
   color,
 });
 
+export const createDepthLayer = (): DepthLayer => ({
+  id: createEntityId(),
+  type: "depth",
+  enabled: true,
+  opacity: 1,
+  gradientType: "radial",
+  origin: [0, 0, 0],
+  direction: [1, 0, 0],
+  near: 0,
+  far: 2,
+  stops: [
+    { color: "#ff3b30", position: 0 },
+    { color: "#ffcc00", position: 0.5 },
+    { color: "#af52de", position: 1 },
+  ],
+  smooth: false,
+});
+
+// A copy that shares nothing with `layer` (a Depth layer holds arrays).
+export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer =>
+  layer.type === "depth"
+    ? { ...layer, origin: cloneVector(layer.origin), direction: cloneVector(layer.direction), stops: layer.stops.map((stop) => ({ ...stop })) }
+    : { ...layer };
+
 const createLightingLayer = (overrides: Partial<LightingLayer> = {}): LightingLayer => ({
   id: createEntityId(),
   type: "lighting",
@@ -572,7 +630,7 @@ const createEntity = (type: EntityType): Entity => ({
     : type === "group"
       ? null // groups are pure transform pivots — no material, no color
       : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
-  // The Add menu's path is a sample curve.
+  // The Add menu's path is a sample curve; the Path pen draws its own (addPath).
   ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
   visible: true,
   locked: false,
@@ -625,7 +683,7 @@ const cloneEntity = (entity: Entity): Entity => ({
   scale: cloneVector(entity.scale),
   visible: entity.visible ?? true,
   locked: entity.locked ?? false,
-  ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map((layer) => ({ ...layer })) } : null),
+  ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map(cloneMaterialLayer) } : null),
   ...(entity.path ? { path: clonePath(entity.path) } : null),
   ...(entity.stroke ? { stroke: { ...entity.stroke } } : null),
   ...(entity.shape ? { shape: cloneShape(entity.shape) } : null),
@@ -1253,6 +1311,15 @@ export const useEditorStore = create<EditorState>()(
             });
             return newId;
           },
+          addPath: (origin, path) => {
+            let newId = "";
+            set((state) => {
+              const entity: Entity = { ...createEntity("path"), position: cloneVector(origin), path: clonePath(path) };
+              newId = entity.id;
+              return { entities: [...state.entities, entity], selectedEntityIds: [entity.id] };
+            });
+            return newId;
+          },
           updatePath: (id, path) =>
             set((state) => {
               const target = state.entities.find((entity) => entity.id === id);
@@ -1329,7 +1396,7 @@ export const useEditorStore = create<EditorState>()(
                     ...cloneEntity(asPath(path)),
                     id: createEntityId(),
                     name: `${entity.name} (${i + 2})`,
-                    materialLayers: entity.materialLayers?.map((layer) => ({ ...layer, id: createEntityId() })),
+                    materialLayers: entity.materialLayers?.map((layer) => ({ ...cloneMaterialLayer(layer), id: createEntityId() })),
                   })),
                 ];
               }),
@@ -1346,7 +1413,16 @@ export const useEditorStore = create<EditorState>()(
           // Playing and view only are for looking, so the pen doesn't turn on then.
           setPenTool: (penTool) =>
             set((state) =>
-              penTool && (state.readOnlyReason || state.isPreviewMode || state.previewingActionId) ? state : { penTool },
+              penTool && (state.readOnlyReason || state.isPreviewMode || state.previewingActionId)
+                ? state
+                : { penTool, ...(penTool ? { depthEdit: null } : null) },
+            ),
+          depthEdit: null,
+          setDepthEdit: (entityId) =>
+            set((state) =>
+              entityId && (state.readOnlyReason || state.isPreviewMode || state.previewingActionId)
+                ? state
+                : { depthEdit: entityId, ...(entityId ? { penTool: null } : null) },
             ),
 
           sceneSettings: initialSceneDefaults,
@@ -1360,13 +1436,13 @@ export const useEditorStore = create<EditorState>()(
           // Play Mode / Preview
           isPreviewMode: false,
           // Play takes over from a ▶ preview, which doesn't come back after Stop. Both end the pen.
-          setPreviewMode: (active) => set({ isPreviewMode: active, previewingActionId: null, ...(active ? { penTool: null } : null) }),
+          setPreviewMode: (active) => set({ isPreviewMode: active, previewingActionId: null, ...(active ? { penTool: null, depthEdit: null } : null) }),
           previewingActionId: null,
-          setPreviewingAction: (actionId) => set({ previewingActionId: actionId, ...(actionId ? { penTool: null } : null) }),
+          setPreviewingAction: (actionId) => set({ previewingActionId: actionId, ...(actionId ? { penTool: null, depthEdit: null } : null) }),
 
           readOnlyReason: null,
           setReadOnly: (reason) => {
-            api.setState({ readOnlyReason: reason, ...(reason ? { penTool: null } : null) });
+            api.setState({ readOnlyReason: reason, ...(reason ? { penTool: null, depthEdit: null } : null) });
 
             if (reason) {
               // There's nothing to undo into: the scene can't change here, and it's reloaded from
@@ -1502,7 +1578,9 @@ export const useEditorStore = create<EditorState>()(
                 const newLayer: MaterialLayer =
                   layerType === "color"
                     ? createColorLayer(colorLayer?.color ?? "#ffffff")
-                    : createLightingLayer();
+                    : layerType === "depth"
+                      ? createDepthLayer()
+                      : createLightingLayer();
 
                 return {
                   ...entity,
@@ -1587,6 +1665,7 @@ export const useEditorStore = create<EditorState>()(
               isPreviewMode: false,
               previewingActionId: null,
               penTool: null,
+              depthEdit: null,
             });
 
             // The editor no longer reloads the page between scenes, so history would otherwise

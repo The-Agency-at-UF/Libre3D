@@ -1,6 +1,6 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useEditorStore } from "../store/useEditorStore";
-import { TranslateIcon, RotateIcon, ScaleIcon, PenIcon, PlusIcon } from "./ui/Icons";
+import { TranslateIcon, RotateIcon, ScaleIcon, PenIcon, PathIcon, CheckIcon, PlusIcon } from "./ui/Icons";
 import { prepareModelImport } from "../utils/importModel";
 import { importSvgFile, isSvgFile } from "../utils/importSvg";
 
@@ -23,12 +23,25 @@ export function FloatingToolbar({
   const activeTransformTool = useEditorStore((state) => state.activeTransformTool);
   const transformSpace = useEditorStore((state) => state.transformSpace);
   const isDrawing = useEditorStore((state) => state.penTool?.mode === "draw");
+  const draws = useEditorStore((state) => (state.penTool?.mode === "draw" ? (state.penTool.draws ?? "shape") : null));
   const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
   const setEditorState = useEditorStore((state) => state.setEditorState);
   const setPenTool = useEditorStore((state) => state.setPenTool);
   const addEntity = useEditorStore((state) => state.addEntity);
   const addImportedModelHierarchy = useEditorStore((state) => state.addImportedModelHierarchy);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isPenMenuOpen, setIsPenMenuOpen] = useState(false);
+  const penMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // A press anywhere outside the pen menu closes it.
+  useEffect(() => {
+    if (!isPenMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!penMenuRef.current?.contains(event.target as Node)) setIsPenMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [isPenMenuOpen]);
 
   const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -83,16 +96,43 @@ export function FloatingToolbar({
         <ScaleIcon />
       </button>
 
-      {/* Pen: draws paths (useViewportPenTool). Not while view only. */}
-      <button
-        className={`toolbar-btn ${isDrawing ? "active-translate" : ""}`}
-        type="button"
-        title="Pen (P)"
-        disabled={isReadOnly}
-        onClick={() => setPenTool(isDrawing ? null : { mode: "draw", pathId: null, selectedPoint: null })}
-      >
-        <PenIcon />
-      </button>
+      {/* Pen: a menu of what it draws, filled shapes (Pen) or tube paths (Path) (useViewportPenTool).
+          Picking the one that's on puts the pen down. Not while view only. */}
+      <div ref={penMenuRef} style={{ position: "relative", display: "inline-block" }}>
+        <button
+          className={`toolbar-btn ${isDrawing ? "active-translate" : ""}`}
+          type="button"
+          title="Pen (P)"
+          disabled={isReadOnly}
+          onClick={() => setIsPenMenuOpen(!isPenMenuOpen)}
+        >
+          {draws === "path" ? <PathIcon /> : <PenIcon />}
+        </button>
+        {isPenMenuOpen && !isReadOnly && (
+          <div className="pen-menu">
+            {(
+              [
+                { kind: "shape", label: "Pen", icon: <PenIcon /> },
+                { kind: "path", label: "Path", icon: <PathIcon /> },
+              ] as const
+            ).map(({ kind, label, icon }) => (
+              <button
+                key={kind}
+                className="pen-menu-item"
+                type="button"
+                onClick={() => {
+                  setPenTool(draws === kind ? null : { mode: "draw", pathId: null, selectedPoint: null, draws: kind });
+                  setIsPenMenuOpen(false);
+                }}
+              >
+                <span className="pen-menu-check">{draws === kind && <CheckIcon />}</span>
+                {icon}
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div style={{ width: "1px", background: "rgba(255, 255, 255, 0.15)", margin: "4px 2px" }}></div>
 

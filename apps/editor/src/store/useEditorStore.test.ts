@@ -795,6 +795,22 @@ describe("paths", () => {
     expect(useEditorStore.getState().entities.some((e) => e.id === shapeId)).toBe(false);
   });
 
+  it("adds a drawn path at its origin, selected, in one undo step", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+    const corner = (position: [number, number, number]): PathPoint => ({ position, handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "corner" });
+    const drawn: PathData = { points: [corner([0, 0, 0]), corner([1, 1, 0])], closed: false };
+
+    const pathId = useEditorStore.getState().addPath([0, 1, 2], drawn);
+    const added = useEditorStore.getState().entities.find((e) => e.id === pathId)!;
+
+    expect(added).toMatchObject({ type: "path", position: [0, 1, 2], path: drawn, trimStart: 0, trimEnd: 1 });
+    expect(added.path!.points[1].position).not.toBe(drawn.points[1].position);
+    expect(useEditorStore.getState().selectedEntityIds).toEqual([pathId]);
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().entities.some((e) => e.id === pathId)).toBe(false);
+  });
+
   it("replaces a path's points in one undo step, for every state", async () => {
     const { useEditorStore, pathId, path } = await storeWithPath();
     const before = path().path!;
@@ -817,6 +833,7 @@ describe("paths", () => {
     useEditorStore.getState().setReadOnly("openElsewhere");
 
     useEditorStore.getState().addShape([0, 0, 0], [0, 0, 0], path().path!);
+    useEditorStore.getState().addPath([0, 0, 0], path().path!);
     useEditorStore.getState().updatePath(pathId, { ...path().path!, closed: true });
 
     expect(useEditorStore.getState().entities).toBe(before);
@@ -1098,5 +1115,76 @@ describe("pen tool", () => {
     useEditorStore.getState().setPenTool(drawing);
     useEditorStore.getState().loadScene(null);
     expect(useEditorStore.getState().penTool).toBeNull();
+  });
+});
+
+describe("depth layers", () => {
+  const storeWithCube = async () => {
+    const { useEditorStore, createDepthLayer } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+    const cubeId = useEditorStore.getState().addEntity("cube");
+    const cube = () => useEditorStore.getState().entities.find((e) => e.id === cubeId)!;
+    const depthOf = () => cube().materialLayers!.find((layer) => layer.type === "depth");
+    return { useEditorStore, createDepthLayer, cubeId, cube, depthOf };
+  };
+
+  it("adds one Depth layer per object, removable, in one undo step each", async () => {
+    const { useEditorStore, cubeId, cube, depthOf } = await storeWithCube();
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+
+    expect(cube().materialLayers!.filter((layer) => layer.type === "depth")).toHaveLength(1);
+    expect(depthOf()).toMatchObject({ type: "depth", enabled: true, gradientType: "radial", near: 0, far: 2 });
+    useEditorStore.getState().removeMaterialLayer(cubeId, depthOf()!.id);
+    expect(depthOf()).toBeUndefined();
+    useEditorStore.temporal.getState().undo();
+    expect(depthOf()).toBeDefined();
+  });
+
+  it("gives a duplicate its own copy of the origin and stops", async () => {
+    const { useEditorStore, cubeId, depthOf } = await storeWithCube();
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+
+    useEditorStore.getState().duplicateEntity([cubeId]);
+    const copy = useEditorStore.getState().entities.at(-1)!.materialLayers!.find((layer) => layer.type === "depth")!;
+
+    expect(copy).toEqual(depthOf());
+    expect(copy.type === "depth" && copy.origin).not.toBe(depthOf()!.type === "depth" && depthOf()!.origin);
+    expect(copy.type === "depth" && copy.stops[0]).not.toBe(depthOf()!.type === "depth" && depthOf()!.stops[0]);
+  });
+
+  it("is edited in the viewport in a mode the pen, Play and view only end", async () => {
+    const { useEditorStore, cubeId } = await storeWithCube();
+    const pen = { mode: "draw" as const, pathId: null, selectedPoint: null };
+
+    useEditorStore.getState().setPenTool(pen);
+    useEditorStore.getState().setDepthEdit(cubeId);
+    expect(useEditorStore.getState()).toMatchObject({ depthEdit: cubeId, penTool: null });
+    useEditorStore.getState().setPenTool(pen);
+    expect(useEditorStore.getState().depthEdit).toBeNull();
+
+    useEditorStore.getState().setDepthEdit(cubeId);
+    useEditorStore.getState().setPreviewMode(true);
+    expect(useEditorStore.getState().depthEdit).toBeNull();
+    useEditorStore.getState().setDepthEdit(cubeId);
+    expect(useEditorStore.getState().depthEdit).toBeNull(); // not while playing
+    useEditorStore.getState().setPreviewMode(false);
+
+    useEditorStore.getState().setDepthEdit(cubeId);
+    useEditorStore.getState().setReadOnly("openElsewhere");
+    expect(useEditorStore.getState().depthEdit).toBeNull();
+    useEditorStore.getState().setDepthEdit(cubeId);
+    expect(useEditorStore.getState().depthEdit).toBeNull();
+  });
+
+  it("can't be added in a view-only tab", async () => {
+    const { useEditorStore, cubeId } = await storeWithCube();
+    const before = useEditorStore.getState().entities;
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+
+    expect(useEditorStore.getState().entities).toBe(before);
   });
 });

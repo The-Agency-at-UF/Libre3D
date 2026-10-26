@@ -22,6 +22,7 @@ import { DEFAULT_STROKE, type PathData } from "../paths/pathGeometry";
 import { ShapeMesh } from "../paths/ShapeMesh";
 import type { ShapeData, ShapeSolid } from "../paths/shapeGeometry";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { depthPaintOf, syncDepthColors } from "../utils/depthColors";
 
 type LayeredMaterial =
   | THREE.MeshBasicMaterial
@@ -148,6 +149,36 @@ export class ObjectManager {
     this.applyImageLayers(material, layers);
 
     return material;
+  }
+
+  // A Depth layer (utils/depthColors.ts) is the mesh's vertex colours, which already hold the Color
+  // layer's colour under it, so the material's colour is white while it's on. Whether the material
+  // used vertex colours before (an imported model's own) comes back when the layer goes.
+  private applyDepthLayer(mesh: THREE.Mesh, entity: Entity): void {
+    const paint = depthPaintOf(entity.materialLayers);
+    const key = paint ? JSON.stringify(paint) : null;
+    if (mesh instanceof PathMesh) {
+      mesh.setDepthPaint(paint, key);
+    } else {
+      // An imported mesh's geometry can be shared with other copies of the model: paint its own.
+      if (paint && entity.type === "importedModel" && !mesh.geometry.userData.depthOwned) {
+        mesh.geometry = mesh.geometry.clone();
+        mesh.geometry.userData.depthOwned = true;
+      }
+      syncDepthColors(mesh.geometry, paint, key);
+    }
+
+    const material = mesh.material as LayeredMaterial;
+    if (paint) {
+      material.userData.vertexColorsBeforeDepth ??= material.vertexColors;
+      material.color.set("#ffffff");
+    }
+    const vertexColors: boolean = paint ? true : (material.userData.vertexColorsBeforeDepth ?? material.vertexColors);
+    if (!paint) delete material.userData.vertexColorsBeforeDepth;
+    if (material.vertexColors !== vertexColors) {
+      material.vertexColors = vertexColors;
+      material.needsUpdate = true;
+    }
   }
 
   // The material property (or properties) each ImageLayer slot feeds. The glTF
@@ -845,6 +876,7 @@ export class ObjectManager {
         this.applyLightingProperties(material, lightingLayer, model);
         this.applyImageLayers(material, entity.materialLayers);
       }
+      this.applyDepthLayer(obj, entity);
     } else if (obj instanceof THREE.DirectionalLight) {
       obj.color.set(entity.color ?? "#ffffff");
       if (obj.userData.helper) {
@@ -906,6 +938,7 @@ export class ObjectManager {
         if (isPendingImportNode) continue;
 
         const obj = this.createSceneObject(entity);
+        if (obj instanceof THREE.Mesh && entity.materialLayers) this.applyDepthLayer(obj, entity);
         obj.userData.entityId = entity.id;
         obj.userData.entityType = entity.type;
         obj.userData.locked = isEffectivelyLocked(entities, entity.id);

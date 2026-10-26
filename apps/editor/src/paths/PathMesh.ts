@@ -8,7 +8,9 @@
  * follows the trim: Mesh.raycast only tests the draw range, and a hidden cap isn't hit.
  *
  * The material belongs to whoever made the mesh (ObjectManager): after replacing `material`, call
- * `shareMaterialWithCaps`. Nothing here depends on the store, React, or the DOM.
+ * `shareMaterialWithCaps`. `setDepthPaint` paints a Depth layer as vertex colours (utils/depthColors.ts)
+ * on the tube and on each cap where it sits, again whenever a rebuild or the trim moves them.
+ * Nothing here depends on the store, React, or the DOM.
  */
 
 import * as THREE from "three";
@@ -24,6 +26,7 @@ import {
   type PathData,
   type PathStroke,
 } from "./pathGeometry";
+import { clearDepthColors, paintDepthColors, syncDepthColors, type DepthPaint } from "../utils/depthColors";
 
 // Raycasting doesn't look at `visible`, so a cap hidden at zero length would still be clickable.
 class CapMesh extends THREE.Mesh {
@@ -46,21 +49,21 @@ export class PathMesh extends THREE.Mesh {
   private trim: [number, number] = [0, 1];
   private readonly startCap: CapMesh;
   private readonly endCap: CapMesh;
+  private depthPaint: { paint: DepthPaint; key: string } | null = null;
 
   constructor(path: PathData, stroke: PathStroke, material: THREE.Material) {
     super(createEmptyGeometry(), material);
     this.path = path;
     this.stroke = stroke;
     this.startCap = new CapMesh(createEmptyGeometry(), material);
-    this.endCap = new CapMesh(this.startCap.geometry, material);
+    this.endCap = new CapMesh(createEmptyGeometry(), material);
     this.add(this.startCap, this.endCap);
     this.rebuild(path, stroke);
   }
 
   /** Builds the tube and caps again for a new path or stroke, keeping the trim. */
   rebuild(path: PathData, stroke: PathStroke): void {
-    this.geometry.dispose();
-    this.startCap.geometry.dispose();
+    this.disposeGeometry();
     this.path = path;
     this.stroke = stroke;
     this.closed = path.closed;
@@ -71,10 +74,11 @@ export class PathMesh extends THREE.Mesh {
     this.geometry = this.tube ?? createEmptyGeometry();
     this.geometry.computeBoundingBox();
 
-    const capGeometry = createCapGeometry(stroke);
-    this.startCap.geometry = capGeometry;
-    this.endCap.geometry = capGeometry;
+    // One each, so each can take the depth colours where it sits.
+    this.startCap.geometry = createCapGeometry(stroke);
+    this.endCap.geometry = createCapGeometry(stroke);
 
+    syncDepthColors(this.geometry, this.depthPaint?.paint ?? null, this.depthPaint?.key ?? null);
     this.applyTrim();
   }
 
@@ -101,6 +105,14 @@ export class PathMesh extends THREE.Mesh {
     this.endCap.material = this.material;
   }
 
+  /** Paints the tube and caps with a Depth layer, or takes it off (null); `key` names the paint. */
+  setDepthPaint(paint: DepthPaint | null, key: string | null): void {
+    if ((this.depthPaint?.key ?? null) === key) return;
+    this.depthPaint = paint && key ? { paint, key } : null;
+    syncDepthColors(this.geometry, paint, key);
+    this.paintCaps();
+  }
+
   /**
    * A copy of the tube for exporting, with only the trimmed part in its index (GLTFExporter ignores
    * the draw range). It shares the tube's vertices; dispose it after. Null when the whole tube is
@@ -122,6 +134,19 @@ export class PathMesh extends THREE.Mesh {
   disposeGeometry(): void {
     this.geometry.dispose();
     this.startCap.geometry.dispose();
+    this.endCap.geometry.dispose();
+  }
+
+  // The caps' colours where they are now (a trim moves them).
+  private paintCaps(): void {
+    for (const cap of [this.startCap, this.endCap]) {
+      if (!this.depthPaint) {
+        clearDepthColors(cap.geometry);
+        continue;
+      }
+      cap.updateMatrix();
+      paintDepthColors(cap.geometry, this.depthPaint.paint, cap.matrix);
+    }
   }
 
   private applyTrim(): void {
@@ -142,5 +167,6 @@ export class PathMesh extends THREE.Mesh {
       cap.position.copy(pose.position);
       cap.quaternion.copy(pose.quaternion);
     }
+    if (this.depthPaint) this.paintCaps();
   }
 }
