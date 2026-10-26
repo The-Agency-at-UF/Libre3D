@@ -76,6 +76,11 @@ penTool: PenToolState | null   // { mode: "draw" | "edit", pathId: string | null
 ```
 The pen tool (`viewport/hooks/useViewportPenTool.ts`): drawing filled shapes, or tube paths when `draws` is `"path"` (the toolbar's Pen menu picks which; `pathId` is the one being drawn, or `null` between them) or editing one path's points (`selectedPoint` is the picked point's index). Set via `setPenTool`. Not saved and not undoable. Play, a ▶ preview, entering view only, and `loadScene` turn it off.
 
+```typescript
+depthEdit: string | null
+setDepthEdit(entityId: string | null)
+```
+The object whose Depth layer is being edited in the viewport (`useViewportDepthGizmo.ts`): its handles show and the transform gizmo moves the layer's origin. Not saved and not undoable. Refused and ended by Play, a ▶ preview and view only; `loadScene` ends it; the pen and it end each other.
 
 ```typescript
 pendingImportCount: number

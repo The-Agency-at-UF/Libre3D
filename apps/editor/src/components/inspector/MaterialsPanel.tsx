@@ -17,6 +17,7 @@ import { Select } from "../ui/Select";
 import { Switch } from "../ui/Switch";
 import { Vector3Input } from "../ui/Vector3Input";
 import { DepthRamp } from "./DepthRamp";
+import { editDepth } from "../../viewport/hooks/useViewportDepthGizmo";
 
 // ─── Layer chrome ────────────────────────────────────────────────────────────
 // Each material category (Color, Lighting, texture maps) renders as a compact
@@ -286,10 +287,14 @@ const BLENDING_OPTIONS: { label: string; value: "linear" | "smooth" }[] = [
 // panel's own state; it starts on the first stop for each layer (MaterialsPanel keys it by layer).
 function DepthLayerSection({
   layer,
+  isEditing,
+  onToggleEditing,
   onUpdate,
   onRemove,
 }: {
   layer: DepthLayer;
+  isEditing: boolean;
+  onToggleEditing: () => void;
   onUpdate: (updates: Partial<DepthLayer>) => void;
   onRemove: () => void;
 }) {
@@ -312,9 +317,21 @@ function DepthLayerSection({
       name="Depth"
       icon={<i className="ti ti-circles"></i>}
       action={
-        <button type="button" className="mat-icon-btn" title="Remove the Depth layer" aria-label="Remove the Depth layer" onClick={onRemove}>
-          <i className="ti ti-trash"></i>
-        </button>
+        <>
+          <button
+            type="button"
+            className={`mat-icon-btn ${isEditing ? "on" : ""}`}
+            title={isEditing ? "Stop editing in the viewport (Enter)" : "Edit in the viewport: the gizmo moves the origin"}
+            aria-label="Edit the Depth layer in the viewport"
+            aria-pressed={isEditing}
+            onClick={onToggleEditing}
+          >
+            <i className="ti ti-pointer"></i>
+          </button>
+          <button type="button" className="mat-icon-btn" title="Remove the Depth layer" aria-label="Remove the Depth layer" onClick={onRemove}>
+            <i className="ti ti-trash"></i>
+          </button>
+        </>
       }
     >
       <SegmentedRow label="Type" options={DEPTH_TYPE_OPTIONS} value={layer.gradientType} onChange={(gradientType) => onUpdate({ gradientType })} />
@@ -414,6 +431,8 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
   const updateMaterialLayer = useEditorStore((state) => state.updateMaterialLayer);
   const addMaterialLayer = useEditorStore((state) => state.addMaterialLayer);
   const removeMaterialLayer = useEditorStore((state) => state.removeMaterialLayer);
+  const depthEdit = useEditorStore((state) => state.depthEdit);
+  const setDepthEdit = useEditorStore((state) => state.setDepthEdit);
 
   // Imported meshes now carry derived materialLayers, so they belong here too —
   // only the layer stack existing matters, not the entity type. Directional lights
@@ -617,6 +636,8 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
           <DepthLayerSection
             key={depthLayer.id}
             layer={depthLayer}
+            isEditing={depthEdit === selectedEntities[0].id}
+            onToggleEditing={() => (depthEdit === selectedEntities[0].id ? setDepthEdit(null) : editDepth(selectedEntities[0].id))}
             onUpdate={(updates) => updateMaterialLayer(selectedEntities[0].id, depthLayer.id, updates)}
             onRemove={() => removeMaterialLayer(selectedEntities[0].id, depthLayer.id)}
           />
@@ -659,7 +680,11 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
             className="mat-add-btn"
             disabled={entitiesMissingDepth.length === 0}
             title={entitiesMissingDepth.length === 0 ? "Depth layer already present" : "Add a Depth layer: colours by distance from a point"}
-            onClick={() => entitiesMissingDepth.forEach((e) => addMaterialLayer(e.id, "depth"))}
+            onClick={() => {
+              entitiesMissingDepth.forEach((e) => addMaterialLayer(e.id, "depth"));
+              // One object's new layer opens for editing in the viewport.
+              if (selectedEntities.length === 1) editDepth(selectedEntities[0].id);
+            }}
           >
             <i className="ti ti-plus"></i>
             <span>Depth</span>

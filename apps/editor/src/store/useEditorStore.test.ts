@@ -1154,6 +1154,30 @@ describe("depth layers", () => {
     expect(copy.type === "depth" && copy.stops[0]).not.toBe(depthOf()!.type === "depth" && depthOf()!.stops[0]);
   });
 
+  it("is edited in the viewport in a mode the pen, Play and view only end", async () => {
+    const { useEditorStore, cubeId } = await storeWithCube();
+    const pen = { mode: "draw" as const, pathId: null, selectedPoint: null };
+
+    useEditorStore.getState().setPenTool(pen);
+    useEditorStore.getState().setDepthEdit(cubeId);
+    expect(useEditorStore.getState()).toMatchObject({ depthEdit: cubeId, penTool: null });
+    useEditorStore.getState().setPenTool(pen);
+    expect(useEditorStore.getState().depthEdit).toBeNull();
+
+    useEditorStore.getState().setDepthEdit(cubeId);
+    useEditorStore.getState().setPreviewMode(true);
+    expect(useEditorStore.getState().depthEdit).toBeNull();
+    useEditorStore.getState().setDepthEdit(cubeId);
+    expect(useEditorStore.getState().depthEdit).toBeNull(); // not while playing
+    useEditorStore.getState().setPreviewMode(false);
+
+    useEditorStore.getState().setDepthEdit(cubeId);
+    useEditorStore.getState().setReadOnly("openElsewhere");
+    expect(useEditorStore.getState().depthEdit).toBeNull();
+    useEditorStore.getState().setDepthEdit(cubeId);
+    expect(useEditorStore.getState().depthEdit).toBeNull();
+  });
+
   it("can't be added in a view-only tab", async () => {
     const { useEditorStore, cubeId } = await storeWithCube();
     const before = useEditorStore.getState().entities;

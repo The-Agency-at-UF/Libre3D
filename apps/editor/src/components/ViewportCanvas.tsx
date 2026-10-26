@@ -14,6 +14,7 @@ import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
 import { useViewportGizmo } from "../viewport/hooks/useViewportGizmo";
 import { useViewportPlay } from "../viewport/hooks/useViewportPlay";
 import { useViewportPenTool } from "../viewport/hooks/useViewportPenTool";
+import { useViewportDepthGizmo } from "../viewport/hooks/useViewportDepthGizmo";
 import { prepareModelImport } from "../utils/importModel";
 import { importSvgFile, isSvgFile } from "../utils/importSvg";
 
@@ -31,6 +32,7 @@ export function ViewportCanvas() {
   const isReadOnly      = useEditorStore((state) => state.readOnlyReason !== null);
   const isPenOn         = useEditorStore((state) => state.penTool !== null);
   const isEditingPoint  = useEditorStore((state) => state.penTool?.mode === "edit" && state.penTool.selectedPoint !== null);
+  const isEditingDepth  = useEditorStore((state) => state.depthEdit !== null);
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
   const entities        = useEditorStore((state) => state.entities);
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
@@ -103,6 +105,8 @@ export function ViewportCanvas() {
   const playFrameRef = useRef<(() => void) | null>(null);
   // Filled by useViewportPenTool: shows the path being drawn or edited, after Play's poses.
   const penFrameRef = useRef<(() => void) | null>(null);
+  // Filled by useViewportDepthGizmo: places the selected object's Depth layer handles.
+  const depthFrameRef = useRef<(() => void) | null>(null);
 
   const rendererRef = useViewportRenderer(
     containerRef,
@@ -111,6 +115,7 @@ export function ViewportCanvas() {
     () => {
       playFrameRef.current?.();
       penFrameRef.current?.();
+      depthFrameRef.current?.();
     },
     // Not in Play, which shows no editor furniture (the gizmo draws whether or not it's enabled).
     () => {
@@ -152,6 +157,8 @@ export function ViewportCanvas() {
   useViewportPlay(playFrameRef, cameraRef, rendererRef, objectManager);
 
   const penAnchorRef = useViewportPenTool(penFrameRef, cameraRef, rendererRef, scene, objectManager, orbitControlsRef, transformControlsRef);
+
+  const depthAnchorRef = useViewportDepthGizmo(depthFrameRef, cameraRef, rendererRef, scene, objectManager, transformControlsRef);
 
   // -- Proxy Setup --
   useEffect(() => {
@@ -333,7 +340,8 @@ export function ViewportCanvas() {
     // there must be no gizmo to drag. A ▶ preview moves objects through poses
     // that aren't theirs; a drag then would save one (useViewportPlay). The pen
     // clicks where the gizmo would be, except on a path's picked point, which the
-    // gizmo moves (useViewportPenTool places its stand-in there).
+    // gizmo moves (useViewportPenTool places its stand-in there). Editing a Depth layer, the gizmo
+    // moves the layer's origin, not the object (useViewportDepthGizmo's stand-in).
     const activeTool = useEditorStore.getState().activeTransformTool;
     if (isPreviewMode || isPreviewingAction || isReadOnly || (isPenOn && !isEditingPoint) || locked || selectedEntityIds.length === 0) {
       tc?.detach();
@@ -341,6 +349,11 @@ export function ViewportCanvas() {
       if (tc && tc.object !== penAnchorRef.current) {
         tc.setMode("translate");
         tc.attach(penAnchorRef.current);
+      }
+    } else if (isEditingDepth) {
+      if (tc && tc.object !== depthAnchorRef.current) {
+        tc.setMode("translate");
+        tc.attach(depthAnchorRef.current);
       }
     } else if (selectedEntityIds.length === 1) {
       const selectedObj = objectManager.getObject(selectedEntityIds[0]);
@@ -399,7 +412,7 @@ export function ViewportCanvas() {
         }
       }
     });
-  }, [entities, selectedEntityIds, viewedStates, objectStates, objectManager, sceneManager, transformControlsRef, isPreviewMode, isPreviewingAction, isReadOnly, isPenOn, isEditingPoint, penAnchorRef]);
+  }, [entities, selectedEntityIds, viewedStates, objectStates, objectManager, sceneManager, transformControlsRef, isPreviewMode, isPreviewingAction, isReadOnly, isPenOn, isEditingPoint, penAnchorRef, isEditingDepth, depthAnchorRef]);
 
   // -- Resize Logic --
   useEffect(() => {

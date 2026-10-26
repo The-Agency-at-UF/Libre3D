@@ -434,6 +434,11 @@ export interface EditorState {
   // during a ▶ preview, and while view only.
   penTool: PenToolState | null;
   setPenTool: (penTool: PenToolState | null) => void;
+  // Editing an object's Depth layer in the viewport (useViewportDepthGizmo): its handles show, and
+  // the transform gizmo moves the layer's origin instead of the object. The object's ID, or null.
+  // Not saved and not undoable; off like the pen, and the pen and it end each other.
+  depthEdit: string | null;
+  setDepthEdit: (entityId: string | null) => void;
   projectionMode: "perspective" | "orthographic";
   transformSpace: "world" | "local";
 
@@ -1408,7 +1413,16 @@ export const useEditorStore = create<EditorState>()(
           // Playing and view only are for looking, so the pen doesn't turn on then.
           setPenTool: (penTool) =>
             set((state) =>
-              penTool && (state.readOnlyReason || state.isPreviewMode || state.previewingActionId) ? state : { penTool },
+              penTool && (state.readOnlyReason || state.isPreviewMode || state.previewingActionId)
+                ? state
+                : { penTool, ...(penTool ? { depthEdit: null } : null) },
+            ),
+          depthEdit: null,
+          setDepthEdit: (entityId) =>
+            set((state) =>
+              entityId && (state.readOnlyReason || state.isPreviewMode || state.previewingActionId)
+                ? state
+                : { depthEdit: entityId, ...(entityId ? { penTool: null } : null) },
             ),
 
           sceneSettings: initialSceneDefaults,
@@ -1422,13 +1436,13 @@ export const useEditorStore = create<EditorState>()(
           // Play Mode / Preview
           isPreviewMode: false,
           // Play takes over from a ▶ preview, which doesn't come back after Stop. Both end the pen.
-          setPreviewMode: (active) => set({ isPreviewMode: active, previewingActionId: null, ...(active ? { penTool: null } : null) }),
+          setPreviewMode: (active) => set({ isPreviewMode: active, previewingActionId: null, ...(active ? { penTool: null, depthEdit: null } : null) }),
           previewingActionId: null,
-          setPreviewingAction: (actionId) => set({ previewingActionId: actionId, ...(actionId ? { penTool: null } : null) }),
+          setPreviewingAction: (actionId) => set({ previewingActionId: actionId, ...(actionId ? { penTool: null, depthEdit: null } : null) }),
 
           readOnlyReason: null,
           setReadOnly: (reason) => {
-            api.setState({ readOnlyReason: reason, ...(reason ? { penTool: null } : null) });
+            api.setState({ readOnlyReason: reason, ...(reason ? { penTool: null, depthEdit: null } : null) });
 
             if (reason) {
               // There's nothing to undo into: the scene can't change here, and it's reloaded from
@@ -1651,6 +1665,7 @@ export const useEditorStore = create<EditorState>()(
               isPreviewMode: false,
               previewingActionId: null,
               penTool: null,
+              depthEdit: null,
             });
 
             // The editor no longer reloads the page between scenes, so history would otherwise

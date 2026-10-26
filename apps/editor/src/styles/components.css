@@ -804,6 +804,47 @@
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
 }
 
+/* The Depth layer's handles over the viewport (useViewportDepthGizmo): only the handles take
+   pointer events. Below the floating toolbar and overlays (z-index 10). */
+.depth-gizmo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.depth-gizmo-axis,
+.depth-gizmo-stem {
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-width: 1;
+}
+
+.depth-gizmo-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 1;
+}
+
+.depth-gizmo-handle {
+  pointer-events: all;
+  cursor: grab;
+  stroke: #ffffff;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.6));
+}
+
+.depth-gizmo.dragging .depth-gizmo-handle {
+  cursor: grabbing;
+}
+
+.depth-gizmo-cone {
+  fill: rgba(40, 40, 40, 0.85);
+  stroke-linejoin: round;
+}
+
 /* Floating Toolbar */
 .floating-toolbar {
   position: absolute;
@@ -2313,6 +2354,11 @@ input[type="range"]::-moz-range-thumb {
 .mat-icon-btn:hover:not(:disabled) {
   background: var(--bg-hover);
   color: var(--text-primary);
+}
+
+.mat-icon-btn.on {
+  background: var(--accent);
+  color: #ffffff;
 }
 
 .mat-icon-btn:disabled {
