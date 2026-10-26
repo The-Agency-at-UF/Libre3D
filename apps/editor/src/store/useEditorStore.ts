@@ -48,7 +48,7 @@ export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "direc
  */
 export type ReadOnlyReason = "openElsewhere";
 
-export type MaterialLayerType = "color" | "lighting" | "image";
+export type MaterialLayerType = "color" | "lighting" | "image" | "depth";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
 
 // Which glTF texture channel an ImageLayer feeds. "metallicRoughness" is a
@@ -109,7 +109,31 @@ export interface ImageLayer {
   wrapT: number;
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer;
+// Colours the object by distance (like Spline's Depth layer, Vector origin, Local): each vertex's
+// distance from `origin` in the object's own space, straight out ("radial") or along `direction`
+// ("linear"), is placed on the ramp between `near` (its first stop) and `far` (its last). It's
+// painted as vertex colours (utils/depthColors.ts), so it exports and publishes; over the Color
+// layer's colour by `opacity`. At most one per object.
+export interface DepthStop {
+  color: string;
+  position: number; // 0-1 along the ramp
+}
+
+export interface DepthLayer {
+  id: string;
+  type: "depth";
+  enabled: boolean;
+  opacity: number;
+  gradientType: "radial" | "linear";
+  origin: [number, number, number];
+  direction: [number, number, number]; // only meaningful when gradientType === "linear"
+  near: number;
+  far: number;
+  stops: DepthStop[]; // 2-10
+  smooth: boolean; // eased blends between stops
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer;
 
 export interface Entity {
   id: string;
@@ -527,6 +551,30 @@ const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
   color,
 });
 
+export const createDepthLayer = (): DepthLayer => ({
+  id: createEntityId(),
+  type: "depth",
+  enabled: true,
+  opacity: 1,
+  gradientType: "radial",
+  origin: [0, 0, 0],
+  direction: [1, 0, 0],
+  near: 0,
+  far: 2,
+  stops: [
+    { color: "#ff3b30", position: 0 },
+    { color: "#ffcc00", position: 0.5 },
+    { color: "#af52de", position: 1 },
+  ],
+  smooth: false,
+});
+
+// A copy that shares nothing with `layer` (a Depth layer holds arrays).
+export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer =>
+  layer.type === "depth"
+    ? { ...layer, origin: cloneVector(layer.origin), direction: cloneVector(layer.direction), stops: layer.stops.map((stop) => ({ ...stop })) }
+    : { ...layer };
+
 const createLightingLayer = (overrides: Partial<LightingLayer> = {}): LightingLayer => ({
   id: createEntityId(),
   type: "lighting",
@@ -630,7 +678,7 @@ const cloneEntity = (entity: Entity): Entity => ({
   scale: cloneVector(entity.scale),
   visible: entity.visible ?? true,
   locked: entity.locked ?? false,
-  ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map((layer) => ({ ...layer })) } : null),
+  ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map(cloneMaterialLayer) } : null),
   ...(entity.path ? { path: clonePath(entity.path) } : null),
   ...(entity.stroke ? { stroke: { ...entity.stroke } } : null),
   ...(entity.shape ? { shape: cloneShape(entity.shape) } : null),
@@ -1343,7 +1391,7 @@ export const useEditorStore = create<EditorState>()(
                     ...cloneEntity(asPath(path)),
                     id: createEntityId(),
                     name: `${entity.name} (${i + 2})`,
-                    materialLayers: entity.materialLayers?.map((layer) => ({ ...layer, id: createEntityId() })),
+                    materialLayers: entity.materialLayers?.map((layer) => ({ ...cloneMaterialLayer(layer), id: createEntityId() })),
                   })),
                 ];
               }),
@@ -1516,7 +1564,9 @@ export const useEditorStore = create<EditorState>()(
                 const newLayer: MaterialLayer =
                   layerType === "color"
                     ? createColorLayer(colorLayer?.color ?? "#ffffff")
-                    : createLightingLayer();
+                    : layerType === "depth"
+                      ? createDepthLayer()
+                      : createLightingLayer();
 
                 return {
                   ...entity,

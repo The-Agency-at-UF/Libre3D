@@ -1117,3 +1117,50 @@ describe("pen tool", () => {
     expect(useEditorStore.getState().penTool).toBeNull();
   });
 });
+
+describe("depth layers", () => {
+  const storeWithCube = async () => {
+    const { useEditorStore, createDepthLayer } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+    const cubeId = useEditorStore.getState().addEntity("cube");
+    const cube = () => useEditorStore.getState().entities.find((e) => e.id === cubeId)!;
+    const depthOf = () => cube().materialLayers!.find((layer) => layer.type === "depth");
+    return { useEditorStore, createDepthLayer, cubeId, cube, depthOf };
+  };
+
+  it("adds one Depth layer per object, removable, in one undo step each", async () => {
+    const { useEditorStore, cubeId, cube, depthOf } = await storeWithCube();
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+
+    expect(cube().materialLayers!.filter((layer) => layer.type === "depth")).toHaveLength(1);
+    expect(depthOf()).toMatchObject({ type: "depth", enabled: true, gradientType: "radial", near: 0, far: 2 });
+    useEditorStore.getState().removeMaterialLayer(cubeId, depthOf()!.id);
+    expect(depthOf()).toBeUndefined();
+    useEditorStore.temporal.getState().undo();
+    expect(depthOf()).toBeDefined();
+  });
+
+  it("gives a duplicate its own copy of the origin and stops", async () => {
+    const { useEditorStore, cubeId, depthOf } = await storeWithCube();
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+
+    useEditorStore.getState().duplicateEntity([cubeId]);
+    const copy = useEditorStore.getState().entities.at(-1)!.materialLayers!.find((layer) => layer.type === "depth")!;
+
+    expect(copy).toEqual(depthOf());
+    expect(copy.type === "depth" && copy.origin).not.toBe(depthOf()!.type === "depth" && depthOf()!.origin);
+    expect(copy.type === "depth" && copy.stops[0]).not.toBe(depthOf()!.type === "depth" && depthOf()!.stops[0]);
+  });
+
+  it("can't be added in a view-only tab", async () => {
+    const { useEditorStore, cubeId } = await storeWithCube();
+    const before = useEditorStore.getState().entities;
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+
+    expect(useEditorStore.getState().entities).toBe(before);
+  });
+});

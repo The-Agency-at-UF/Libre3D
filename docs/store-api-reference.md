@@ -76,6 +76,7 @@ penTool: PenToolState | null   // { mode: "draw" | "edit", pathId: string | null
 ```
 The pen tool (`viewport/hooks/useViewportPenTool.ts`): drawing filled shapes, or tube paths when `draws` is `"path"` (the toolbar's Pen menu picks which; `pathId` is the one being drawn, or `null` between them) or editing one path's points (`selectedPoint` is the picked point's index). Set via `setPenTool`. Not saved and not undoable. Play, a ▶ preview, entering view only, and `loadScene` turn it off.
 
+
 ```typescript
 pendingImportCount: number
 ```
@@ -360,8 +361,8 @@ Each entity can have multiple material layers (color, lighting, textures) stacke
 ### Adding Layers
 
 #### `addMaterialLayer(entityId: string, layerType: MaterialLayerType) → void`
-Add a color, lighting, or image layer to an entity.
-- **Types**: "color" | "lighting" | "image"
+Add a color, lighting, image, or depth layer to an entity (at most one of each; a second does nothing). Only a depth layer can be removed again.
+- **Types**: "color" | "lighting" | "image" | "depth"
 - **Defaults**: New layers created with sensible defaults
 
 ### Removing Layers
@@ -432,6 +433,24 @@ Replace an entity's entire layer stack.
   wrapT: number; // THREE.js wrap constant
 }
 ```
+
+**DepthLayer** (colour by distance, like Spline's Depth layer with a Vector origin in Local space):
+```typescript
+{
+  id: string;
+  type: "depth";
+  enabled: boolean;
+  opacity: number; // 0-1, over the Color layer's colour
+  gradientType: "radial" | "linear"; // distance from origin, or along direction
+  origin: [number, number, number]; // in the object's own space
+  direction: [number, number, number]; // for linear
+  near: number; // distance at the ramp's start
+  far: number; // distance at its end
+  stops: { color: string; position: number }[]; // 2-10, position 0-1
+  smooth: boolean; // eased blends between stops
+}
+```
+It's painted as vertex colours by `utils/depthColors.ts` (in ObjectManager and PathMesh), so exports and published scenes show it as `COLOR_0`. Copy layers with `cloneMaterialLayer`, which copies its arrays.
 
 ---
 

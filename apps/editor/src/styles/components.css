@@ -2330,6 +2330,36 @@ input[type="range"]::-moz-range-thumb {
   border-left: 1px solid var(--border);
 }
 
+/* The Depth layer's ramp (DepthRamp): a colour bar with a handle per stop */
+.depth-ramp {
+  position: relative;
+  flex: 1;
+  height: 16px;
+  margin: 0 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: copy;
+}
+
+.depth-ramp-stop {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 20px;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border: 2px solid #ffffff;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.depth-ramp-stop.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 /* Property rows: fixed label column so every control lines up */
 .mat-layer-body .prop {
   gap: 8px;
