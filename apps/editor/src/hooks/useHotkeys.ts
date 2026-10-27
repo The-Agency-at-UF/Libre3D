@@ -112,7 +112,7 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
             break;
           case "p": {
             const { penTool, setPenTool } = useEditorStore.getState();
-            setPenTool(penTool?.mode === "draw" ? null : { mode: "draw", pathId: null, selectedPoint: null });
+            setPenTool(penTool?.mode === "draw" ? null : { mode: "draw", pathId: null, selectedPoints: [] });
             break;
           }
           // Edits the selected path's points (the pen takes Enter itself while it's on).

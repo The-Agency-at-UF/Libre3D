@@ -9,15 +9,16 @@ import type { PathData, PathPoint } from "../../paths/pathGeometry";
 import {
   appendPoint,
   deletePoint,
+  deletePoints,
   dragOutHandles,
   drawingPlane,
   insertPoint,
   moveHandle,
-  movePoint,
   nearestOnCurve,
   nearestScreenPoint,
   projectOntoPlane,
   setPointMode,
+  shiftPoints,
   visibleHandles,
   type HandleSide,
 } from "../../paths/pathEditing";
@@ -38,7 +39,11 @@ interface Gesture {
   end?: () => void;
 }
 
-const DRAWING: PenToolState = { mode: "draw", pathId: null, selectedPoint: null };
+const DRAWING: PenToolState = { mode: "draw", pathId: null, selectedPoints: [] };
+
+// The selection with `index` added, or taken out when it's already in.
+const toggled = (indices: number[], index: number): number[] =>
+  indices.includes(index) ? indices.filter((each) => each !== index) : [...indices, index];
 // The pen on between drawings, still drawing what it was (a shape or a path).
 const drawingNext = (): PenToolState => ({ ...DRAWING, draws: store().penTool?.draws });
 
@@ -103,7 +108,7 @@ const findEditable = (id: string | null): Editable | null => {
  */
 export function editPath(pathId: string): boolean {
   if (!findEditable(pathId) || isEffectivelyLocked(store().entities, pathId)) return false;
-  store().setPenTool({ mode: "edit", pathId, selectedPoint: null });
+  store().setPenTool({ mode: "edit", pathId, selectedPoints: [] });
   return store().penTool?.mode === "edit";
 }
 
@@ -437,15 +442,88 @@ export function useViewportPenTool(
       };
     };
 
+    // Drags the points `indices` of one contour together, keeping their spacing as the cursor moves.
+    // Released without moving, a press on one point of a larger selection narrows it to that point.
+    const dragPoints = (
+      event: PointerEvent,
+      id: string,
+      inContour: number,
+      base: PathData,
+      indices: number[],
+      picked: number,
+      narrows: boolean,
+    ): Gesture | null => {
+      const shown = pathMatrix(id);
+      if (!base.points[picked]) return null;
+      const from = pointWorld(base.points[picked], shown);
+      const origin = toLocal(from, shown);
+      const drag = dragOnPlane(event, from, shown, (world) => {
+        const delta = toLocal(world, shown).sub(origin);
+        write(() => writeContour(id, inContour, shiftPoints(base, indices, toTuple(delta))));
+      });
+      if (drag) {
+        drag.end = () => {
+          const pen = store().penTool;
+          if (!drag.moved && narrows && pen) store().setPenTool({ ...pen, contour: inContour, selectedPoints: [picked] });
+        };
+      }
+      return drag;
+    };
+
+    // A box of the edited contour's points, dragged out with Shift: they join the selection.
+    const marquee = (event: PointerEvent, edited: NonNullable<ReturnType<typeof editedPath>>): Gesture => {
+      const { contour, path, matrix } = edited;
+      const start = new THREE.Vector2(event.clientX, event.clientY);
+      let end = start;
+      const container = renderer.domElement.parentElement;
+      const el = document.createElement("div");
+      el.className = "viewport-marquee-select";
+      container?.appendChild(el);
+
+      const showBox = () => {
+        const rect = container?.getBoundingClientRect();
+        const left = Math.min(start.x, end.x) - (rect?.left ?? 0);
+        const top = Math.min(start.y, end.y) - (rect?.top ?? 0);
+        el.style.left = `${left}px`;
+        el.style.top = `${top}px`;
+        el.style.width = `${Math.abs(end.x - start.x)}px`;
+        el.style.height = `${Math.abs(end.y - start.y)}px`;
+      };
+
+      const box: Gesture = {
+        start,
+        moved: false,
+        move: (moveEvent) => {
+          end = new THREE.Vector2(moveEvent.clientX, moveEvent.clientY);
+          showBox();
+        },
+        end: () => {
+          el.remove();
+          const pen = store().penTool;
+          if (!pen || !box.moved) return;
+          const left = Math.min(start.x, end.x), right = Math.max(start.x, end.x);
+          const top = Math.min(start.y, end.y), bottom = Math.max(start.y, end.y);
+          const inside = path.points.flatMap((point, index) => {
+            const at = toScreen(pointWorld(point, matrix));
+            return at && at.x >= left && at.x <= right && at.y >= top && at.y <= bottom ? [index] : [];
+          });
+          const added = inside.filter((index) => !pen.selectedPoints.includes(index));
+          store().setPenTool({ ...pen, contour, selectedPoints: [...pen.selectedPoints, ...added] });
+        },
+      };
+      return box;
+    };
+
     const startEditing = (event: PointerEvent): boolean => {
       const edited = editedPath();
       if (!edited) return false;
       const { pen, entity, editable, contour, path, matrix } = edited;
       const id = entity.id;
       const at = new THREE.Vector2(event.clientX, event.clientY);
+      const selected = pen.selectedPoints;
 
       // A handle first (Alt-drag moves it alone), then a point, then the curve.
-      const handles = visibleHandles(path, pen.selectedPoint);
+      const handles = visibleHandles(path, selected);
       const tips = handles.map(({ index, side }) => handleTipWorld(path.points[index], side, matrix));
       const pickedHandle = nearestScreenPoint(tips.map(toScreen), at, PICK_RADIUS);
       if (pickedHandle !== null) {
@@ -462,23 +540,23 @@ export function useViewportPenTool(
       // Alt-drag anywhere else orbits.
       if (event.altKey) return false;
 
-      const dragPoint = (inContour: number, index: number, from: THREE.Vector3) =>
-        dragOnPlane(event, from, matrix, (world) => {
-          const current = currentContour(id, inContour);
-          if (!current?.points[index]) return;
-          write(() => writeContour(id, inContour, movePoint(current, index, toTuple(toLocal(world, pathMatrix(id))))));
-        });
-
       // The edited contour's points, then a shape's other outlines' (picking one edits that outline).
       const others = editable.contours.map((_, i) => i).filter((i) => i !== contour);
       for (const inContour of [contour, ...others]) {
-        const points = editable.contours[inContour].points;
-        const pickedPoint = nearestScreenPoint(points.map((point) => toScreen(pointWorld(point, matrix))), at, PICK_RADIUS);
-        if (pickedPoint !== null) {
-          store().setPenTool({ ...pen, contour: inContour, selectedPoint: pickedPoint });
-          gesture = dragPoint(inContour, pickedPoint, pointWorld(points[pickedPoint], matrix));
+        const curve = editable.contours[inContour];
+        const pickedPoint = nearestScreenPoint(curve.points.map((point) => toScreen(pointWorld(point, matrix))), at, PICK_RADIUS);
+        if (pickedPoint === null) continue;
+        const sameContour = inContour === contour;
+        // Shift toggles a point in the selection; it doesn't drag.
+        if (event.shiftKey && sameContour) {
+          store().setPenTool({ ...pen, selectedPoints: toggled(selected, pickedPoint) });
           return true;
         }
+        // A point already in the selection drags the whole selection; any other point is picked alone.
+        const inSelection = sameContour && selected.includes(pickedPoint);
+        if (!inSelection) store().setPenTool({ ...pen, contour: inContour, selectedPoints: [pickedPoint] });
+        gesture = dragPoints(event, id, inContour, curve, inSelection ? selected : [pickedPoint], pickedPoint, inSelection);
+        return true;
       }
 
       // The dots sit on the gizmo (a point's handles near its plane handles), so they come first;
@@ -491,9 +569,15 @@ export function useViewportPenTool(
         const onCurve = nearestOnCurve(curve, (local) => toScreen(local.clone().applyMatrix4(matrix)), at, PICK_RADIUS);
         if (!onCurve) continue;
         const { path: next, index } = insertPoint(curve, onCurve.segment, onCurve.t);
-        gesture = dragPoint(inContour, index, pointWorld(next.points[index], matrix));
+        gesture = dragPoints(event, id, inContour, next, [index], index, false);
         write(() => writeContour(id, inContour, next));
-        store().setPenTool({ ...pen, contour: inContour, selectedPoint: index });
+        store().setPenTool({ ...pen, contour: inContour, selectedPoints: [index] });
+        return true;
+      }
+
+      // Shift-dragging from anywhere else on the path boxes points, and still edits it.
+      if (event.shiftKey) {
+        gesture = marquee(event, edited);
         return true;
       }
 
@@ -501,7 +585,7 @@ export function useViewportPenTool(
       const shown = objectManager.getObject(id);
       rayAt(event.clientX, event.clientY); // aims `raycaster` at the press
       if (shown && raycaster.intersectObject(shown, true).length > 0) {
-        store().setPenTool({ ...pen, selectedPoint: null });
+        store().setPenTool({ ...pen, selectedPoints: [] });
         return true;
       }
       // Anywhere else ends editing, and the press goes on as an ordinary one: it selects what's
@@ -522,31 +606,34 @@ export function useViewportPenTool(
       editable.write(contour, setPointMode(path, index, path.points[index].mode === "smooth" ? "corner" : "smooth"));
     };
 
-    // Delete while editing: the picked point goes, and its neighbours join. A path left with one
-    // point draws nothing, so it goes too; so does a shape's outline left with two (and the shape
+    // Delete while editing: the selected points go, and the points around them join. A path left with
+    // one point draws nothing, so it goes too; so does a shape's outline left with two (and the shape
     // when that was its last).
     const deleteSelectedPoint = () => {
       const edited = editedPath();
-      const selected = edited?.pen.selectedPoint ?? null;
-      if (!edited || selected === null) return;
+      const selected = edited?.pen.selectedPoints ?? [];
+      if (!edited || selected.length === 0) return;
       const { pen, editable, contour, path } = edited;
-      if (path.points.length <= editable.minPoints) {
+      if (path.points.length - selected.length < editable.minPoints) {
         editable.remove(contour);
-        if (findEditable(pen.pathId)) store().setPenTool({ ...pen, contour: 0, selectedPoint: null });
+        if (findEditable(pen.pathId)) store().setPenTool({ ...pen, contour: 0, selectedPoints: [] });
         return;
       }
-      editable.write(contour, deletePoint(path, selected));
-      store().setPenTool({ ...pen, selectedPoint: null });
+      editable.write(contour, deletePoints(path, selected));
+      store().setPenTool({ ...pen, selectedPoints: [] });
     };
 
-    // The gizmo on the picked point: its drag moves the point (one undo step, as for objects).
+    // The gizmo on the picked points: its drag moves them together, by how far the gizmo has moved
+    // since the drag began (one undo step, as for objects).
     const transformControls = transformControlsRef.current;
     let isGizmoPaused = false;
+    let gizmoStart: { contour: number; base: PathData; indices: number[]; origin: THREE.Vector3 } | null = null;
     const onGizmoChange = () => {
       const edited = editedPath();
-      if (transformControls?.object !== anchorProxy || !edited || edited.pen.selectedPoint === null) return;
-      const { editable, contour, path, matrix, pen } = edited;
-      editable.write(contour, movePoint(path, pen.selectedPoint!, toTuple(toLocal(anchorProxy.position, matrix))));
+      if (transformControls?.object !== anchorProxy || !edited || !gizmoStart) return;
+      const { editable, matrix } = edited;
+      const delta = toLocal(anchorProxy.position, matrix).sub(gizmoStart.origin);
+      editable.write(gizmoStart.contour, shiftPoints(gizmoStart.base, gizmoStart.indices, toTuple(delta)));
       if (transformControls.dragging && !isGizmoPaused) {
         useEditorStore.temporal.getState().pause();
         isGizmoPaused = true;
@@ -554,7 +641,15 @@ export function useViewportPenTool(
     };
     // useViewportControls resumes history when any gizmo drag ends.
     const onGizmoDragging = (event: { value: unknown }) => {
-      if (!event.value) isGizmoPaused = false;
+      if (!event.value) {
+        isGizmoPaused = false;
+        gizmoStart = null;
+        return;
+      }
+      const edited = editedPath();
+      if (!edited || edited.pen.selectedPoints.length === 0) return;
+      const { contour, path, matrix, pen } = edited;
+      gizmoStart = { contour, base: path, indices: pen.selectedPoints, origin: toLocal(anchorProxy.position, matrix) };
     };
     transformControls?.addEventListener("objectChange", onGizmoChange);
     transformControls?.addEventListener("dragging-changed", onGizmoDragging);
@@ -695,8 +790,11 @@ export function useViewportPenTool(
           return;
         }
         const contour = editable.contours[pen.contour ?? 0];
-        if (!contour) store().setPenTool({ ...pen, contour: 0, selectedPoint: null });
-        else if (pen.selectedPoint !== null && pen.selectedPoint >= contour.points.length) store().setPenTool({ ...pen, selectedPoint: null });
+        if (!contour) store().setPenTool({ ...pen, contour: 0, selectedPoints: [] });
+        else {
+          const kept = pen.selectedPoints.filter((index) => index < contour.points.length);
+          if (kept.length !== pen.selectedPoints.length) store().setPenTool({ ...pen, selectedPoints: kept });
+        }
       },
     );
     const unsubscribeSelection = useEditorStore.subscribe(
@@ -736,7 +834,7 @@ export function useViewportPenTool(
       }
       otherOverlays.forEach((each, i) =>
         each.show(
-          contours[i] ? { path: contours[i], matrixWorld: matrix, selectedPoint: null, handles: [], preview: null, insertAt: null } : null,
+          contours[i] ? { path: contours[i], matrixWorld: matrix, selectedPoints: [], handles: [], preview: null, insertAt: null } : null,
           renderer.getPixelRatio(),
         ),
       );
@@ -752,7 +850,7 @@ export function useViewportPenTool(
         return;
       }
       const { pen, editable, contour, path, matrix } = edited;
-      const handles = visibleHandles(path, pen.selectedPoint);
+      const handles = visibleHandles(path, pen.selectedPoints);
       const others = editable.contours.filter((_, i) => i !== contour);
       showOtherContours(others, matrix);
 
@@ -772,14 +870,16 @@ export function useViewportPenTool(
       }
 
       const transformControls = transformControlsRef.current;
-      const point = pen.selectedPoint !== null ? path.points[pen.selectedPoint] : undefined;
+      // The gizmo sits on the last point picked.
+      const primary = pen.selectedPoints[pen.selectedPoints.length - 1];
+      const point = primary !== undefined ? path.points[primary] : undefined;
       if (point && !(transformControls?.dragging && transformControls.object === anchorProxy)) {
         anchorProxy.position.copy(pointWorld(point, matrix));
         anchorProxy.quaternion.copy(rotationOf(matrix));
         anchorProxy.updateMatrixWorld();
       }
 
-      overlay.show({ path, matrixWorld: matrix, selectedPoint: pen.selectedPoint, handles, preview: null, insertAt }, renderer.getPixelRatio());
+      overlay.show({ path, matrixWorld: matrix, selectedPoints: pen.selectedPoints, handles, preview: null, insertAt }, renderer.getPixelRatio());
     };
 
     // Where the pen's next click puts a point, for the dot under the cursor: on the drawing plane, or
@@ -830,7 +930,7 @@ export function useViewportPenTool(
         {
           path,
           matrixWorld: matrix,
-          selectedPoint: null,
+          selectedPoints: [],
           handles,
           preview: hit ? toLocal(hit, matrix) : null,
           insertAt: null,

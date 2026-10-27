@@ -168,14 +168,15 @@ export interface Entity {
  * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new shapes or paths ("draw") or editing
  * one path's or shape's points ("edit"). While drawing, `draws` is what it draws: a filled shape (the
  * default) or a tube path. `pathId` is the shape or path being drawn (null while the pen is on
- * between them) or the path or shape edited; `selectedPoint` is the edited path's picked point, an
- * index into its points. A shape has several closed outlines (paths/shapeGeometry.ts's
- * shapeContours): `contour` is the one being edited, which `selectedPoint` is in (0 when missing).
+ * between them) or the path or shape edited; `selectedPoints` are the edited path's picked points, indices
+ * into its points, in the order they were picked (the last one is the one the gizmo and the Point row
+ * show). A shape has several closed outlines (paths/shapeGeometry.ts's shapeContours): `contour` is the
+ * one being edited, which `selectedPoints` are in (0 when missing).
  */
 export interface PenToolState {
   mode: "draw" | "edit";
   pathId: string | null;
-  selectedPoint: number | null;
+  selectedPoints: number[];
   contour?: number;
   draws?: "shape" | "path";
 }

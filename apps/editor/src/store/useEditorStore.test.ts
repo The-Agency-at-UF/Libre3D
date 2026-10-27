@@ -913,7 +913,7 @@ describe("paths", () => {
 
     it("puts the pen down", async () => {
       const { useEditorStore } = await storeWithLight();
-      useEditorStore.getState().setPenTool({ mode: "draw", pathId: null, selectedPoint: null });
+      useEditorStore.getState().setPenTool({ mode: "draw", pathId: null, selectedPoints: [] });
 
       useEditorStore.getState().addImportedSvg("hello", [imported(0)]);
 
@@ -1077,7 +1077,7 @@ describe("shapes", () => {
 });
 
 describe("pen tool", () => {
-  const drawing = { mode: "draw" as const, pathId: null, selectedPoint: null };
+  const drawing = { mode: "draw" as const, pathId: null, selectedPoints: [] };
 
   it("turns on and off without an undo step or a save", async () => {
     const { useEditorStore } = await loadStore();
@@ -1156,7 +1156,7 @@ describe("depth layers", () => {
 
   it("is edited in the viewport in a mode the pen, Play and view only end", async () => {
     const { useEditorStore, cubeId } = await storeWithCube();
-    const pen = { mode: "draw" as const, pathId: null, selectedPoint: null };
+    const pen = { mode: "draw" as const, pathId: null, selectedPoints: [] };
 
     useEditorStore.getState().setPenTool(pen);
     useEditorStore.getState().setDepthEdit(cubeId);

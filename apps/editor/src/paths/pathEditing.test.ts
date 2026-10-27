@@ -4,6 +4,7 @@ import { buildPathCurve, type PathData, type PathPoint } from "./pathGeometry";
 import {
   appendPoint,
   deletePoint,
+  deletePoints,
   dragOutHandles,
   drawingPlane,
   insertPoint,
@@ -15,6 +16,8 @@ import {
   nearestScreenPoint,
   projectOntoPlane,
   setPointMode,
+  setPointModes,
+  shiftPoints,
   visibleHandles,
 } from "./pathEditing";
 
@@ -220,7 +223,7 @@ describe("setPointMode", () => {
 
 describe("visibleHandles", () => {
   it("shows the handles of the segments on each side of the picked point", () => {
-    expect(visibleHandles(wave(), 1)).toEqual([
+    expect(visibleHandles(wave(), [1])).toEqual([
       { index: 0, side: "out" },
       { index: 1, side: "in" },
       { index: 1, side: "out" },
@@ -229,11 +232,11 @@ describe("visibleHandles", () => {
   });
 
   it("shows one segment's handles at an open path's ends, and wraps round a closed one", () => {
-    expect(visibleHandles(wave(), 0)).toEqual([
+    expect(visibleHandles(wave(), [0])).toEqual([
       { index: 0, side: "out" },
       { index: 1, side: "in" },
     ]);
-    expect(visibleHandles({ ...wave(), closed: true }, 0)).toEqual([
+    expect(visibleHandles({ ...wave(), closed: true }, [0])).toEqual([
       { index: 2, side: "out" },
       { index: 0, side: "in" },
       { index: 0, side: "out" },
@@ -242,8 +245,38 @@ describe("visibleHandles", () => {
   });
 
   it("leaves out handles with no length, and shows nothing with no point picked", () => {
-    expect(visibleHandles(setPointMode(wave(), 0, "corner"), 0)).toEqual([{ index: 1, side: "in" }]);
-    expect(visibleHandles(wave(), null)).toEqual([]);
+    expect(visibleHandles(setPointMode(wave(), 0, "corner"), [0])).toEqual([{ index: 1, side: "in" }]);
+    expect(visibleHandles(wave(), [])).toEqual([]);
+  });
+
+  it("shows the handles of every picked point, each one once", () => {
+    const shown = visibleHandles(wave(), [1, 2]);
+    const keys = shown.map(({ index, side }) => `${index}-${side}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(shown).toEqual(expect.arrayContaining([...visibleHandles(wave(), [1]), ...visibleHandles(wave(), [2])]));
+  });
+});
+
+describe("editing a selection of points", () => {
+  it("moves each picked point by the same delta, with its handles, and leaves the rest alone", () => {
+    const path = wave();
+    const next = shiftPoints(path, [0, 2], [1, 0, -1]);
+    const [x, y, z] = path.points[0].position;
+    expect(next.points[0].position).toEqual([x + 1, y, z - 1]);
+    expect(next.points[0].handleOut).toEqual(path.points[0].handleOut);
+    expect(next.points[1]).toEqual(path.points[1]);
+    expect(path.points[0].position).toEqual([x, y, z]);
+  });
+
+  it("deletes every picked point at once", () => {
+    const path = wave();
+    expect(deletePoints(path, [0, 1]).points).toEqual(path.points.slice(2));
+  });
+
+  it("sets every picked point to the same mode", () => {
+    const next = setPointModes(wave(), [0, 1], "corner");
+    expect(next.points[0].mode).toBe("corner");
+    expect(next.points[1].mode).toBe("corner");
   });
 });
 

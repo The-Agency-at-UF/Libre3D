@@ -18,7 +18,7 @@ import type { HandleSide } from "../paths/pathEditing";
 export interface PathOverlayView {
   path: PathData;
   matrixWorld: THREE.Matrix4; // the path object's
-  selectedPoint: number | null;
+  selectedPoints: number[];
   handles: { index: number; side: HandleSide }[];
   preview: THREE.Vector3 | null; // drawing: where the next point would land
   insertAt: THREE.Vector3 | null; // editing: where a click on the curve would add a point
@@ -164,7 +164,7 @@ export class PathEditOverlay {
     this.dots.material.uniforms.pixelRatio.value = pixelRatio;
 
     const pathChanged = view.path !== this.shownPath;
-    const key = JSON.stringify([view.selectedPoint, view.handles, view.preview?.toArray(), view.insertAt?.toArray()]);
+    const key = JSON.stringify([view.selectedPoints, view.handles, view.preview?.toArray(), view.insertAt?.toArray()]);
     if (!pathChanged && key === this.shownKey) return;
     this.shownKey = key;
     if (pathChanged) {
@@ -189,7 +189,7 @@ export class PathEditOverlay {
     };
     view.handles.forEach((handle) => addDot(handleTip(handle), ACCENT, WHITE, HANDLE_SIZE));
     points.forEach((point, index) =>
-      index === view.selectedPoint
+      view.selectedPoints.includes(index)
         ? addDot(toVector3(point.position), ACCENT, WHITE, ANCHOR_SIZE)
         : addDot(toVector3(point.position), WHITE, ACCENT, ANCHOR_SIZE),
     );
