@@ -316,6 +316,7 @@ After making ANY change, run these tests to ensure you didn't break existing fea
 - [ ] Fog enable/disable
 - [ ] Light intensity adjust
 - [ ] All settings persist
+- [ ] Dragging any slider (Scene, Materials, Path) updates as it moves and is one Ctrl+Z, back to the value before the drag; Ctrl+Z works with the slider still focused
 
 ### Camera
 - [ ] Add/delete camera profiles
