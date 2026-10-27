@@ -345,7 +345,7 @@ export function useViewportControls(
           resolveState(entity, selectViewedObjectState(store, entity.id)).rotation,
         );
         // Only what this tool moves: the edit goes to the state the object is shown in, if any, and
-        // a state holds only what it changes, so the rest keeps following Base.
+        // its other values stay as they are (following Base where the state doesn't set them).
         const tool = transformControls.mode;
         store.updateShownTransforms({
           [entity.id]:
