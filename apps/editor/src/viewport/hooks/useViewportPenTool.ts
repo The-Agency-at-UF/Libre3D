@@ -133,10 +133,11 @@ export function editPath(pathId: string): boolean {
  * Editing (`editPath`) shows one path's points. Drag a point or a handle across the view (on the
  * plane through it facing the path's own axis nearest the view, so it keeps its depth); Alt-drag a
  * handle to move it alone. Click the curve to add a point there, double-click a point to switch it
- * between smooth and corner, Delete to remove it. The picked point gets the transform gizmo (moving
- * only), which is how a point moves in depth. Enter or Escape ends editing, and so does a click away
- * from the object, which then selects or box-selects as usual (a click on the object itself only
- * drops the picked point). The points belong to
+ * between smooth and corner, Delete to remove it. Shift-click picks several points, and so does a
+ * drag away from the points (a box; with Shift it adds to them); a drag of a picked point moves them
+ * all. A click away from the points drops them. The last point picked gets the transform gizmo (moving
+ * only), which is how points move in depth. Escape, Enter or a double-click away from the points ends
+ * editing; nothing else in the viewport does. The points belong to
  * the path, not to a state, and are placed from the path as it's shown, so editing works in any state.
  * A shape is edited the same way, one closed outline at a time (`contour`): its other outlines show
  * their points and curves, and picking one of those edits that outline. A shape stays flat (Z = 0).
@@ -470,17 +471,23 @@ export function useViewportPenTool(
       return drag;
     };
 
-    // A box of the edited contour's points, dragged out with Shift: they join the selection.
+    // A box dragged out away from the points picks the edited contour's points in it (with Shift,
+    // they join the ones picked). A click there without a drag drops the picked points (not with Shift).
     const marquee = (event: PointerEvent, edited: NonNullable<ReturnType<typeof editedPath>>): Gesture => {
       const { contour, path, matrix } = edited;
+      const adds = event.shiftKey;
       const start = new THREE.Vector2(event.clientX, event.clientY);
       let end = start;
       const container = renderer.domElement.parentElement;
-      const el = document.createElement("div");
-      el.className = "viewport-marquee-select";
-      container?.appendChild(el);
+      // Made on the first move, so a click shows no box.
+      let el: HTMLDivElement | null = null;
 
       const showBox = () => {
+        if (!el) {
+          el = document.createElement("div");
+          el.className = "viewport-marquee-select";
+          container?.appendChild(el);
+        }
         const rect = container?.getBoundingClientRect();
         const left = Math.min(start.x, end.x) - (rect?.left ?? 0);
         const top = Math.min(start.y, end.y) - (rect?.top ?? 0);
@@ -498,17 +505,21 @@ export function useViewportPenTool(
           showBox();
         },
         end: () => {
-          el.remove();
+          el?.remove();
           const pen = store().penTool;
-          if (!pen || !box.moved) return;
+          if (!pen) return;
+          if (!box.moved) {
+            if (!adds) store().setPenTool({ ...pen, selectedPoints: [] });
+            return;
+          }
           const left = Math.min(start.x, end.x), right = Math.max(start.x, end.x);
           const top = Math.min(start.y, end.y), bottom = Math.max(start.y, end.y);
           const inside = path.points.flatMap((point, index) => {
             const at = toScreen(pointWorld(point, matrix));
             return at && at.x >= left && at.x <= right && at.y >= top && at.y <= bottom ? [index] : [];
           });
-          const added = inside.filter((index) => !pen.selectedPoints.includes(index));
-          store().setPenTool({ ...pen, contour, selectedPoints: [...pen.selectedPoints, ...added] });
+          const kept = adds ? pen.selectedPoints : [];
+          store().setPenTool({ ...pen, contour, selectedPoints: [...kept, ...inside.filter((index) => !kept.includes(index))] });
         },
       };
       return box;
@@ -563,46 +574,40 @@ export function useViewportPenTool(
       // anywhere else on the gizmo is the gizmo's.
       if (transformControlsRef.current?.axis) return false;
 
-      // On the curve: a new point there, which the same press can drag.
-      for (const inContour of [contour, ...others]) {
-        const curve = editable.contours[inContour];
-        const onCurve = nearestOnCurve(curve, (local) => toScreen(local.clone().applyMatrix4(matrix)), at, PICK_RADIUS);
-        if (!onCurve) continue;
-        const { path: next, index } = insertPoint(curve, onCurve.segment, onCurve.t);
-        gesture = dragPoints(event, id, inContour, next, [index], index, false);
-        write(() => writeContour(id, inContour, next));
-        store().setPenTool({ ...pen, contour: inContour, selectedPoints: [index] });
-        return true;
+      // On the curve: a new point there, which the same press can drag. With Shift, a box starts instead.
+      if (!event.shiftKey) {
+        for (const inContour of [contour, ...others]) {
+          const curve = editable.contours[inContour];
+          const onCurve = nearestOnCurve(curve, (local) => toScreen(local.clone().applyMatrix4(matrix)), at, PICK_RADIUS);
+          if (!onCurve) continue;
+          const { path: next, index } = insertPoint(curve, onCurve.segment, onCurve.t);
+          gesture = dragPoints(event, id, inContour, next, [index], index, false);
+          write(() => writeContour(id, inContour, next));
+          store().setPenTool({ ...pen, contour: inContour, selectedPoints: [index] });
+          return true;
+        }
       }
 
-      // Shift-dragging from anywhere else on the path boxes points, and still edits it.
-      if (event.shiftKey) {
-        gesture = marquee(event, edited);
-        return true;
-      }
-
-      // On the object itself (a shape's fill, away from its outlines): still editing, no point picked.
-      const shown = objectManager.getObject(id);
-      rayAt(event.clientX, event.clientY); // aims `raycaster` at the press
-      if (shown && raycaster.intersectObject(shown, true).length > 0) {
-        store().setPenTool({ ...pen, selectedPoints: [] });
-        return true;
-      }
-      // Anywhere else ends editing, and the press goes on as an ordinary one: it selects what's
-      // there, clears the selection, or starts a box select.
-      store().setPenTool(null);
-      return false;
+      // Anywhere else (the object's fill, other objects, empty space) stays in editing: a drag boxes
+      // points, a click drops the picked ones. Escape, Enter or a double-click there ends editing.
+      gesture = marquee(event, edited);
+      return true;
     };
 
-    // Double-clicking a point switches it between smooth and corner.
+    // Double-clicking a point switches it between smooth and corner; double-clicking away from the
+    // points, their handles and the gizmo ends editing (the path stays selected).
     const onDoubleClick = (event: MouseEvent) => {
       const edited = editedPath();
       if (!edited || event.target !== canvas) return;
       event.stopPropagation();
-      const { editable, contour, path, matrix } = edited;
+      const { pen, editable, contour, path, matrix } = edited;
       const at = new THREE.Vector2(event.clientX, event.clientY);
       const index = nearestScreenPoint(path.points.map((point) => toScreen(pointWorld(point, matrix))), at, PICK_RADIUS);
-      if (index === null) return;
+      if (index === null) {
+        const tips = visibleHandles(path, pen.selectedPoints).map(({ index, side }) => toScreen(handleTipWorld(path.points[index], side, matrix)));
+        if (nearestScreenPoint(tips, at, PICK_RADIUS) === null && !transformControlsRef.current?.axis) store().setPenTool(null);
+        return;
+      }
       editable.write(contour, setPointMode(path, index, path.points[index].mode === "smooth" ? "corner" : "smooth"));
     };
 
