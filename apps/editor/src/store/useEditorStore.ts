@@ -1713,12 +1713,13 @@ export const useEditorStore = create<EditorState>()(
         }
       ),
       {
+        // What undo restores. Not the cameras: the view changes every frame of an orbit, and undo
+        // shouldn't move it.
         partialize: (state) => ({
           entities: state.entities,
           sceneSettings: state.sceneSettings,
           postProcessing: state.postProcessing,
           frame: state.frame,
-          cameraProfiles: state.cameraProfiles,
           animation: state.animation,
         }),
         // Only record a step when something undo restores changed. Every action replaces what it

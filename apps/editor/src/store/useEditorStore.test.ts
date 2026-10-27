@@ -219,6 +219,22 @@ describe("undo history", () => {
 
     expect(useEditorStore.temporal.getState().pastStates).toHaveLength(1);
   });
+
+  it("leaves the camera out: moving the view records nothing, and undo doesn't move it", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [entity("cube-1"), light] });
+    const store = useEditorStore.getState();
+
+    store.updateProfileData("personal", { position: [1, 1, 1] });
+    expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
+
+    store.updateEntityTransform("cube-1", { position: [4, 0, 0] });
+    store.updateProfileData("personal", { position: [9, 9, 9], fov: 30 });
+    useEditorStore.temporal.getState().undo();
+
+    expect(useEditorStore.getState().entities.find((e) => e.id === "cube-1")?.position).toEqual([0, 0, 0]);
+    expect(useEditorStore.getState().cameraProfiles.personal).toMatchObject({ position: [9, 9, 9], fov: 30 });
+  });
 });
 
 describe("read-only (the scene is open for editing elsewhere)", () => {

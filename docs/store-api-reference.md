@@ -777,4 +777,4 @@ Object.keys(localStorage).filter((k) => k.startsWith("libre3d-scene-cache:")) //
 ```
 
 ### Undo/Redo
-The store uses `zundo` middleware. Undo/redo is automatic for all actions; no manual history management needed. Use keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z) or call through the hotkey handler. A step is recorded only when something undo restores (`entities`, the settings, `cameraProfiles`, `animation`) changed, compared by reference: selecting or viewing a state records nothing.
+The store uses `zundo` middleware. Undo/redo is automatic for all actions; no manual history management needed. Use keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z) or call through the hotkey handler. A step is recorded only when something undo restores (`entities`, the settings, `animation`) changed, compared by reference: selecting or viewing a state records nothing. The cameras (`cameraProfiles`) aren't in undo: moving the view, camera settings, and adding or deleting a camera record nothing, and undo never moves the view.
