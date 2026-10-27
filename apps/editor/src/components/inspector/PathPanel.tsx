@@ -1,7 +1,8 @@
 import type { CSSProperties, ReactNode } from "react";
 import { getViewedState, resolveState } from "../../animation/objectStates";
+import { useSliderUndoStep } from "../../hooks/useSliderUndoStep";
 import { DEFAULT_STROKE, type CapStyle, type PathPoint } from "../../paths/pathGeometry";
-import { movePoint, setPointMode } from "../../paths/pathEditing";
+import { movePoint, setPointModes } from "../../paths/pathEditing";
 import { useEditorStore, type Entity } from "../../store/useEditorStore";
 import { PanelSection } from "../ui/PanelSection";
 import { Select } from "../ui/Select";
@@ -17,6 +18,9 @@ const POINT_MODE_OPTIONS: { label: string; value: PathPoint["mode"] }[] = [
   { label: "Smooth", value: "smooth" },
   { label: "Corner", value: "corner" },
 ];
+
+// A stable empty selection, so the store selector returns the same value while nothing is picked.
+const NO_POINTS: number[] = [];
 
 // A label (with room for a state marker) over its control, like the Transform panel's fields.
 export function PathField({ label, extra, children }: { label: string; extra?: ReactNode; children: ReactNode }) {
@@ -45,6 +49,8 @@ interface RangeRowProps {
 // A slider with its value beside it. `--value-percent` fills the track up to the thumb.
 export function RangeRow({ label, min, max, step, value, mixed = false, format, onChange }: RangeRowProps) {
   const percent = Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100));
+  const undoStep = useSliderUndoStep();
+
   return (
     <div className="slider-row">
       <input
@@ -54,7 +60,11 @@ export function RangeRow({ label, min, max, step, value, mixed = false, format, 
         max={max}
         step={step}
         value={value}
-        onChange={(event) => onChange(parseFloat(event.target.value))}
+        onChange={(event) => {
+          onChange(parseFloat(event.target.value));
+          undoStep.changed();
+        }}
+        {...undoStep.endProps}
         style={{ "--value-percent": `${percent}%` } as CSSProperties}
       />
       <span className="slider-val">{mixed ? "Mixed" : format(value)}</span>
@@ -85,8 +95,8 @@ export function PathPanel({ entities }: PathPanelProps) {
   const viewedStates = useEditorStore((state) => state.viewedStates);
   const objectStates = useEditorStore((state) => state.animation.states);
   const entity = entities[0];
-  const editedPoint = useEditorStore((state) =>
-    entities.length === 1 && state.penTool?.mode === "edit" && state.penTool.pathId === entity.id ? state.penTool.selectedPoint : null,
+  const editedPoints = useEditorStore((state) =>
+    entities.length === 1 && state.penTool?.mode === "edit" && state.penTool.pathId === entity.id ? state.penTool.selectedPoints : NO_POINTS,
   );
 
   const ids = entities.map((path) => path.id);
@@ -98,6 +108,9 @@ export function PathPanel({ entities }: PathPanelProps) {
   const stroke = strokes[0];
   const isMixed = (values: number[]) => values.some((value) => Math.abs(value - values[0]) > 1e-6);
   const path = entity.path;
+  // The Point row shows the one point picked, if there's only one; Point Type applies to all of them.
+  const pickedPoints = path ? editedPoints.filter((index) => path.points[index]) : [];
+  const editedPoint = pickedPoints.length === 1 ? pickedPoints[0] : null;
   const point = path && editedPoint !== null ? path.points[editedPoint] : undefined;
 
   const trimField = (field: "trimStart" | "trimEnd", label: string, fallback: number) => {
@@ -142,25 +155,32 @@ export function PathPanel({ entities }: PathPanelProps) {
       </PathField>
       {trimField("trimStart", "Trim Start", 0)}
       {trimField("trimEnd", "Trim End", 1)}
-      {path && point && editedPoint !== null && (
+      {path && pickedPoints.length > 0 && (
         <>
-          <Vector3Input
-            label={`Point ${editedPoint + 1}`}
-            values={point.position}
-            onChange={(axis, value) => {
-              // Typing "0." on the way to "0.3" changes nothing: no undo step for it.
-              if (value === point.position[axis]) return;
-              const position: [number, number, number] = [...point.position];
-              position[axis] = value;
-              updatePath(entity.id, movePoint(path, editedPoint, position));
-            }}
-          />
+          {point && editedPoint !== null && (
+            <Vector3Input
+              label={`Point ${editedPoint + 1}`}
+              values={point.position}
+              onChange={(axis, value) => {
+                // Typing "0." on the way to "0.3" changes nothing: no undo step for it.
+                if (value === point.position[axis]) return;
+                const position: [number, number, number] = [...point.position];
+                position[axis] = value;
+                updatePath(entity.id, movePoint(path, editedPoint, position));
+              }}
+            />
+          )}
+          {pickedPoints.length > 1 && (
+            <PathField label="Points">
+              <span>{pickedPoints.length} selected</span>
+            </PathField>
+          )}
           <PathField label="Point Type">
             <Select
               className=""
               options={POINT_MODE_OPTIONS}
-              value={point.mode}
-              onChange={(mode) => updatePath(entity.id, setPointMode(path, editedPoint, mode as PathPoint["mode"]))}
+              value={path.points[pickedPoints[0]].mode}
+              onChange={(mode) => updatePath(entity.id, setPointModes(path, pickedPoints, mode as PathPoint["mode"]))}
             />
           </PathField>
         </>

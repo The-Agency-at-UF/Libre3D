@@ -222,23 +222,54 @@ export const setPointMode = (path: PathData, index: number, mode: PathPoint["mod
 // ---------------------------------------------------------------------------------------------
 
 /**
- * The handles shown when point `selected` is picked: the ones that shape the segments on each side
- * of it (its own, and its neighbours' facing it). An open path's end has one segment, so one of its
- * handles shapes nothing and isn't shown. Handles with no length are left out (they'd sit on their
- * point).
+ * The handles shown when the points `selected` are picked: for each, the ones that shape the segments
+ * on each side of it (its own, and its neighbours' facing it). An open path's end has one segment, so
+ * one of its handles shapes nothing and isn't shown. Handles with no length are left out (they'd sit
+ * on their point), and a handle two picked points share is listed once.
  */
-export const visibleHandles = (path: PathData, selected: number | null): { index: number; side: HandleSide }[] => {
+export const visibleHandles = (path: PathData, selected: number[]): { index: number; side: HandleSide }[] => {
   const count = path.points.length;
-  if (selected === null || !path.points[selected] || count < 2) return [];
+  if (count < 2) return [];
   const handles: { index: number; side: HandleSide }[] = [];
-  if (selected > 0 || path.closed) {
-    handles.push({ index: (selected - 1 + count) % count, side: "out" }, { index: selected, side: "in" });
-  }
-  if (selected < count - 1 || path.closed) {
-    handles.push({ index: selected, side: "out" }, { index: (selected + 1) % count, side: "in" });
+  const add = (index: number, side: HandleSide) => {
+    if (!handles.some((each) => each.index === index && each.side === side)) handles.push({ index, side });
+  };
+  for (const point of selected) {
+    if (!path.points[point]) continue;
+    if (point > 0 || path.closed) {
+      add((point - 1 + count) % count, "out");
+      add(point, "in");
+    }
+    if (point < count - 1 || path.closed) {
+      add(point, "out");
+      add((point + 1) % count, "in");
+    }
   }
   return handles.filter(({ index, side }) => lengthOf(path.points[index][handleKey(side)]) > EPSILON);
 };
+
+/** `path` with each of the points `indices` moved by `delta`; their handles move with them. */
+export const shiftPoints = (path: PathData, indices: number[], delta: Vector): PathData => {
+  const next = clonePath(path);
+  for (const index of indices) {
+    const point = next.points[index];
+    if (point) point.position = [point.position[0] + delta[0], point.position[1] + delta[1], point.position[2] + delta[2]];
+  }
+  return next;
+};
+
+/** `path` without the points `indices`. Fewer than three points left means it is no longer closed. */
+export const deletePoints = (path: PathData, indices: number[]): PathData => {
+  const removed = new Set(indices);
+  const next = clonePath(path);
+  next.points = next.points.filter((_, index) => !removed.has(index));
+  if (next.points.length < 3) next.closed = false;
+  return next;
+};
+
+/** `path` with each of the points `indices` set to `mode`. */
+export const setPointModes = (path: PathData, indices: number[], mode: PathPoint["mode"]): PathData =>
+  indices.reduce((next, index) => setPointMode(next, index, mode), path);
 
 /** The point nearest `cursor` within `radius` pixels (null entries are off screen), or null. */
 export const nearestScreenPoint = (points: (THREE.Vector2 | null)[], cursor: THREE.Vector2, radius: number): number | null => {

@@ -461,7 +461,7 @@ It's painted as vertex colours by `utils/depthColors.ts` (in ObjectManager and P
 
 ## Object States
 
-The first part of state-based animation (no keyframes or timeline). Every object has a **Base State**: its own values on the entity. A state holds only the values it changes (`position`, `rotation`, `scale`, and for paths `trimStart`/`trimEnd`), absolute and in the same parent space as the entity's own; everything else follows Base. States live in `animation.states`, keyed by ID, and point at their entity by `targetId`. The logic (`resolveState`, naming, the rotation unwrap, keeping states right through removal, duplication, and reparenting) is in `animation/objectStates.ts`, which has no store, React, or DOM dependency.
+The first part of state-based animation (no keyframes or timeline). Every object has a **Base State**: its own values on the entity. A state holds the values it sets (`position`, `rotation`, `scale`, and for paths `trimStart`/`trimEnd`), absolute and in the same parent space as the entity's own; a value it doesn't set follows Base. A new state starts as a snapshot of the pose on screen and sets all of them, so later Base changes reach it only in a value set back to Base. States live in `animation.states`, keyed by ID, and point at their entity by `targetId`. The logic (`resolveState`, naming, the rotation unwrap, keeping states right through removal, duplication, and reparenting) is in `animation/objectStates.ts`, which has no store, React, or DOM dependency.
 
 ```typescript
 interface ObjectState {
@@ -480,7 +480,7 @@ interface ObjectState {
 ```
 
 #### `addState(entityId: string) → string`
-Add "State" (then "State 2", …) to an object, setting nothing yet, and view it (like `addEntity` selects). Returns its ID.
+Add "State" (then "State 2", …) to an object, starting as a snapshot of the pose on screen (the state it's shown in, or Base), and view it (like `addEntity` selects). Returns its ID.
 
 #### `renameState(stateId: string, name: string) → void`
 Rename a state. A blank name is ignored.
@@ -777,4 +777,4 @@ Object.keys(localStorage).filter((k) => k.startsWith("libre3d-scene-cache:")) //
 ```
 
 ### Undo/Redo
-The store uses `zundo` middleware. Undo/redo is automatic for all actions; no manual history management needed. Use keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z) or call through the hotkey handler. A step is recorded only when something undo restores (`entities`, the settings, `cameraProfiles`, `animation`) changed, compared by reference: selecting or viewing a state records nothing.
+The store uses `zundo` middleware. Undo/redo is automatic for all actions; no manual history management needed. Use keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z) or call through the hotkey handler. A step is recorded only when something undo restores (`entities`, the settings, `animation`) changed, compared by reference: selecting or viewing a state records nothing. The cameras (`cameraProfiles`) aren't in undo: moving the view, camera settings, and adding or deleting a camera record nothing, and undo never moves the view.

@@ -3,9 +3,10 @@
  * named looks of one object, and the logic that reads and edits them.
  *
  * Every object has a Base State: its own values on the entity. A state ("State", "State 2", …)
- * holds only the values it changes, and everything else follows Base, so moving an object in Base
- * still moves it in every state that doesn't set a position. Values are absolute, not offsets: a
- * state's position is a position, in the same parent space as the entity's own.
+ * holds the values it sets, and a value it doesn't set follows Base. A new state starts as a
+ * snapshot of the pose on screen (it sets all of them), so later changes to Base reach it only in a
+ * value set back to Base. Values are absolute, not offsets: a state's position is a position, in the
+ * same parent space as the entity's own.
  *
  * States live in the scene's `animation` section, keyed by ID, and point at their object by entity
  * ID. Nothing here depends on the store, React, or the DOM, so the events runtime (A3) and the

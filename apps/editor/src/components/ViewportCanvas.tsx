@@ -31,7 +31,7 @@ export function ViewportCanvas() {
   const isPreviewingAction = useEditorStore((state) => state.previewingActionId !== null);
   const isReadOnly      = useEditorStore((state) => state.readOnlyReason !== null);
   const isPenOn         = useEditorStore((state) => state.penTool !== null);
-  const isEditingPoint  = useEditorStore((state) => state.penTool?.mode === "edit" && state.penTool.selectedPoint !== null);
+  const isEditingPoint  = useEditorStore((state) => state.penTool?.mode === "edit" && state.penTool.selectedPoints.length > 0);
   const isEditingDepth  = useEditorStore((state) => state.depthEdit !== null);
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
   const entities        = useEditorStore((state) => state.entities);

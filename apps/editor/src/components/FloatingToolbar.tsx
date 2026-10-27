@@ -121,7 +121,7 @@ export function FloatingToolbar({
                 className="pen-menu-item"
                 type="button"
                 onClick={() => {
-                  setPenTool(draws === kind ? null : { mode: "draw", pathId: null, selectedPoint: null, draws: kind });
+                  setPenTool(draws === kind ? null : { mode: "draw", pathId: null, selectedPoints: [], draws: kind });
                   setIsPenMenuOpen(false);
                 }}
               >

@@ -20,6 +20,7 @@ import {
   duplicateStates,
   getViewedState,
   removeStatesOf,
+  resolveState,
   type ObjectState,
   type SceneAnimation,
   type StateValueKey,
@@ -168,14 +169,15 @@ export interface Entity {
  * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new shapes or paths ("draw") or editing
  * one path's or shape's points ("edit"). While drawing, `draws` is what it draws: a filled shape (the
  * default) or a tube path. `pathId` is the shape or path being drawn (null while the pen is on
- * between them) or the path or shape edited; `selectedPoint` is the edited path's picked point, an
- * index into its points. A shape has several closed outlines (paths/shapeGeometry.ts's
- * shapeContours): `contour` is the one being edited, which `selectedPoint` is in (0 when missing).
+ * between them) or the path or shape edited; `selectedPoints` are the edited path's picked points, indices
+ * into its points, in the order they were picked (the last one is the one the gizmo and the Point row
+ * show). A shape has several closed outlines (paths/shapeGeometry.ts's shapeContours): `contour` is the
+ * one being edited, which `selectedPoints` are in (0 when missing).
  */
 export interface PenToolState {
   mode: "draw" | "edit";
   pathId: string | null;
-  selectedPoint: number | null;
+  selectedPoints: number[];
   contour?: number;
   draws?: "shape" | "path";
 }
@@ -1466,11 +1468,15 @@ export const useEditorStore = create<EditorState>()(
               }
               return { viewedStates };
             }),
+          // A new state starts as a snapshot of the pose on screen (the shown state's, or Base), so
+          // later changes to Base don't reach it.
           addState: (entityId) => {
             let stateId = "";
             set((state) => {
-              if (!state.entities.some((entity) => entity.id === entityId)) return state;
-              const objectState = createObjectState(state.animation.states, entityId);
+              const entity = state.entities.find((each) => each.id === entityId);
+              if (!entity) return state;
+              const pose = resolveState(entity, selectViewedObjectState(state, entityId));
+              const objectState = { ...createObjectState(state.animation.states, entityId), values: cloneStateValues(pose) };
               stateId = objectState.id;
               return {
                 animation: { ...state.animation, states: { ...state.animation.states, [objectState.id]: objectState } },
@@ -1707,12 +1713,13 @@ export const useEditorStore = create<EditorState>()(
         }
       ),
       {
+        // What undo restores. Not the cameras: the view changes every frame of an orbit, and undo
+        // shouldn't move it.
         partialize: (state) => ({
           entities: state.entities,
           sceneSettings: state.sceneSettings,
           postProcessing: state.postProcessing,
           frame: state.frame,
-          cameraProfiles: state.cameraProfiles,
           animation: state.animation,
         }),
         // Only record a step when something undo restores changed. Every action replaces what it

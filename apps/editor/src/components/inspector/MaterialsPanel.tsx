@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import {
   useEditorStore,
   type Entity,
@@ -87,10 +87,77 @@ function ColorSwatchField({
   onChange: (color: string) => void;
 }) {
   const [localValue, setLocalValue] = useState(value);
+  // What the picker shows: the colour it was last moved to, which the store catches up with a frame later.
+  const [pickedColor, setPickedColor] = useState(value);
 
   useEffect(() => {
     setLocalValue(value);
   }, [value]);
+
+  // The native picker fires on every move of a drag. The store gets one write per frame, and the whole
+  // drag is one undo step: its first colour records the step, and history resumes when the picker
+  // closes (its `change` event).
+  const picker = useRef<HTMLInputElement>(null);
+  const latestOnChange = useRef(onChange);
+  latestOnChange.current = onChange;
+  const shown = useRef(value);
+  const pending = useRef<string | null>(null);
+  const written = useRef<string | null>(null); // the colour this picker last wrote, while it's open
+  const frame = useRef<number | null>(null);
+  const historyPaused = useRef(false);
+
+  const flush = () => {
+    frame.current = null;
+    const color = pending.current;
+    if (color === null) return;
+    pending.current = null;
+    written.current = color;
+    latestOnChange.current(color);
+  };
+
+  const endPicking = () => {
+    if (frame.current !== null) window.cancelAnimationFrame(frame.current);
+    flush();
+    written.current = null;
+    if (historyPaused.current) {
+      historyPaused.current = false;
+      useEditorStore.temporal.getState().resume();
+    }
+  };
+
+  useEffect(() => {
+    const input = picker.current;
+    input?.addEventListener("change", endPicking);
+    return () => {
+      input?.removeEventListener("change", endPicking);
+      endPicking();
+    };
+    // Set up once: endPicking reads only refs and the store.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // The store catching up with the colours being dragged (a frame behind) leaves the picker alone.
+    if (value === written.current) return;
+    shown.current = value;
+    setPickedColor(value);
+  }, [value]);
+
+  const pickColor = (color: string) => {
+    // The picker's change event fires again with the colour already shown: nothing to do.
+    if (color === shown.current) return;
+    shown.current = color;
+    setLocalValue(color);
+    setPickedColor(color);
+    if (!historyPaused.current) {
+      latestOnChange.current(color);
+      useEditorStore.temporal.getState().pause();
+      historyPaused.current = true;
+      return;
+    }
+    pending.current = color;
+    if (frame.current === null) frame.current = window.requestAnimationFrame(flush);
+  };
 
   const hexRegex = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 
@@ -114,12 +181,10 @@ function ColorSwatchField({
           style={{ background: mixed ? "repeating-linear-gradient(45deg, #444 0 4px, #666 4px 8px)" : value }}
         >
           <input
+            ref={picker}
             type="color"
-            value={mixed ? "#ffffff" : value}
-            onChange={(e) => {
-              setLocalValue(e.target.value);
-              onChange(e.target.value);
-            }}
+            value={mixed ? "#ffffff" : pickedColor}
+            onChange={(e) => pickColor(e.target.value)}
             aria-label={`${label} picker`}
           />
         </div>
