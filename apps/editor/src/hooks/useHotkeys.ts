@@ -13,10 +13,14 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Don't trigger hotkeys if user is typing in an input field
+      // Don't trigger hotkeys if user is typing in an input field. Undo is the exception from a
+      // slider: it keeps focus after a drag, and it steps history like everywhere else.
       const activeEl = document.activeElement;
+      const isSlider = activeEl?.tagName === "INPUT" && (activeEl as HTMLInputElement).type === "range";
+      const isUndo = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z";
       if (
         activeEl &&
+        !(isSlider && isUndo) &&
         (activeEl.tagName === "INPUT" ||
           activeEl.tagName === "TEXTAREA" ||
           activeEl.getAttribute("contenteditable") === "true")

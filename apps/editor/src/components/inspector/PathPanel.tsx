@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from "react";
+import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
 import { getViewedState, resolveState } from "../../animation/objectStates";
 import { DEFAULT_STROKE, type CapStyle, type PathPoint } from "../../paths/pathGeometry";
 import { movePoint, setPointMode } from "../../paths/pathEditing";
@@ -45,6 +45,16 @@ interface RangeRowProps {
 // A slider with its value beside it. `--value-percent` fills the track up to the thumb.
 export function RangeRow({ label, min, max, step, value, mixed = false, format, onChange }: RangeRowProps) {
   const percent = Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100));
+  // A drag is one undo step: the first change records it, and the rest join it until the slider
+  // lets go (keyboard steps too, once the key comes up). As the gizmo does.
+  const historyPaused = useRef(false);
+  const endGesture = () => {
+    if (!historyPaused.current) return;
+    historyPaused.current = false;
+    useEditorStore.temporal.getState().resume();
+  };
+  useEffect(() => endGesture, []);
+
   return (
     <div className="slider-row">
       <input
@@ -54,9 +64,19 @@ export function RangeRow({ label, min, max, step, value, mixed = false, format, 
         max={max}
         step={step}
         value={value}
-        onChange={(event) => onChange(parseFloat(event.target.value))}
+        onChange={(event) => {
+          onChange(parseFloat(event.target.value));
+          if (!historyPaused.current) {
+            useEditorStore.temporal.getState().pause();
+            historyPaused.current = true;
+          }
+        }}
+        onPointerUp={endGesture}
+        onKeyUp={endGesture}
+        onBlur={endGesture}
         style={{ "--value-percent": `${percent}%` } as CSSProperties}
       />
+
       <span className="slider-val">{mixed ? "Mixed" : format(value)}</span>
     </div>
   );
