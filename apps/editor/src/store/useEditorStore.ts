@@ -20,6 +20,7 @@ import {
   duplicateStates,
   getViewedState,
   removeStatesOf,
+  resolveState,
   type ObjectState,
   type SceneAnimation,
   type StateValueKey,
@@ -1467,11 +1468,15 @@ export const useEditorStore = create<EditorState>()(
               }
               return { viewedStates };
             }),
+          // A new state starts as a snapshot of the pose on screen (the shown state's, or Base), so
+          // later changes to Base don't reach it.
           addState: (entityId) => {
             let stateId = "";
             set((state) => {
-              if (!state.entities.some((entity) => entity.id === entityId)) return state;
-              const objectState = createObjectState(state.animation.states, entityId);
+              const entity = state.entities.find((each) => each.id === entityId);
+              if (!entity) return state;
+              const pose = resolveState(entity, selectViewedObjectState(state, entityId));
+              const objectState = { ...createObjectState(state.animation.states, entityId), values: cloneStateValues(pose) };
               stateId = objectState.id;
               return {
                 animation: { ...state.animation, states: { ...state.animation.states, [objectState.id]: objectState } },

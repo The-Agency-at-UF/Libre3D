@@ -386,10 +386,35 @@ describe("object states", () => {
     useEditorStore.getState().setStateValues(stateId, { position });
     useEditorStore.getState().setStateValues(stateId, { rotation: [0, 1, 0] });
     position[1] = 99;
-    expect(useEditorStore.getState().animation.states[stateId].values).toEqual({ position: [2, 3, 0], rotation: [0, 1, 0] });
+    expect(useEditorStore.getState().animation.states[stateId].values).toMatchObject({ position: [2, 3, 0], rotation: [0, 1, 0] });
 
     useEditorStore.getState().clearStateValue(stateId, "position");
-    expect(useEditorStore.getState().animation.states[stateId].values).toEqual({ rotation: [0, 1, 0] });
+    expect(useEditorStore.getState().animation.states[stateId].values).toMatchObject({ rotation: [0, 1, 0] });
+    expect(useEditorStore.getState().animation.states[stateId].values.position).toBeUndefined();
+  });
+
+  it("starts a new state from the pose on screen, so later Base changes don't reach it", async () => {
+    const { useEditorStore, selectViewedObjectState } = await storeWithCube();
+    useEditorStore.getState().updateShownTransforms({ "cube-1": { position: [2, 5, 0] } });
+    const stateId = useEditorStore.getState().addState("cube-1");
+    expect(useEditorStore.getState().animation.states[stateId].values).toMatchObject({ position: [2, 5, 0] });
+
+    useEditorStore.getState().setViewedState("cube-1", null);
+    useEditorStore.getState().updateShownTransforms({ "cube-1": { position: [7, 7, 7] } });
+
+    expect(useEditorStore.getState().animation.states[stateId].values).toMatchObject({ position: [2, 5, 0] });
+    expect(useEditorStore.getState().entities.find((e) => e.id === "cube-1")?.position).toEqual([7, 7, 7]);
+    expect(selectViewedObjectState(useEditorStore.getState(), "cube-1")).toBeNull();
+  });
+
+  it("starts a new state from the state shown, not from Base", async () => {
+    const { useEditorStore } = await storeWithCube();
+    const first = useEditorStore.getState().addState("cube-1");
+    useEditorStore.getState().setStateValues(first, { scale: [3, 3, 3] });
+
+    const second = useEditorStore.getState().addState("cube-1");
+
+    expect(useEditorStore.getState().animation.states[second].values).toMatchObject({ scale: [3, 3, 3] });
   });
 
   it("renames a state, ignoring a blank name", async () => {
@@ -417,11 +442,12 @@ describe("object states", () => {
   it("undoes state edits", async () => {
     const { useEditorStore } = await storeWithCube();
     const stateId = useEditorStore.getState().addState("cube-1");
+    const snapshot = useEditorStore.getState().animation.states[stateId].values;
     useEditorStore.getState().setStateValues(stateId, { position: [2, 3, 0] });
 
     useEditorStore.temporal.getState().undo();
 
-    expect(useEditorStore.getState().animation.states[stateId].values).toEqual({});
+    expect(useEditorStore.getState().animation.states[stateId].values).toEqual(snapshot);
   });
 
   it("keeps each object in the state it's shown in when something else is selected", async () => {
@@ -474,7 +500,7 @@ describe("object states", () => {
     useEditorStore.getState().updateShownTransforms({ "cube-1": { position: [2, 5, 0] }, "sphere-1": { scale: [3, 3, 3] } });
 
     const state = useEditorStore.getState();
-    expect(state.animation.states[stateId].values).toEqual({ position: [2, 5, 0] });
+    expect(state.animation.states[stateId].values).toMatchObject({ position: [2, 5, 0] });
     expect(state.entities.find((e) => e.id === "cube-1")?.position).toEqual([2, 0, 0]);
     expect(state.entities.find((e) => e.id === "sphere-1")?.scale).toEqual([3, 3, 3]);
     expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
@@ -757,7 +783,7 @@ describe("paths", () => {
     useEditorStore.getState().updateShownTransforms({ [pathId]: { trimEnd: 0 } });
 
     expect(path()).toMatchObject({ trimStart: 0.25, trimEnd: 1 });
-    expect(useEditorStore.getState().animation.states[hiddenId].values).toEqual({ trimEnd: 0 });
+    expect(useEditorStore.getState().animation.states[hiddenId].values).toMatchObject({ trimStart: 0.25, trimEnd: 0 });
   });
 
   it("gives a duplicate its own copy of the path", async () => {
@@ -943,7 +969,7 @@ describe("paths", () => {
     useEditorStore.getState().loadScene(saved.ok ? saved.content : null);
 
     expect(useEditorStore.getState().entities).toEqual(content.entities);
-    expect(useEditorStore.getState().animation.states[hiddenId].values).toEqual({ trimEnd: 0 });
+    expect(useEditorStore.getState().animation.states[hiddenId].values).toMatchObject({ trimEnd: 0 });
   });
 });
 
