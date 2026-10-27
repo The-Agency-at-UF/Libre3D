@@ -533,11 +533,24 @@ export function useViewportPenTool(
       const at = new THREE.Vector2(event.clientX, event.clientY);
       const selected = pen.selectedPoints;
 
-      // A handle first (Alt-drag moves it alone), then a point, then the curve.
+      // The dot nearest the press, a handle tip or a point (the point on a tie), then the curve. The
+      // points are the edited contour's, else a shape's other outlines' (picking one edits that
+      // outline). Alt-drag takes only handles, and moves one alone; anywhere else, it orbits.
       const handles = visibleHandles(path, selected);
       const tips = handles.map(({ index, side }) => handleTipWorld(path.points[index], side, matrix));
-      const pickedHandle = nearestScreenPoint(tips.map(toScreen), at, PICK_RADIUS);
-      if (pickedHandle !== null) {
+      const tipsOnScreen = tips.map(toScreen);
+      const pickedHandle = nearestScreenPoint(tipsOnScreen, at, PICK_RADIUS);
+      const others = editable.contours.map((_, i) => i).filter((i) => i !== contour);
+      let picked: { inContour: number; index: number; distance: number } | null = null;
+      for (const inContour of event.altKey ? [] : [contour, ...others]) {
+        const onScreen = editable.contours[inContour].points.map((point) => toScreen(pointWorld(point, matrix)));
+        const index = nearestScreenPoint(onScreen, at, PICK_RADIUS);
+        if (index === null) continue;
+        picked = { inContour, index, distance: onScreen[index]!.distanceTo(at) };
+        break;
+      }
+
+      if (pickedHandle !== null && !(picked && picked.distance <= tipsOnScreen[pickedHandle]!.distanceTo(at))) {
         const { index, side } = handles[pickedHandle];
         gesture = dragOnPlane(event, tips[pickedHandle], matrix, (tip, moveEvent) => {
           const current = currentContour(id, contour);
@@ -548,15 +561,11 @@ export function useViewportPenTool(
         });
         return true;
       }
-      // Alt-drag anywhere else orbits.
       if (event.altKey) return false;
 
-      // The edited contour's points, then a shape's other outlines' (picking one edits that outline).
-      const others = editable.contours.map((_, i) => i).filter((i) => i !== contour);
-      for (const inContour of [contour, ...others]) {
+      if (picked) {
+        const { inContour, index: pickedPoint } = picked;
         const curve = editable.contours[inContour];
-        const pickedPoint = nearestScreenPoint(curve.points.map((point) => toScreen(pointWorld(point, matrix))), at, PICK_RADIUS);
-        if (pickedPoint === null) continue;
         const sameContour = inContour === contour;
         // Shift toggles a point in the selection; it doesn't drag.
         if (event.shiftKey && sameContour) {
