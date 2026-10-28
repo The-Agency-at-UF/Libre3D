@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { showAlert } from "../components/ui/Dialog";
 import { useEditorStore } from "../store/useEditorStore";
 import { createSceneExportBlob, getLiveScene } from "../utils/exportScene";
 
@@ -20,20 +21,20 @@ export function usePreviewSession() {
   const startPreview = useCallback(async () => {
     const liveScene = getLiveScene();
     if (!liveScene) {
-      window.alert("The live scene is not ready yet.");
+      void showAlert("The live scene is not ready yet.");
       return;
     }
 
     try {
       const blob = await createSceneExportBlob(liveScene, "glb");
       if (!blob) {
-        window.alert("There is no exportable mesh content in the current scene to preview.");
+        void showAlert("There is no exportable mesh content in the current scene to preview.");
         return;
       }
       useEditorStore.getState().setPreviewMode(true, URL.createObjectURL(blob));
     } catch (error) {
       console.error("Failed to generate preview GLB:", error);
-      window.alert("Failed to start Play Mode.");
+      void showAlert("Failed to start Play Mode.");
     }
   }, []);
 

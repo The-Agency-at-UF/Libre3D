@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { showAlert } from "./ui/Dialog";
 
 // tsx components for editor scene and UI
 import { HierarchyPanel } from "./HierarchyPanel";
@@ -148,7 +149,7 @@ export function EditorLayout({
     if (selectedIds.length > 0) {
       duplicateEntity(selectedIds);
     } else {
-      window.alert("Please select an object first to duplicate.");
+      void showAlert("Please select an object first to duplicate.");
     }
   };
 
@@ -174,7 +175,7 @@ export function EditorLayout({
     const liveScene = getLiveScene();
 
     if (!liveScene) {
-      window.alert("The live scene is not ready yet.");
+      void showAlert("The live scene is not ready yet.");
       return;
     }
 
@@ -184,11 +185,11 @@ export function EditorLayout({
       const exported = await exportLiveScene(liveScene);
 
       if (!exported) {
-        window.alert("There is no exportable mesh content in the current scene.");
+        void showAlert("There is no exportable mesh content in the current scene.");
       }
     } catch (error) {
       console.error("Failed to export the current scene.", error);
-      window.alert("The scene could not be exported. Check the console for details.");
+      void showAlert("The scene could not be exported. Check the console for details.");
     } finally {
       sidebarUI.setIsExporting(false);
     }
@@ -200,7 +201,7 @@ export function EditorLayout({
       createDownload(dataStr, "libre3d-scene.json", "application/json");
     } catch (error) {
       console.error("Failed to export JSON:", error);
-      window.alert("Failed to export JSON.");
+      void showAlert("Failed to export JSON.");
     }
   };
 
@@ -212,7 +213,7 @@ export function EditorLayout({
     const liveScene = getLiveScene();
 
     if (!liveScene) {
-      window.alert("The live scene is not ready yet.");
+      void showAlert("The live scene is not ready yet.");
       return;
     }
 
@@ -226,19 +227,19 @@ export function EditorLayout({
       const publishResult = await publishLiveScene(liveScene, publishing.sceneId, bgColor);
 
       if (!publishResult) {
-        window.alert("There is no exportable mesh content in the current scene.");
+        void showAlert("There is no exportable mesh content in the current scene.");
         return;
       }
 
       setPublishId(publishResult.publishId);
     } catch (error) {
       if (error instanceof ApiAuthError) {
-        window.alert(error.message);
+        void showAlert(error.message);
         return;
       }
 
       console.error("Failed to publish the current scene.", error);
-      window.alert("The scene could not be published. Check the console for details.");
+      void showAlert("The scene could not be published. Check the console for details.");
     } finally {
       sidebarUI.setIsPublishing(false);
     }
