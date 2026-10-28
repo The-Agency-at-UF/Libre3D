@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useEditorStore } from "../../store/useEditorStore";
+import { HelpMenu } from "../HelpMenu";
 
 interface InspectorTopbarProps {
   setIsModalOpen: (open: boolean) => void;
@@ -255,6 +256,7 @@ export function InspectorTopbar({
           <i className={isPreviewMode ? "ti ti-player-stop" : "ti ti-player-play"} style={{ fontSize: "12px" }}></i>
           <span>{isPreviewMode ? "Stop" : "Play"}</span>
         </button>
+        <HelpMenu />
         {canShare && (
           <button
             className="btn-chip"
