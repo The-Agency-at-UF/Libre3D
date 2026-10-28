@@ -64,6 +64,8 @@ const HOTKEY_GROUPS = [
       ["Move tool", "W"],
       ["Rotate tool", "E"],
       ["Scale tool", "R"],
+      ["Pen tool", "P"],
+      ["Edit points", "Enter"],
     ],
   },
   {
