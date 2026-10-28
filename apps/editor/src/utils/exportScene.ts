@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { PathMesh } from "../paths/PathMesh";
 
 type GLTFExporterResult = ArrayBuffer | Blob | string | Record<string, unknown>;
 
@@ -52,7 +53,8 @@ export const createDownload = (content: BlobPart, fileName: string, mimeType: st
 // Objects opt out by tagging themselves `userData.editorOnly` at creation. The
 // export already runs with `onlyVisible: true`, so hiding them for the duration of
 // the parse is enough to keep them out without touching the scene graph. The gallery
-// thumbnail (viewport/thumbnailCapture.ts) hides them the same way for its render.
+// thumbnail (viewport/thumbnailCapture.ts) hides them the same way for its render, and
+// so does every Play frame (viewport/hooks/useViewportRenderer.ts).
 export const hideEditorOnlyObjects = (scene: THREE.Scene): (() => void) => {
   const hidden: THREE.Object3D[] = [];
 
@@ -66,6 +68,131 @@ export const hideEditorOnlyObjects = (scene: THREE.Scene): (() => void) => {
   return () => {
     for (const object of hidden) {
       object.visible = true;
+    }
+  };
+};
+
+// The editor shows the selected object in the state being viewed by moving its Three object
+// (ObjectManager.applyPose), so clicks, the selection outline, and the gizmo all follow it. Exports
+// and the gallery thumbnail read that same scene and show every object in Base: each posed object's
+// Base transform (and a path's Base trim) is kept here and put back for them. A WeakMap rather than
+// userData, which the exporter writes into the file.
+interface BasePose {
+  position: THREE.Vector3;
+  quaternion: THREE.Quaternion;
+  scale: THREE.Vector3;
+  trim?: [number, number];
+}
+
+const basePoses = new WeakMap<THREE.Object3D, BasePose>();
+
+/** Call before posing an object that's still in Base. */
+export const rememberBasePose = (object: THREE.Object3D): void => {
+  if (basePoses.has(object)) return;
+  basePoses.set(object, {
+    position: object.position.clone(),
+    quaternion: object.quaternion.clone(),
+    scale: object.scale.clone(),
+    ...(object instanceof PathMesh ? { trim: object.getTrim() } : null),
+  });
+};
+
+/** Call when an object is put back in Base. */
+export const forgetBasePose = (object: THREE.Object3D): void => {
+  basePoses.delete(object);
+};
+
+/** Puts every posed object in Base; returns what puts them back. */
+export const showBasePoses = (scene: THREE.Scene): (() => void) => {
+  const restores: (() => void)[] = [];
+
+  scene.traverse((object) => {
+    const base = basePoses.get(object);
+    if (!base) return;
+
+    const posed = { position: object.position.clone(), quaternion: object.quaternion.clone(), scale: object.scale.clone() };
+    object.position.copy(base.position);
+    object.quaternion.copy(base.quaternion);
+    object.scale.copy(base.scale);
+    const path = object instanceof PathMesh && base.trim ? { mesh: object, posedTrim: object.getTrim() } : null;
+    path?.mesh.setTrim(...base.trim!);
+    restores.push(() => {
+      object.position.copy(posed.position);
+      object.quaternion.copy(posed.quaternion);
+      object.scale.copy(posed.scale);
+      path?.mesh.setTrim(...path.posedTrim);
+    });
+  });
+
+  return () => restores.forEach((restore) => restore());
+};
+
+// A path is trimmed by its tube's draw range (paths/PathMesh.ts), which GLTFExporter ignores (three
+// r178 no longer reads the `truncateDrawRange` option passed below): it would write the whole tube
+// with the caps where the trim ends. For the parse, a trimmed path gets a
+// copy of its tube holding only the drawn part, and one that draws nothing is left out like a
+// hidden object. Run after showBasePoses, so it's the Base trim that's exported.
+const trimPathsForExport = (scene: THREE.Scene): (() => void) => {
+  const restores: (() => void)[] = [];
+
+  scene.traverse((object) => {
+    if (!(object instanceof PathMesh) || !object.visible) return;
+
+    if (!object.isDrawn) {
+      object.visible = false;
+      restores.push(() => {
+        object.visible = true;
+      });
+      return;
+    }
+
+    const trimmed = object.createTrimmedGeometry();
+    if (!trimmed) return;
+    const tube = object.geometry;
+    object.geometry = trimmed;
+    restores.push(() => {
+      object.geometry = tube;
+      trimmed.dispose();
+    });
+  });
+
+  return () => restores.forEach((restore) => restore());
+};
+
+// GLTFExporter writes every object's userData into the file as that node's glTF `extras`, through
+// JSON.stringify, so a Three object kept there ships its whole toJSON. ObjectManager keeps its own
+// bookkeeping in userData: which entity an object is, whether it's locked, which parent it's tracked
+// under, and its selection outline, light helper and light target. None of it means anything outside
+// the editor (a cube and the default light carried about 3 KB of it). Like the furniture above, each
+// object gets a copy without it for the duration of the parse. What's left is data an imported glTF
+// node brought with it (GLTFLoader puts a node's extras in userData), and that ships.
+//
+// The plain values go by name. The references go by type: a file's extras are JSON, so they can't
+// hold a Three object, and a node of the user's own with an extra called `target` keeps it.
+const EDITOR_USER_DATA_KEYS = new Set(["editorOnly", "entityId", "entityType", "parentEntityId", "locked", "assetId", "loadError"]);
+
+const isEditorUserData = (key: string, value: unknown): boolean =>
+  EDITOR_USER_DATA_KEYS.has(key) || value instanceof THREE.Object3D;
+
+const hideEditorUserData = (scene: THREE.Scene): (() => void) => {
+  const swapped: { object: THREE.Object3D; userData: Record<string, unknown> }[] = [];
+
+  scene.traverse((object) => {
+    const userData = object.userData;
+    if (!userData) return;
+
+    const entries = Object.entries(userData);
+    if (!entries.some(([key, value]) => isEditorUserData(key, value))) return;
+
+    object.userData = Object.fromEntries(entries.filter(([key, value]) => !isEditorUserData(key, value)));
+    swapped.push({ object, userData });
+  });
+
+  return () => {
+    for (const { object, userData } of swapped) {
+      // Keep anything the editor wrote while the export ran (a model that finishes loading
+      // mid-export sets its selection outline then).
+      object.userData = Object.assign(userData, object.userData);
     }
   };
 };
@@ -111,6 +238,9 @@ export const createSceneExportBlob = async (
   const { GLTFExporter } = await import("three/examples/jsm/exporters/GLTFExporter.js");
   const exporter = new GLTFExporter();
   const restoreEditorOnlyObjects = hideEditorOnlyObjects(scene);
+  const restorePoses = showBasePoses(scene);
+  const restoreTrimmedPaths = trimPathsForExport(scene);
+  const restoreEditorUserData = hideEditorUserData(scene);
 
   try {
     const result = await parseScene(
@@ -152,6 +282,9 @@ export const createSceneExportBlob = async (
     // Restore even if the parse throws — a failed export must never leave the
     // editor's grid, helpers and gizmo invisible.
     restoreEditorOnlyObjects();
+    restoreTrimmedPaths();
+    restorePoses();
+    restoreEditorUserData();
   }
 };
 

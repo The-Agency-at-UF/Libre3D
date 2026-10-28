@@ -9,6 +9,7 @@ Complete reference for the Libre3D Zustand store (`useEditorStore`). This guide 
 - [Viewport & Transform](#viewport--transform)
 - [Settings & Config](#settings--config)
 - [Material Layers](#material-layers)
+- [Object States](#object-states)
 - [Camera Profiles](#camera-profiles)
 - [Important Patterns](#important-patterns)
 
@@ -53,12 +54,33 @@ frame: FrameSettingsConfig
 ```
 Three nested config objects. **These are updated via deep merge, not replacement** — see [Deep Merge Pattern](#deep-merge-pattern).
 
+```typescript
+animation: SceneAnimation   // { states: Record<string, ObjectState>, events: Record<string, SceneEvent> }
+viewedStates: Record<string, string>   // entity ID → the state it's shown in while editing
+```
+Object states and events, and the state each object is shown in; all saved with the scene. See [Object States](#object-states) and [Events](#events).
+
 ### Preview & Play Mode
 ```typescript
 isPreviewMode: boolean
-previewGlbUrl: string | null
 ```
-Play mode state. Set via `setPreviewMode(active, url)`. Not persisted (session-scoped).
+Play mode state. Set via `setPreviewMode(active)`. Not persisted (session-scoped). Play draws in the editor viewport: every object starts in its Base State, without the `editorOnly` objects, events run (`useViewportPlay`), and editing hotkeys are off.
+
+```typescript
+previewingActionId: string | null
+```
+The transition the Edit Event panel's ▶ is playing in the editor viewport (an action ID), or `null`. Set via `setPreviewingAction`. Not saved, not undoable, and allowed while read-only (it's looking). Play and `loadScene` clear it.
+
+```typescript
+penTool: PenToolState | null   // { mode: "draw" | "edit", pathId: string | null, selectedPoint: number | null, contour?: number, draws?: "shape" | "path" }
+```
+The pen tool (`viewport/hooks/useViewportPenTool.ts`): drawing filled shapes, or tube paths when `draws` is `"path"` (the toolbar's Pen menu picks which; `pathId` is the one being drawn, or `null` between them) or editing one path's points (`selectedPoint` is the picked point's index). Set via `setPenTool`. Not saved and not undoable. Play, a ▶ preview, entering view only, and `loadScene` turn it off.
+
+```typescript
+depthEdit: string | null
+setDepthEdit(entityId: string | null)
+```
+The object whose Depth layer is being edited in the viewport (`useViewportDepthGizmo.ts`): its handles show and the transform gizmo moves the layer's origin. Not saved and not undoable. Refused and ended by Play, a ▶ preview and view only; `loadScene` ends it; the pen and it end each other.
 
 ```typescript
 pendingImportCount: number
@@ -86,12 +108,12 @@ Replaces the whole scene with a saved one, or with a new scene's starting conten
 
 #### `readOnlyReason: ReadOnlyReason | null` and `setReadOnly(reason: ReadOnlyReason | null) → void`
 Why the open scene can't be edited here, or `null` when it can. `"openElsewhere"`: another tab or device holds the scene's editing lock. Set by `useOpenScene` when a scene opens and by `useSceneLock` as the lock moves.
-- **While set**, any update that would change `entities`, `sceneSettings`, `postProcessing`, or `frame` is dropped whole, whichever action sends it. Selection, cameras (`cameraProfiles`, `activeProfileId`), and editor preferences still change
+- **While set**, any update that would change `entities`, `sceneSettings`, `postProcessing`, `frame`, or `animation` is dropped whole, whichever action sends it. Selection, which state objects are shown in (`viewedStates`), cameras (`cameraProfiles`, `activeProfileId`), and editor preferences still change
 - **Entering it clears undo history** (undo writes from outside the guard, and there's nothing to undo into)
 - Not persisted and not undoable
 
 #### `selectSceneContent(state) → SceneContent`
-Not an action: a selector (exported from the store module) returning the parts of the state that are saved as the scene: `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId`. Autosave subscribes to it (with `shallow` equality) and passes it to `toSceneDocument`.
+Not an action: a selector (exported from the store module) returning the parts of the state that are saved as the scene: `entities`, `sceneSettings`, `postProcessing`, `frame`, `cameraProfiles`, `activeProfileId`, `animation`, `viewedStates`. Autosave subscribes to it (with `shallow` equality) and passes it to `toSceneDocument`.
 
 ---
 
@@ -100,14 +122,39 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, directional light, or group).
-- **Signature**: `(type: "cube" | "sphere" | "torus" | "directionalLight" | "group") => string`
+Creates a single primitive entity (cube, sphere, torus, path, directional light, or group). A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
+- **Signature**: `(type: "cube" | "sphere" | "torus" | "path" | "directionalLight" | "group") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
 - **Example**:
   ```typescript
   const newCubeId = useEditorStore((state) => state.addEntity)("cube");
   ```
+
+#### `addShape(origin: [number, number, number], rotation: [number, number, number], outline: PathData) → string`
+Adds a shape the pen tool drew: one region with `outline` (in the shape's own XY plane, copied in and flattened) and no holes, at `origin`, turned by `rotation` so that plane lies on the one it was drawn on. The default shape colour, filled from both sides like an imported shape. One undo step; refused in view only.
+- **Returns**: New entity ID
+- **Auto-selects**: The new shape becomes selected
+
+#### `addPath(origin: [number, number, number], path: PathData) → string`
+Adds a path the Path pen drew, at `origin` with its points (copied in) relative to it, with the default stroke, drawn in full. One undo step; refused in view only.
+- **Returns**: New entity ID
+- **Auto-selects**: The new path becomes selected
+
+#### `addImportedSvg(name: string, items: ImportedSvgItem[]) → string`
+Adds the shapes and paths of an imported SVG (made by `svgShapesToItems` in `paths/svgImport.ts`: each with its origin and its outlines or points), copied in. A shape gets its fill colour, shown from both sides; a path its stroke, drawn in full with the default material. One item is named `name`; several go in a group named `name` at the origin (the drawing's centre), as "Shape 1", "Path 1", … (numbered per kind). One undo step; refused in view only; puts the pen down.
+- **Returns**: ID of the item, or of the group (`""` when `items` is empty)
+- **Auto-selects**: The item or the group becomes selected
+
+#### `updateShapeSolids(ids: string[], updates: Partial<ShapeSolid>) → void`
+Sets the `extrusion` (depth) or `bevel` of every shape among `ids`, one undo step. Other entity types are skipped; a negative value is ignored.
+
+#### `updateShape(id: string, shape: ShapeData) → void`
+Replaces a shape's outlines (copied in, every Z set to 0), one undo step; the pen tool's edits. Ignored for other entity types.
+
+#### `convertShapesToPaths(ids: string[]) → number`
+Convert to Path: every shape among `ids` and among their descendants becomes a path along the middle of its strokes (`shapeCenterLines` in `paths/centerLine.ts`), with round caps and the strokes' half-width as radius (at least 0.01), drawn in full. The shape keeps its ID, name, parent, transform and material, so its states and events stay; extra strokes become paths right after it ("Shape 1 (2)", …) with the same place and a copy of the material. One undo step; does nothing in view only or Play, or for a shape with no strokes; ends the pen if it was editing a converted shape.
+- **Returns**: How many shapes were converted
 
 #### `addImportedModelHierarchy(assetId: string, nodes: ImportNodeSpec[]) → string`
 Imports a GLB model hierarchy (preserves parent-child relationships).
@@ -156,6 +203,20 @@ Rename a single entity. Shows in hierarchy panel.
 #### `renameEntities(updates: Record<string, string>) → void`
 Batch rename multiple entities.
 
+#### `updatePathStrokes(ids: string[], updates: Partial<PathStroke>) → void`
+Change the radius or cap style (`"round"` | `"flat"`) of every path among `ids`, one undo step for all of them (the Path panel with several paths selected). Other entity types are skipped; a radius that isn't above 0 is ignored. These belong to the path in every state; its trim (`trimStart`/`trimEnd`, 0–1) is a state value instead and goes through `updateShownTransforms`.
+
+#### `updatePath(id: string, path: PathData) → void`
+Replaces a path's points (copied in), one undo step; the pen tool's edits, made with the pure functions in `paths/pathEditing.ts`. Ignored for other entity types. The points belong to the path, so this changes them in every state.
+
+```typescript
+// Entity fields used when type === "path" (types in paths/pathGeometry.ts)
+path?: { points: PathPoint[]; closed: boolean };  // each point: position, handleIn/handleOut (relative), mode
+stroke?: { radius: number; caps: "round" | "flat" };
+trimStart?: number; // 0–1 of the path's length, Base State value
+trimEnd?: number;
+```
+
 #### `toggleVisibility(id: string) → void`
 Toggle visibility (eye icon in hierarchy). Hides/shows in viewport.
 
@@ -168,13 +229,15 @@ Toggle locked state (lock icon in hierarchy). Prevents transform via gizmo.
 Delete one or more entities and all descendants.
 - **Imported assets**: Never deleted here, so undo always works. Local copies are a cache of the cloud ones (a missing one is downloaded when needed); cleaning them up is not wired up yet
 - **Selection**: Auto-clears deleted entities from selection
+- **States**: The removed entities' states go in the same step, so one undo brings both back
 
 #### `duplicateEntity(ids: string[]) → void`
 Clone selected entities with all descendants.
 - **Naming**: Cloned root gets " (Copy)" suffix
-- **Position offset**: Cloned roots shift by +0.5 on X and Z axes
+- **Position offset**: Cloned roots shift by +0.5 on X and Z axes (their states' positions too)
 - **New selection**: Cloned roots become selected; children keep their relative structure
 - **Handles descendants**: Automatically includes all children and remaps parent pointers
+- **States**: Each copy gets its own copies of its original's states, with new IDs
 
 ### Hierarchy Operations
 
@@ -182,7 +245,7 @@ Clone selected entities with all descendants.
 Move entities to a new parent, preserving their world-space position.
 - **newParentId=null**: Move to scene root
 - **index**: Insert position among siblings of new parent (optional, appends if omitted)
-- **World preservation**: Local transforms are automatically recomputed so object doesn't jump
+- **World preservation**: Local transforms are automatically recomputed so object doesn't jump, and so are the moved entities' states (`reparentStates`). `groupEntities` and `ungroupEntity` do the same
 - **Validation**: Refuses to create cycles or cross imported-model boundaries
 - **One step**: Entire reparent is a single undo/redo checkpoint
 
@@ -197,6 +260,7 @@ Group selected entities under a new parent.
 #### `ungroupEntity(id: string) → void`
 Dissolve a group, promoting children to its parent level.
 - **World preservation**: Children keep their world positions (local transforms recomputed)
+- **States**: The group's own states go with it
 - **Safety**: Only works on groups; silently fails on primitives
 
 #### `applyHierarchyPrune(removedIds: Set<string>, updates: Map<string, {...}>) → void`
@@ -212,10 +276,16 @@ Update canvas frame size/preset.
 - **Width/height**: Only used when mode="custom"
 - **Deep merge**: Only provided fields are updated
 
-#### `setPreviewMode(active: boolean, url: string | null) → void`
+#### `setPreviewMode(active: boolean) → void`
 Enter/exit play mode.
-- **active=true, url=...**: Switch to play mode with a generated GLB preview
-- **active=false**: Exit play mode, return to editing
+- **active=true**: Switch to play mode (nothing is exported; the viewport keeps rendering and runs the events). Stops a ▶ preview.
+- **active=false**: Exit play mode, return to editing (objects go back to the states picked for them)
+
+#### `setPreviewingAction(actionId: string | null) → void`
+Play one transition in the editor viewport (the Edit Event panel's ▶), or stop it (`null`). `useViewportPlay` sets it back to `null` when the preview has played through, or when an edit or another selection interrupts it. Starting one turns the pen tool off.
+
+#### `setPenTool(penTool: PenToolState | null) → void`
+Turns the pen tool on (drawing or editing a path's points) or off. Refuses to turn it on while view only, in Play, or during a ▶ preview; turning it off always works. A transform tool (`setEditorState({ activeTransformTool, penTool: null })`) puts it down too.
 
 #### `adjustPendingImports(delta: number) → void`
 Increment/decrement pending import counter (file picked but not parsed).
@@ -240,8 +310,11 @@ Update background color, grid, fog, lighting, physics, etc.
 - `wireframe`: Render all objects in wireframe mode
 - `fogEnabled`: Enable atmospheric fog
 - `showAxisGuides`: Show red/green/blue axis highlights
+- **environment** (nested): image-based light from a generated room (`viewport/sceneEnvironment.ts`), for Physical materials. Replaces the ambient light while on. New scenes start with it on; scenes saved before scene document v4 open with it off.
+  - `enabled`: Light the scene with the environment
+  - `intensity`: Its strength (0-2, default 1), `scene.environmentIntensity`
 - **lights** (nested):
-  - `intensity`: Ambient light strength (0-2)
+  - `intensity`: Ambient light strength (0-2); the ambient light is off while the environment is on
   - `color`: Hex color
   - `ambientEnabled`: Enable ambient light
   - `directionalEnabled`: Enable default directional light
@@ -293,8 +366,8 @@ Each entity can have multiple material layers (color, lighting, textures) stacke
 ### Adding Layers
 
 #### `addMaterialLayer(entityId: string, layerType: MaterialLayerType) → void`
-Add a color, lighting, or image layer to an entity.
-- **Types**: "color" | "lighting" | "image"
+Add a color, lighting, image, or depth layer to an entity (at most one of each; a second does nothing). Only a depth layer can be removed again.
+- **Types**: "color" | "lighting" | "image" | "depth"
 - **Defaults**: New layers created with sensible defaults
 
 ### Removing Layers
@@ -344,6 +417,8 @@ Replace an entity's entire layer stack.
   model: "none" | "lambert" | "phong" | "physical" | "toon";
   roughness: number; // 0-1, for physical
   metalness: number; // 0-1, for physical
+  clearcoat?: number; // 0-1, for physical: above 0 builds a MeshPhysicalMaterial (KHR_materials_clearcoat in a GLB)
+  clearcoatRoughness?: number; // 0-1
   shininess: number; // for phong
   emissive: string; // hex color
   emissiveIntensity: number;
@@ -363,6 +438,111 @@ Replace an entity's entire layer stack.
   wrapT: number; // THREE.js wrap constant
 }
 ```
+
+**DepthLayer** (colour by distance, like Spline's Depth layer with a Vector origin in Local space):
+```typescript
+{
+  id: string;
+  type: "depth";
+  enabled: boolean;
+  opacity: number; // 0-1, over the Color layer's colour
+  gradientType: "radial" | "linear"; // distance from origin, or along direction
+  origin: [number, number, number]; // in the object's own space
+  direction: [number, number, number]; // for linear
+  near: number; // distance at the ramp's start
+  far: number; // distance at its end
+  stops: { color: string; position: number }[]; // 2-10, position 0-1
+  smooth: boolean; // eased blends between stops
+}
+```
+It's painted as vertex colours by `utils/depthColors.ts` (in ObjectManager and PathMesh), so exports and published scenes show it as `COLOR_0`. Copy layers with `cloneMaterialLayer`, which copies its arrays.
+
+---
+
+## Object States
+
+The first part of state-based animation (no keyframes or timeline). Every object has a **Base State**: its own values on the entity. A state holds the values it sets (`position`, `rotation`, `scale`, and for paths `trimStart`/`trimEnd`), absolute and in the same parent space as the entity's own; a value it doesn't set follows Base. A new state starts as a snapshot of the pose on screen and sets all of them, so later Base changes reach it only in a value set back to Base. States live in `animation.states`, keyed by ID, and point at their entity by `targetId`. The logic (`resolveState`, naming, the rotation unwrap, keeping states right through removal, duplication, and reparenting) is in `animation/objectStates.ts`, which has no store, React, or DOM dependency.
+
+```typescript
+interface ObjectState {
+  id: string;
+  targetId: string; // entity ID
+  name: string;     // "State", "State 2", …
+  order: number;    // position in the States list
+  values: {
+    position?: [number, number, number];
+    rotation?: [number, number, number];
+    scale?: [number, number, number];
+    trimStart?: number; // paths: 0–1
+    trimEnd?: number;
+  };
+}
+```
+
+#### `addState(entityId: string) → string`
+Add "State" (then "State 2", …) to an object, starting as a snapshot of the pose on screen (the state it's shown in, or Base), and view it (like `addEntity` selects). Returns its ID.
+
+#### `renameState(stateId: string, name: string) → void`
+Rename a state. A blank name is ignored.
+
+#### `removeState(stateId: string) → void`
+Delete a state. If it was being viewed, the object goes back to Base.
+
+#### `setStateValues(stateId: string, values: StateValues) → void`
+Set values in a state; the ones not passed stay as they are. Vectors are copied in.
+
+#### `updateShownTransforms(updates: Record<string, StateValues>) → void`
+Transform (and trim) edits by entity ID, as the Transform and Path panels and the gizmo (multi-select included) make them: each object's go to the state it's shown in, or to its own values in Base. One undo step for all of them. The gizmo passes only what its tool moved (a multi-select drag: only what changed), so a state never starts setting values it left to Base.
+
+#### `clearStateValue(stateId: string, key: keyof StateValues) → void`
+"Reset to Base": the state stops setting that value, so it follows the object's own again.
+
+#### `setViewedState(entityId: string, stateId: string | null) → void`
+Show an object in one of its states (`null` = Base). It stays that way when the object is deselected, until Base State is picked again, and is saved with the scene (`viewedStates`), so a scene reopens as it was left. Not undoable, and allowed while read-only.
+
+#### `selectViewedObjectState(state, entityId) → ObjectState | null`
+Not an action: the state an object is shown in, or `null` for Base. Read it through this rather than `viewedStates`: an entry whose state was deleted (or undone) means Base, and shows that state again if an undo brings it back. Saving drops such entries.
+
+---
+
+## Events
+
+The second part of state-based animation. An event is a trigger on an object (its owner: `start` when Play begins, `mouseDown` when the owner or one of its descendants is clicked in Play) and the transitions it runs. Events live in `animation.events`, keyed by ID. A transition's actions and steps are small ordered lists inside the event, always replaced whole. The logic is in `animation/events.ts`, `animation/transitions.ts`, and `animation/sceneRuntime.ts` (what Play runs), none of which depend on the store, React, or the DOM.
+
+```typescript
+interface SceneEvent {
+  id: string;
+  ownerId: string;                  // entity ID
+  trigger: "start" | "mouseDown";
+  order: number;                    // position in the object's Events list
+  actions: TransitionAction[];
+}
+
+interface TransitionAction {
+  id: string;
+  type: "transition";
+  targetId: string;                 // the object it moves
+  from: "base" | "current" | string; // row 1: Base, wherever the target is, or a state ID
+  steps: { to: "base" | string; duration: number; easing: "linear" | "ease" | "easeIn" | "easeOut" | "easeInOut" }[];
+  delay: number;                    // seconds
+  delayRepeat: "none" | "start" | "end" | "startEnd"; // which repeats wait for the delay too
+  loop: number | "infinite";        // runs after the first; 0 = play once
+  cycle: "restart" | "pingPong";
+}
+```
+
+A row naming no state of the target (a deleted state, another object's, or `""` for none picked) or a missing target makes Play skip that transition, and the inspector says "Pick a state" / "Pick a target".
+
+#### `addEvent(ownerId: string, trigger: "start" | "mouseDown") → string`
+Add an event to an object, last in its list, with one transition of the object from Base to its first state (none picked yet if it has none), 1 s, Ease In Out. Returns its ID (`""` if the object isn't there).
+
+#### `updateEvent(eventId: string, updates: { trigger?, actions? }) → void`
+Change an event's trigger, or replace its actions (copied in). One undo step.
+
+#### `removeEvent(eventId: string) → void`
+Delete an event.
+
+`removeEntity` and `ungroupEntity` also drop the removed objects' events and the actions (on any object's events) that move them, in the same undo step; `duplicateEntity` gives the copies copies of their originals' events, moving the copy through its own states.
 
 ---
 
@@ -560,13 +740,14 @@ useEditorStore.subscribe(
 **Saved with the scene (cloud, per scene, via autosave)**:
 - entities, activeProfileId, cameraProfiles
 - sceneSettings, postProcessing, frame
+- animation (object states and events), viewedStates
 
 **Persisted (localStorage, `persist` v17)** — editor preferences:
 - activeTransformTool, projectionMode, transformSpace
 - hudOverlay, viewportZoom
 
 **NOT saved** (while the editor is open only):
-- selectedEntityIds, isPreviewMode, previewGlbUrl
+- selectedEntityIds, isPreviewMode, previewingActionId
 - pendingImportCount, readOnlyReason, undo history
 
 ---
@@ -596,4 +777,4 @@ Object.keys(localStorage).filter((k) => k.startsWith("libre3d-scene-cache:")) //
 ```
 
 ### Undo/Redo
-The store uses `zundo` middleware. Undo/redo is automatic for all actions; no manual history management needed. Use keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z) or call through the hotkey handler.
+The store uses `zundo` middleware. Undo/redo is automatic for all actions; no manual history management needed. Use keyboard shortcuts (Ctrl+Z, Ctrl+Shift+Z) or call through the hotkey handler. A step is recorded only when something undo restores (`entities`, the settings, `animation`) changed, compared by reference: selecting or viewing a state records nothing. The cameras (`cameraProfiles`) aren't in undo: moving the view, camera settings, and adding or deleting a camera record nothing, and undo never moves the view.

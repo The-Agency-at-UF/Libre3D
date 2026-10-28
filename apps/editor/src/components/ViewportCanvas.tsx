@@ -1,16 +1,22 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
-import { useEditorStore } from "../store/useEditorStore";
+import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore";
 import { filterMoveRoots } from "../store/entityIndex";
+import { getViewedState, resolveState, unwrapRotation, type StateValues } from "../animation/objectStates";
 import { SceneManager } from "../viewport/SceneManager";
+import { createRoomEnvironment } from "../viewport/sceneEnvironment";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
 import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
 import { useViewportGizmo } from "../viewport/hooks/useViewportGizmo";
+import { useViewportPlay } from "../viewport/hooks/useViewportPlay";
+import { useViewportPenTool } from "../viewport/hooks/useViewportPenTool";
+import { useViewportDepthGizmo } from "../viewport/hooks/useViewportDepthGizmo";
 import { prepareModelImport } from "../utils/importModel";
+import { importSvgFile, isSvgFile } from "../utils/importSvg";
 
 export function ViewportCanvas() {
   const wrapperRef   = useRef<HTMLDivElement | null>(null);
@@ -22,10 +28,16 @@ export function ViewportCanvas() {
   const activeProfileId = useEditorStore((state) => state.activeProfileId);
   const activeProfile   = useEditorStore((state) => state.cameraProfiles[activeProfileId] ?? state.cameraProfiles.personal);
   const isPreviewMode   = useEditorStore((state) => state.isPreviewMode);
+  const isPreviewingAction = useEditorStore((state) => state.previewingActionId !== null);
   const isReadOnly      = useEditorStore((state) => state.readOnlyReason !== null);
+  const isPenOn         = useEditorStore((state) => state.penTool !== null);
+  const isEditingPoint  = useEditorStore((state) => state.penTool?.mode === "edit" && state.penTool.selectedPoints.length > 0);
+  const isEditingDepth  = useEditorStore((state) => state.depthEdit !== null);
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
   const entities        = useEditorStore((state) => state.entities);
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
+  const viewedStates    = useEditorStore((state) => state.viewedStates);
+  const objectStates    = useEditorStore((state) => state.animation.states);
 
   const [autoScaleFactor, setAutoScaleFactor] = useState(1);
 
@@ -88,14 +100,41 @@ export function ViewportCanvas() {
   // close over this ref and pick up the gizmo once it exists — see the
   // "render ordering" note in useViewportGizmo.ts.
   const gizmoRef = useRef<ViewportGizmo | null>(null);
+  // Filled by useViewportPlay below, like gizmoRef: moves the objects Play's events are moving,
+  // before each render.
+  const playFrameRef = useRef<(() => void) | null>(null);
+  // Filled by useViewportPenTool: shows the path being drawn or edited, after Play's poses.
+  const penFrameRef = useRef<(() => void) | null>(null);
+  // Filled by useViewportDepthGizmo: places the selected object's Depth layer handles.
+  const depthFrameRef = useRef<(() => void) | null>(null);
 
   const rendererRef = useViewportRenderer(
     containerRef,
     scene,
     cameraRef,
-    undefined,
-    () => gizmoRef.current?.render()
+    () => {
+      playFrameRef.current?.();
+      penFrameRef.current?.();
+      depthFrameRef.current?.();
+    },
+    // Not in Play, which shows no editor furniture (the gizmo draws whether or not it's enabled).
+    () => {
+      if (!useEditorStore.getState().isPreviewMode) gizmoRef.current?.render();
+    }
   );
+
+  // The environment light is made once the renderer exists (it renders the room on the GPU), and
+  // shown or hidden by the scene settings below.
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    const environment = createRoomEnvironment(renderer);
+    sceneManager.setEnvironmentMap(environment.texture);
+    return () => {
+      sceneManager.setEnvironmentMap(null);
+      environment.dispose();
+    };
+  }, [sceneManager, rendererRef]);
 
   const { orbitControlsRef, transformControlsRef } = useViewportControls(
     cameraRef,
@@ -114,6 +153,12 @@ export function ViewportCanvas() {
     objectManager.getMeshes(),
     transformControlsRef
   );
+
+  useViewportPlay(playFrameRef, cameraRef, rendererRef, objectManager);
+
+  const penAnchorRef = useViewportPenTool(penFrameRef, cameraRef, rendererRef, scene, objectManager, orbitControlsRef, transformControlsRef);
+
+  const depthAnchorRef = useViewportDepthGizmo(depthFrameRef, cameraRef, rendererRef, scene, objectManager, transformControlsRef);
 
   // -- Proxy Setup --
   useEffect(() => {
@@ -161,13 +206,16 @@ export function ViewportCanvas() {
       const target = tc.object;
       const proxy = selectionProxyRef.current;
       if (target === proxy) {
-        const updates: Record<string, any> = {};
+        const updates: Record<string, StateValues> = {};
         proxy.updateMatrixWorld(true);
         const proxyMat = proxy.matrixWorld;
+        const store = useEditorStore.getState();
+        const { entities } = store;
         getDragRootIds().forEach(id => {
           const localMat = initialOffsetsRef.current.get(id);
           const obj = objectManager.getObject(id);
-          if (localMat && obj) {
+          const entity = entities.find(e => e.id === id);
+          if (localMat && obj && entity) {
             const newWorldMat = proxyMat.clone().multiply(localMat);
             // entity.position/rotation/scale are LOCAL to the object's parent —
             // solve the local matrix against the live parent's world matrix
@@ -184,10 +232,23 @@ export function ViewportCanvas() {
             const scale = new THREE.Vector3();
             newWorldMat.decompose(pos, quat, scale);
             const rot = new THREE.Euler().setFromQuaternion(quat);
-            updates[id] = { position: pos.toArray(), rotation: rot.toArray(), scale: scale.toArray() };
+            // Where the object was shown: Base, or the state it's shown in (which the edit goes to).
+            const shown = resolveState(entity, selectViewedObjectState(store, id));
+            // Wrapped to ±180° by the quaternion; keep the turn nearest the stored one (see unwrapRotation).
+            const next = { position: pos.toArray(), rotation: unwrapRotation([rot.x, rot.y, rot.z], shown.rotation), scale: scale.toArray() };
+            // Only what this drag changed (decompose leaves float noise in the rest), so a state
+            // doesn't start setting values it left to Base.
+            updates[id] = Object.fromEntries(
+              (["position", "rotation", "scale"] as const)
+                .filter((key) => next[key].some((value, axis) => Math.abs(value - shown[key][axis]) > 1e-6))
+                .map((key) => [key, next[key]]),
+            );
           }
         });
-        useEditorStore.getState().updateMultipleEntityTransforms(updates);
+        store.updateShownTransforms(updates);
+        // As for one object (useViewportControls): the drag's first write recorded its undo step,
+        // so the rest of the drag joins it. Tracking resumes when the drag ends.
+        if (tc.dragging) useEditorStore.temporal.getState().pause();
       }
     };
 
@@ -205,6 +266,7 @@ export function ViewportCanvas() {
     sceneManager.updateBackground(sceneSettings.bgColor);
     sceneManager.updateFog(sceneSettings.fogEnabled, sceneSettings.bgColor);
     sceneManager.updateLightIntensity(sceneSettings.lights.intensity);
+    sceneManager.updateEnvironment(sceneSettings.environment.enabled, sceneSettings.environment.intensity);
     sceneManager.updateGridVisibility(sceneSettings.showGrid !== false);
 
     // Wireframe sync
@@ -258,22 +320,51 @@ export function ViewportCanvas() {
 
     objectManager.syncMeshes(entities, transformTarget, isDragging);
 
+    // Objects shown in one of their states (syncMeshes just put everything in Base). Not the one the
+    // gizmo is dragging: the drag already put it there, and writes into the state. Play shows every
+    // object in Base; Stop runs this again, which puts each one back in the state picked for it.
+    if (!isPreviewMode) {
+      Object.keys(viewedStates).forEach((entityId) => {
+        const objectState = getViewedState(viewedStates, objectStates, entityId);
+        const entity = objectState && entities.find((e) => e.id === entityId);
+        const isDraggedObject = isDragging && transformTarget === objectManager.getObject(entityId);
+        if (entity && !isDraggedObject) objectManager.applyPose(entityId, resolveState(entity, objectState));
+      });
+    }
+
     const tc = transformControlsRef.current;
     const locked = selectedEntityIds.some(id => objectManager.getObject(id)?.userData.locked);
-    // Preview hides the editor viewport behind the overlay but keeps the canvas
-    // hit-testable for camera control, so detach the gizmo — otherwise it stays
-    // draggable while completely invisible. View only: TransformControls moves the
+    // Play hides the gizmo (useViewportRenderer), so detach it there: otherwise it
+    // stays draggable while invisible. View only: TransformControls moves the
     // object itself before the store (which drops the change) hears of it, so
-    // there must be no gizmo to drag.
-    if (isPreviewMode || isReadOnly || locked || selectedEntityIds.length === 0) {
+    // there must be no gizmo to drag. A ▶ preview moves objects through poses
+    // that aren't theirs; a drag then would save one (useViewportPlay). The pen
+    // clicks where the gizmo would be, except on a path's picked point, which the
+    // gizmo moves (useViewportPenTool places its stand-in there). Editing a Depth layer, the gizmo
+    // moves the layer's origin, not the object (useViewportDepthGizmo's stand-in).
+    const activeTool = useEditorStore.getState().activeTransformTool;
+    if (isPreviewMode || isPreviewingAction || isReadOnly || (isPenOn && !isEditingPoint) || locked || selectedEntityIds.length === 0) {
       tc?.detach();
+    } else if (isEditingPoint) {
+      if (tc && tc.object !== penAnchorRef.current) {
+        tc.setMode("translate");
+        tc.attach(penAnchorRef.current);
+      }
+    } else if (isEditingDepth) {
+      if (tc && tc.object !== depthAnchorRef.current) {
+        tc.setMode("translate");
+        tc.attach(depthAnchorRef.current);
+      }
     } else if (selectedEntityIds.length === 1) {
       const selectedObj = objectManager.getObject(selectedEntityIds[0]);
       // Re-attaching every render (this effect re-runs on every entities change,
       // i.e. every frame of a gizmo drag since we write the transform back to the
       // store) resets the gizmo and makes the drag jitter. Only (re)attach when
       // the target actually changed.
-      if (selectedObj && tc && tc.object !== selectedObj) tc.attach(selectedObj);
+      if (selectedObj && tc && tc.object !== selectedObj) {
+        tc.setMode(activeTool);
+        tc.attach(selectedObj);
+      }
     } else {
       const proxy = selectionProxyRef.current;
       // While a multi-select drag is in progress, don't recompute the proxy's
@@ -294,7 +385,10 @@ export function ViewportCanvas() {
         proxy.scale.set(1, 1, 1);
         proxy.updateMatrixWorld();
 
-        if (tc && tc.object !== proxy) tc.attach(proxy);
+        if (tc && tc.object !== proxy) {
+          tc.setMode(activeTool);
+          tc.attach(proxy);
+        }
       }
     }
 
@@ -318,7 +412,7 @@ export function ViewportCanvas() {
         }
       }
     });
-  }, [entities, selectedEntityIds, objectManager, sceneManager, transformControlsRef, isPreviewMode, isReadOnly]);
+  }, [entities, selectedEntityIds, viewedStates, objectStates, objectManager, sceneManager, transformControlsRef, isPreviewMode, isPreviewingAction, isReadOnly, isPenOn, isEditingPoint, penAnchorRef, isEditingDepth, depthAnchorRef]);
 
   // -- Resize Logic --
   useEffect(() => {
@@ -368,9 +462,10 @@ export function ViewportCanvas() {
       const rightSidebar   = document.querySelector<HTMLElement>(".right-sidebar");
       const floatingToolbar = document.querySelector<HTMLElement>(".floating-toolbar");
 
-      const leftInset  = leftSidebar    ? Math.max(0, leftSidebar.getBoundingClientRect().right    - viewportRect.left)  : 280;
-      const rightInset = rightSidebar   ? Math.max(0, viewportRect.right - rightSidebar.getBoundingClientRect().left)    : 320;
-      const topInset   = floatingToolbar ? Math.max(0, floatingToolbar.getBoundingClientRect().bottom - viewportRect.top) : 0;
+      // Play hides the sidebars and the toolbar, so the frame gets the whole viewport.
+      const leftInset  = isPreviewMode ? 0 : leftSidebar    ? Math.max(0, leftSidebar.getBoundingClientRect().right    - viewportRect.left)  : 280;
+      const rightInset = isPreviewMode ? 0 : rightSidebar   ? Math.max(0, viewportRect.right - rightSidebar.getBoundingClientRect().left)    : 320;
+      const topInset   = isPreviewMode ? 0 : floatingToolbar ? Math.max(0, floatingToolbar.getBoundingClientRect().bottom - viewportRect.top) : 0;
 
       const availableWidth  = Math.max(1, viewportRect.width  - leftInset - rightInset);
       const availableHeight = Math.max(1, viewportRect.height - topInset);
@@ -382,7 +477,7 @@ export function ViewportCanvas() {
     const observer = new ResizeObserver(updateScale);
     observer.observe(viewportHost);
     return () => observer.disconnect();
-  }, [frame.mode, frame.width, frame.height]);
+  }, [frame.mode, frame.width, frame.height, isPreviewMode]);
 
 
   // -- Viewport centering events --
@@ -448,7 +543,7 @@ export function ViewportCanvas() {
     };
   }, [orbitControlsRef, objectManager, cameraRef]);
 
-  // -- Drag-and-drop .glb import --
+  // -- Drag-and-drop import: .svg as paths, anything else as a model (.glb) --
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -462,9 +557,16 @@ export function ViewportCanvas() {
       const files = event.dataTransfer?.files;
       if (!files || files.length === 0) return;
       // View only: the store would drop the new entities anyway, so don't store the model's bytes.
-      if (useEditorStore.getState().readOnlyReason) return;
+      // Play is for looking, so nothing is added while it runs.
+      const store = useEditorStore.getState();
+      if (store.readOnlyReason || store.isPreviewMode) return;
 
       Array.from(files).forEach((file) => {
+        if (isSvgFile(file)) {
+          importSvgFile(file).catch((error) => console.error("[Libre3D] Failed to import dropped SVG:", error));
+          return;
+        }
+
         useEditorStore.getState().adjustPendingImports(1);
         prepareModelImport(file)
           .then(({ assetId, nodes }) => {
@@ -494,12 +596,6 @@ export function ViewportCanvas() {
       ref={wrapperRef}
       className="viewport-sandbox-wrapper"
       style={{
-        // Never display:none, even while previewing: the preview overlay sits on
-        // top with pointer-events:none so orbit/pan/zoom keep landing on this
-        // canvas, and OrbitControls drives the preview camera. The overlay is
-        // opaque, so nothing from the editor viewport shows through. (display:none
-        // here is what broke camera control in preview — a hidden element gets no
-        // pointer events at all.)
         display:         "flex",
         width:           frame.mode === "fixed" ? frame.width  : "100%",
         height:          frame.mode === "fixed" ? frame.height : "100%",
@@ -512,7 +608,7 @@ export function ViewportCanvas() {
         className={`viewport-sandbox-container${frame.mode === "fixed" ? " fixed-bounds" : ""}`}
         style={{ width: "100%", height: "100%" }}
       />
-      {frame.mode === "fixed" && (
+      {frame.mode === "fixed" && !isPreviewMode && (
         <div className="badge green viewport-sandbox-badge">
           {frame.width.toLocaleString()} × {frame.height.toLocaleString()} ({frameScaleLabel})
         </div>

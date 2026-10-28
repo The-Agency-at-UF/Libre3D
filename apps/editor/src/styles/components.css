@@ -719,7 +719,7 @@
 }
 
 /* Floating Stop chip shown while previewing — the inspector (and its Play/Stop
-   button) is hidden then, so this sits above the <model-viewer> overlay. */
+   button) is hidden then, so this sits over the viewport in its place. */
 .btn-chip.preview-exit-btn {
   position: absolute;
   top: 24px;
@@ -804,6 +804,47 @@
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
 }
 
+/* The Depth layer's handles over the viewport (useViewportDepthGizmo): only the handles take
+   pointer events. Below the floating toolbar and overlays (z-index 10). */
+.depth-gizmo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.depth-gizmo-axis,
+.depth-gizmo-stem {
+  stroke: rgba(255, 255, 255, 0.75);
+  stroke-width: 1;
+}
+
+.depth-gizmo-ring {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 1;
+}
+
+.depth-gizmo-handle {
+  pointer-events: all;
+  cursor: grab;
+  stroke: #ffffff;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.6));
+}
+
+.depth-gizmo.dragging .depth-gizmo-handle {
+  cursor: grabbing;
+}
+
+.depth-gizmo-cone {
+  fill: rgba(40, 40, 40, 0.85);
+  stroke-linejoin: round;
+}
+
 /* Floating Toolbar */
 .floating-toolbar {
   position: absolute;
@@ -844,6 +885,48 @@
 .toolbar-btn.active-translate {
   background: var(--accent);
   color: #ffffff;
+}
+
+/* The pen's menu: what it draws (FloatingToolbar) */
+.pen-menu {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 100;
+  min-width: 120px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.pen-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  padding: 6px 10px 6px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+
+.pen-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.pen-menu-check {
+  display: flex;
+  width: 12px;
 }
 
 /* Bottom Overlays */
@@ -909,6 +992,17 @@
 .projection-btn.active {
   background: var(--accent);
   color: #ffffff;
+}
+
+/* "Editing State 2": shown while the selected object is in one of its states. */
+.viewport-state-badge {
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 600;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
 }
 
 /* Collapsible Inspector Sections */
@@ -2262,6 +2356,11 @@ input[type="range"]::-moz-range-thumb {
   color: var(--text-primary);
 }
 
+.mat-icon-btn.on {
+  background: var(--accent);
+  color: #ffffff;
+}
+
 .mat-icon-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
@@ -2275,6 +2374,36 @@ input[type="range"]::-moz-range-thumb {
   margin-left: 8px;
   padding: 2px 2px 6px 14px;
   border-left: 1px solid var(--border);
+}
+
+/* The Depth layer's ramp (DepthRamp): a colour bar with a handle per stop */
+.depth-ramp {
+  position: relative;
+  flex: 1;
+  height: 16px;
+  margin: 0 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  cursor: copy;
+}
+
+.depth-ramp-stop {
+  position: absolute;
+  top: 50%;
+  width: 12px;
+  height: 20px;
+  padding: 0;
+  transform: translate(-50%, -50%);
+  border: 2px solid #ffffff;
+  border-radius: 4px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.depth-ramp-stop.selected {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Property rows: fixed label column so every control lines up */
@@ -2380,6 +2509,264 @@ input[type="range"]::-moz-range-thumb {
   cursor: default;
 }
 
+/* ── OBJECT STATES (StatesPanel, and the Transform panel's state markers) ── */
+.state-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.state-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 2px 0 8px;
+  border-radius: var(--radius-sm);
+  transition: background 0.1s ease;
+}
+
+.state-row:hover {
+  background: var(--bg-hover);
+}
+
+.state-row--active,
+.state-row--active:hover {
+  background: var(--accent-dim);
+}
+
+.state-row-select {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: var(--font);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+}
+
+.state-row--active .state-row-select {
+  color: var(--text-primary);
+}
+
+.state-row-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-rename-input {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  padding: 0 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 12px;
+  outline: none;
+}
+
+/* .mat-add-btn grows along its row; in this column it keeps its own height. */
+.state-list .mat-add-btn {
+  flex: none;
+  margin-top: 6px;
+}
+
+.state-hint {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+}
+
+/* ── EVENTS (EventsPanel's list reuses the state rows above) ── */
+.event-row-icon {
+  margin-right: 6px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.event-row-warning {
+  flex-shrink: 0;
+  margin: 0 2px;
+  font-size: 12px;
+  color: var(--amber);
+}
+
+.event-add-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* ── EDIT EVENT PANEL (EditEventPanel, in place of the inspector's panels) ── */
+.event-editor {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.event-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.event-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 14px 16px;
+}
+
+.event-editor-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 20px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.event-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.event-action .mat-layer-body {
+  gap: 6px;
+}
+
+.event-prop-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.transition-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.transition-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.transition-row-number {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.transition-row-spacer {
+  width: 20px;
+  flex-shrink: 0;
+}
+
+/* The duration and easing between two rows, on the dotted line joining their numbers. */
+.transition-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 6px 28px 6px 17px;
+  border-left: 1px dashed var(--border-strong);
+}
+
+.transition-step-unit {
+  font-size: var(--font-size-xs);
+  color: var(--text-tertiary);
+}
+
+.event-problem {
+  color: var(--amber);
+}
+
+.state-value-marker {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.state-reset-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 4px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+  font-family: var(--font);
+  font-size: 10.5px;
+  cursor: pointer;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+
+.state-reset-btn i {
+  font-size: 11px;
+}
+
+.state-reset-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.state-reset-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+/* ── PATH PANEL (PathPanel) ── */
+.path-field {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.path-field-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 /* ── TONE MAP BADGE ── */
 .badge {
   font-size: 9.5px;
@@ -2406,6 +2793,136 @@ input[type="range"]::-moz-range-thumb {
 
 .two-col>* {
   flex: 1;
+}
+
+/* Help menu: compact info chip + tutorial / shortcuts dialog */
+.btn-chip--icon {
+  display: flex;
+  align-items: center;
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.help-modal {
+  position: relative;
+  width: min(420px, 100%);
+  animation: help-card-in 0.25s ease;
+}
+
+@keyframes help-card-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Tour step with a target: the spotlight's shadow does the dimming instead of the blurred backdrop. */
+.help-tour-backdrop {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.help-spotlight {
+  position: fixed;
+  border-radius: var(--radius);
+  box-shadow: 0 0 0 9999px var(--backdrop-bg), 0 0 0 2px var(--accent), 0 0 24px var(--accent);
+  pointer-events: none;
+  transition: top 0.35s ease, left 0.35s ease, width 0.35s ease, height 0.35s ease;
+}
+
+.help-spotlight::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  border: 2px solid var(--accent);
+  animation: help-spotlight-pulse 1.6s ease-out infinite;
+}
+
+@keyframes help-spotlight-pulse {
+  from { opacity: 0.8; transform: scale(1); }
+  to { opacity: 0; transform: scale(1.04); }
+}
+
+.help-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.help-modal-close:hover {
+  color: var(--text-primary);
+}
+
+.help-tutorial-icon {
+  font-size: 28px;
+  color: var(--accent);
+}
+
+.help-tutorial-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.help-tutorial-dots {
+  display: flex;
+  gap: 5px;
+}
+
+.help-tutorial-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--border-strong);
+}
+
+.help-tutorial-dots span.active {
+  background: var(--accent);
+}
+
+.help-tutorial-nav {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.help-hotkeys {
+  display: grid;
+  gap: 0.75rem;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.help-hotkeys-title {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  margin-bottom: 4px;
+}
+
+.help-hotkeys-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 12px;
+  color: rgba(226, 232, 240, 0.78);
+}
+
+.help-hotkeys-row kbd {
+  font-family: var(--font);
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(15, 23, 42, 0.88);
+  color: #e2e8f0;
 }
 
 .hamburger-dropdown-account {

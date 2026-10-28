@@ -3,10 +3,11 @@ import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
 import Stats from "three/examples/jsm/libs/stats.module.js";
 import { hasPendingThumbnail, renderPendingThumbnail } from "../thumbnailCapture";
+import { hideEditorOnlyObjects } from "../../utils/exportScene";
 
 // model-viewer's exposure boost for Neutral tone mapping without an explicit
 // environment/skybox image. Keep in step with the `tone-mapping` attribute on the
-// preview <model-viewer> in App.tsx.
+// published scene's <model-viewer> in PublicViewer.tsx.
 const MODEL_VIEWER_NEUTRAL_EXPOSURE = 1.3;
 
 export function useViewportRenderer(
@@ -45,14 +46,16 @@ export function useViewportRenderer(
     //                             || (!envImage && !skyboxImage));
     //   threeRenderer.toneMappingExposure = (exposure ?? 1) * (c ? 1.3 : 1);
     //
-    // We set neither environment-image nor skybox-image on the preview element
-    // (see App.tsx), so that 1.3 boost is always in play and the editor has to
-    // apply it too. The preview element pins `tone-mapping="neutral"` so this
+    // We set neither environment-image nor skybox-image on the published scene's
+    // element (see PublicViewer.tsx), so that 1.3 boost is always in play and the
+    // editor has to apply it too. That element pins `tone-mapping="neutral"` so this
     // pairing can't drift if a future model-viewer redefines "auto".
     //
-    // NOTE: this only matches the tone *curve*. The editor still lights with an
-    // AmbientLight while model-viewer lights with a generated environment map, so
-    // the two are not yet identical — that gap needs a shared IBL environment.
+    // NOTE: this only matches the tone *curve*. model-viewer always lights with its
+    // own generated "neutral" environment. The editor lights with a generated room
+    // when the scene's environment setting is on (sceneEnvironment.ts, close to
+    // model-viewer's "legacy" one) and with an AmbientLight when it's off, so the
+    // two are close with it on but not identical.
     renderer.toneMapping = THREE.NeutralToneMapping;
     renderer.toneMappingExposure = MODEL_VIEWER_NEUTRAL_EXPOSURE;
     renderer.domElement.style.width   = "100%";
@@ -78,18 +81,19 @@ export function useViewportRenderer(
 
     const animate = () => {
       animationFrameId = window.requestAnimationFrame(animate);
-      // Preview covers this canvas with the <model-viewer> overlay, so stop
-      // rendering. The canvas stays laid out (never display:none) because the
-      // overlay is pointer-events:none and the editor's OrbitControls still need
-      // to receive the orbit/pan/zoom gestures through it.
-      if (useEditorStore.getState().isPreviewMode) return;
       stats.update();
       if (onRender) onRender();
       // A gallery picture asked for since the last frame (thumbnailCapture.ts) is taken here,
       // before the normal render paints over it.
       if (hasPendingThumbnail()) renderPendingThumbnail(renderer, scene, cameraRef.current);
+      // Play shows the scene without the editor's own objects (grid, light helpers, selection
+      // outlines, gizmo): the set exports and the gallery picture leave out. Hidden for each
+      // render rather than once when Play starts, so nothing the editor shows again meanwhile
+      // gets into a Play frame.
+      const restoreEditorOnlyObjects = useEditorStore.getState().isPreviewMode ? hideEditorOnlyObjects(scene) : null;
       // cameraRef.current is always the active camera — no stale closure.
       renderer.render(scene, cameraRef.current);
+      restoreEditorOnlyObjects?.();
       if (onAfterRender) onAfterRender();
     };
     animate();

@@ -1,4 +1,5 @@
 import { useEditorStore } from "../store/useEditorStore";
+import { getViewedState } from "../animation/objectStates";
 
 // NOTE: this used to also render a `.axis-orb-gizmo` — a static, purely
 // decorative SVG "3D Axis Gizmo" with no click/drag behavior. It's been
@@ -15,9 +16,31 @@ import { useEditorStore } from "../store/useEditorStore";
 export function ViewportOverlays() {
   const projectionMode = useEditorStore((state) => state.projectionMode);
   const setEditorState = useEditorStore((state) => state.setEditorState);
+  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
+  const viewedStates = useEditorStore((state) => state.viewedStates);
+  const objectStates = useEditorStore((state) => state.animation.states);
+  const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
+  const penMode = useEditorStore((state) => state.penTool?.mode ?? null);
+
+  // The selected objects shown in one of their states, where their edits go.
+  const selectedInStates = selectedEntityIds
+    .map((id) => getViewedState(viewedStates, objectStates, id))
+    .filter((objectState) => objectState !== null);
+  const verb = isReadOnly ? "Viewing" : "Editing";
 
   return (
     <div className="viewport-bottom-overlays">
+      {/* The pen's keys, since nothing else on screen says them. */}
+      {penMode === "draw" && <div className="viewport-state-badge">Pen: click for a corner, drag for a curve · Enter to finish</div>}
+      {penMode === "edit" && <div className="viewport-state-badge">Editing points: drag to select, click the curve to add one · Esc or double-click to finish</div>}
+      {/* So nobody edits a state thinking it's Base, even with the States section scrolled away. */}
+      {selectedInStates.length > 0 && (
+        <div className="viewport-state-badge">
+          {selectedEntityIds.length === 1
+            ? `${verb} ${selectedInStates[0].name}`
+            : `${verb} states (${selectedInStates.length}/${selectedEntityIds.length})`}
+        </div>
+      )}
       <div className="projection-toggle-capsule">
         <button
           className={`projection-btn ${projectionMode === "perspective" ? "active" : ""}`}
