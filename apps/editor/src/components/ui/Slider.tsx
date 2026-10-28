@@ -1,4 +1,5 @@
 import { useRef, useEffect } from "react";
+import { useSliderUndoStep } from "../../hooks/useSliderUndoStep";
 
 interface SliderProps {
   label: string;
@@ -11,6 +12,7 @@ interface SliderProps {
 
 export function Slider({ label, min, max, step = 1, value, onChange }: SliderProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const undoStep = useSliderUndoStep();
 
   // Phase 4: Keep --value-percent in sync so the CSS gradient fill tracks the thumb
   useEffect(() => {
@@ -22,6 +24,7 @@ export function Slider({ label, min, max, step = 1, value, onChange }: SliderPro
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const next = parseFloat(e.target.value);
     onChange(next);
+    undoStep.changed();
     const percent = ((next - min) / (max - min)) * 100;
     e.target.style.setProperty("--value-percent", `${percent}%`);
   };
@@ -38,6 +41,7 @@ export function Slider({ label, min, max, step = 1, value, onChange }: SliderPro
           step={step}
           value={value}
           onChange={handleChange}
+          {...undoStep.endProps}
           style={{ width: "100%" }}
         />
         <span className="slider-val">{value}</span>

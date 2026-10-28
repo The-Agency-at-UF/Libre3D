@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { useEditorStore } from "../../store/useEditorStore";
+import { selectViewedObjectState, useEditorStore } from "../../store/useEditorStore";
+import { resolveState, unwrapRotation } from "../../animation/objectStates";
 
 export function useViewportControls(
   // Accept a ref so OrbitControls / TransformControls always use the live camera.
@@ -331,19 +332,37 @@ export function useViewportControls(
 
     transformControls.addEventListener("objectChange", () => {
       const target = transformControls.object;
-      if (target && target.userData.entityId && !target.userData.locked) {
-        useEditorStore
-          .getState()
-          .updateEntityTransform(target.userData.entityId, {
-            position: [target.position.x, target.position.y, target.position.z],
-            rotation: [target.rotation.x, target.rotation.y, target.rotation.z],
-            scale: [target.scale.x, target.scale.y, target.scale.z],
-          });
-      }
+      const store = useEditorStore.getState();
+      const entity = target?.userData.entityId
+        ? store.entities.find((e) => e.id === target.userData.entityId)
+        : undefined;
+      if (target && entity && !target.userData.locked) {
+        // The gizmo hands back rotations wrapped to ±180° (they go through a quaternion); keep the
+        // turn nearest the stored one, so a turn past 180° stays one and transitions to it don't
+        // go the long way round.
+        const rotation = unwrapRotation(
+          [target.rotation.x, target.rotation.y, target.rotation.z],
+          resolveState(entity, selectViewedObjectState(store, entity.id)).rotation,
+        );
+        // Only what this tool moves: the edit goes to the state the object is shown in, if any, and
+        // its other values stay as they are (following Base where the state doesn't set them).
+        const tool = transformControls.mode;
+        store.updateShownTransforms({
+          [entity.id]:
+            tool === "translate"
+              ? { position: [target.position.x, target.position.y, target.position.z] }
+              : tool === "rotate"
+                ? { rotation }
+                : { scale: [target.scale.x, target.scale.y, target.scale.z] },
+        });
 
-      if (isDragging && !hasPausedForDrag) {
-        useEditorStore.temporal.getState().pause();
-        hasPausedForDrag = true;
+        // The drag's first write recorded its undo step; the rest of the drag joins it. Only after
+        // a write: pausing first (the multi-select proxy is written by ViewportCanvas, after this)
+        // left the whole drag out of undo history.
+        if (isDragging && !hasPausedForDrag) {
+          useEditorStore.temporal.getState().pause();
+          hasPausedForDrag = true;
+        }
       }
     });
 

@@ -1,7 +1,8 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useEditorStore } from "../store/useEditorStore";
-import { TranslateIcon, RotateIcon, ScaleIcon, PlusIcon } from "./ui/Icons";
+import { TranslateIcon, RotateIcon, ScaleIcon, PenIcon, PathIcon, CheckIcon, PlusIcon } from "./ui/Icons";
 import { prepareModelImport } from "../utils/importModel";
+import { importSvgFile, isSvgFile } from "../utils/importSvg";
 
 interface FloatingToolbarProps {
   isShapeDropdownOpen: boolean;
@@ -21,15 +22,36 @@ export function FloatingToolbar({
   // Read state and setters directly from the shared Zustand store
   const activeTransformTool = useEditorStore((state) => state.activeTransformTool);
   const transformSpace = useEditorStore((state) => state.transformSpace);
+  const isDrawing = useEditorStore((state) => state.penTool?.mode === "draw");
+  const draws = useEditorStore((state) => (state.penTool?.mode === "draw" ? (state.penTool.draws ?? "shape") : null));
+  const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
   const setEditorState = useEditorStore((state) => state.setEditorState);
+  const setPenTool = useEditorStore((state) => state.setPenTool);
   const addEntity = useEditorStore((state) => state.addEntity);
   const addImportedModelHierarchy = useEditorStore((state) => state.addImportedModelHierarchy);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isPenMenuOpen, setIsPenMenuOpen] = useState(false);
+  const penMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // A press anywhere outside the pen menu closes it.
+  useEffect(() => {
+    if (!isPenMenuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!penMenuRef.current?.contains(event.target as Node)) setIsPenMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [isPenMenuOpen]);
 
   const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+
+    if (isSvgFile(file)) {
+      await importSvgFile(file).catch((error) => console.error("[Libre3D] Failed to import SVG:", error));
+      return;
+    }
 
     useEditorStore.getState().adjustPendingImports(1);
     try {
@@ -44,35 +66,73 @@ export function FloatingToolbar({
 
   return (
     <div className="floating-toolbar">
-      {/* Translate Tool Button */}
+      {/* Translate Tool Button (a transform tool puts the pen down) */}
       <button
-        className={`toolbar-btn ${activeTransformTool === "translate" ? "active-translate" : ""}`}
+        className={`toolbar-btn ${activeTransformTool === "translate" && !isDrawing ? "active-translate" : ""}`}
         type="button"
         title="Translate Tool"
-        onClick={() => setEditorState({ activeTransformTool: "translate" })}
+        onClick={() => setEditorState({ activeTransformTool: "translate", penTool: null })}
       >
         <TranslateIcon />
       </button>
 
       {/* Rotate Tool Button */}
       <button
-        className={`toolbar-btn ${activeTransformTool === "rotate" ? "active-translate" : ""}`}
+        className={`toolbar-btn ${activeTransformTool === "rotate" && !isDrawing ? "active-translate" : ""}`}
         type="button"
         title="Rotate Tool"
-        onClick={() => setEditorState({ activeTransformTool: "rotate" })}
+        onClick={() => setEditorState({ activeTransformTool: "rotate", penTool: null })}
       >
         <RotateIcon />
       </button>
 
       {/* Scale Tool Button */}
       <button
-        className={`toolbar-btn ${activeTransformTool === "scale" ? "active-translate" : ""}`}
+        className={`toolbar-btn ${activeTransformTool === "scale" && !isDrawing ? "active-translate" : ""}`}
         type="button"
         title="Scale Tool"
-        onClick={() => setEditorState({ activeTransformTool: "scale" })}
+        onClick={() => setEditorState({ activeTransformTool: "scale", penTool: null })}
       >
         <ScaleIcon />
       </button>
+
+      {/* Pen: a menu of what it draws, filled shapes (Pen) or tube paths (Path) (useViewportPenTool).
+          Picking the one that's on puts the pen down. Not while view only. */}
+      <div ref={penMenuRef} style={{ position: "relative", display: "inline-block" }}>
+        <button
+          className={`toolbar-btn ${isDrawing ? "active-translate" : ""}`}
+          type="button"
+          title="Pen (P)"
+          disabled={isReadOnly}
+          onClick={() => setIsPenMenuOpen(!isPenMenuOpen)}
+        >
+          {draws === "path" ? <PathIcon /> : <PenIcon />}
+        </button>
+        {isPenMenuOpen && !isReadOnly && (
+          <div className="pen-menu">
+            {(
+              [
+                { kind: "shape", label: "Pen", icon: <PenIcon /> },
+                { kind: "path", label: "Path", icon: <PathIcon /> },
+              ] as const
+            ).map(({ kind, label, icon }) => (
+              <button
+                key={kind}
+                className="pen-menu-item"
+                type="button"
+                onClick={() => {
+                  setPenTool(draws === kind ? null : { mode: "draw", pathId: null, selectedPoints: [], draws: kind });
+                  setIsPenMenuOpen(false);
+                }}
+              >
+                <span className="pen-menu-check">{draws === kind && <CheckIcon />}</span>
+                {icon}
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div style={{ width: "1px", background: "rgba(255, 255, 255, 0.15)", margin: "4px 2px" }}></div>
 
@@ -199,6 +259,28 @@ export function FloatingToolbar({
               onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               onClick={() => {
+                addEntity("path");
+                setIsShapeDropdownOpen(false);
+              }}
+            >
+              + Path
+            </button>
+            <button
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text-primary)",
+                padding: "6px 10px",
+                borderRadius: "3px",
+                textAlign: "left",
+                fontSize: "11px",
+                cursor: "pointer",
+                fontFamily: "var(--font)",
+              }}
+              type="button"
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              onClick={() => {
                 addEntity("directionalLight");
                 setIsShapeDropdownOpen(false);
               }}
@@ -225,14 +307,15 @@ export function FloatingToolbar({
                 setIsShapeDropdownOpen(false);
               }}
             >
-              Import Model...
+              Import...
             </button>
           </div>
         )}
+        {/* A model (.glb), or a drawing whose strokes become paths (.svg) */}
         <input
           ref={fileInputRef}
           type="file"
-          accept=".glb"
+          accept=".glb,.svg"
           style={{ display: "none" }}
           onChange={handleFileSelected}
         />

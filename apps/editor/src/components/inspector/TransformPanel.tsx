@@ -1,22 +1,32 @@
 import { useEditorStore, type Entity } from "../../store/useEditorStore";
+import { getViewedState, resolveState, type StateValues } from "../../animation/objectStates";
 import { PanelSection } from "../ui/PanelSection";
 import { Vector3Input } from "../ui/Vector3Input";
+import { StateValueExtra } from "./StateValueExtra";
 
 interface TransformPanelProps {
   selectedEntities: Entity[];
 }
 
 export function TransformPanel({ selectedEntities }: TransformPanelProps) {
-  const updateMultipleEntityTransforms = useEditorStore((state) => state.updateMultipleEntityTransforms);
+  const updateShownTransforms = useEditorStore((state) => state.updateShownTransforms);
+  const viewedStates = useEditorStore((state) => state.viewedStates);
+  const objectStates = useEditorStore((state) => state.animation.states);
 
   if (selectedEntities.length === 0) return null;
 
+  // Each object as it's shown: in Base, or in the state it's shown in (where its edits go).
+  const shownStates = selectedEntities.map((entity) => getViewedState(viewedStates, objectStates, entity.id));
+  const shown = selectedEntities.map((entity, i) => resolveState(entity, shownStates[i]));
+  // One object shown in a state: its fields get a marker and a "Reset to Base".
+  const objectState = selectedEntities.length === 1 ? shownStates[0] : null;
+
   // Compute mixed state for values
   const getMixedValue = (field: "position" | "rotation" | "scale", index: number): number | null => {
-    if (selectedEntities.length === 1) return selectedEntities[0][field][index];
-    const firstVal = selectedEntities[0][field][index];
-    for (let i = 1; i < selectedEntities.length; i++) {
-      if (Math.abs(selectedEntities[i][field][index] - firstVal) > 0.001) return null;
+    if (shown.length === 1) return shown[0][field][index];
+    const firstVal = shown[0][field][index];
+    for (let i = 1; i < shown.length; i++) {
+      if (Math.abs(shown[i][field][index] - firstVal) > 0.001) return null;
     }
     return firstVal;
   };
@@ -36,13 +46,13 @@ export function TransformPanel({ selectedEntities }: TransformPanelProps) {
     index: number,
     value: number
   ) => {
-    const updates: Record<string, any> = {};
-    selectedEntities.forEach(entity => {
-      const current = [...entity[field]] as [number, number, number];
+    const updates: Record<string, StateValues> = {};
+    selectedEntities.forEach((entity, i) => {
+      const current = [...shown[i][field]] as [number, number, number];
       current[index] = value;
       updates[entity.id] = { [field]: current };
     });
-    updateMultipleEntityTransforms(updates);
+    updateShownTransforms(updates);
   };
 
   return (
@@ -52,16 +62,19 @@ export function TransformPanel({ selectedEntities }: TransformPanelProps) {
           label="Position"
           values={mixedPosition}
           onChange={(index, val) => handleTransformChange("position", index, val)}
+          labelExtra={<StateValueExtra objectState={objectState} field="position" />}
         />
         <Vector3Input
           label="Rotation"
           values={mixedRotation}
           onChange={(index, val) => handleTransformChange("rotation", index, val)}
+          labelExtra={<StateValueExtra objectState={objectState} field="rotation" />}
         />
         <Vector3Input
           label="Scale"
           values={mixedScale}
           onChange={(index, val) => handleTransformChange("scale", index, val)}
+          labelExtra={<StateValueExtra objectState={objectState} field="scale" />}
         />
       </div>
     </PanelSection>

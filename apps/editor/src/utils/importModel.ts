@@ -90,8 +90,8 @@ function computeImportRootScale(scene: THREE.Object3D): number {
 // addImportedModelHierarchy.
 export async function prepareModelImport(file: File): Promise<{ assetId: string; nodes: ImportNodeSpec[] }> {
   if (!/\.glb$/i.test(file.name)) {
-    window.alert("Only .glb files are supported for import.");
-    throw new Error("Unsupported file type: only .glb files are supported for import.");
+    window.alert("Only .glb and .svg files can be imported.");
+    throw new Error("Unsupported file type: only .glb and .svg files can be imported.");
   }
 
   // Checked before reading the file: anything bigger couldn't be uploaded with the scene.

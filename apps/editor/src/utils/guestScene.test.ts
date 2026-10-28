@@ -15,6 +15,8 @@ const content = (marker: string) =>
     frame: {},
     cameraProfiles: {},
     activeProfileId: "personal",
+    animation: { states: {}, events: {} },
+    viewedStates: {},
   }) as unknown as SceneContent;
 
 let browser: BrowserStubs;

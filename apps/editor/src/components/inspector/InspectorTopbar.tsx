@@ -1,6 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useEditorStore } from "../../store/useEditorStore";
-import { usePreviewSession } from "../../hooks/usePreviewSession";
 import { HelpMenu } from "../HelpMenu";
 
 interface InspectorTopbarProps {
@@ -21,16 +20,8 @@ export function InspectorTopbar({
 }: InspectorTopbarProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const setEditorState = useEditorStore((state) => state.setEditorState);
-  const { isPreviewMode, togglePreview } = usePreviewSession();
-
-  useEffect(() => {
-    return () => {
-      const currentUrl = useEditorStore.getState().previewGlbUrl;
-      if (currentUrl) {
-        URL.revokeObjectURL(currentUrl);
-      }
-    };
-  }, []);
+  const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
+  const setPreviewMode = useEditorStore((state) => state.setPreviewMode);
 
   const zoomPresets = [25, 50, 75, 100, 150, 200];
 
@@ -252,7 +243,7 @@ export function InspectorTopbar({
       <div className="topbar-right">
         <button
           className={`btn-chip ${isPreviewMode ? "stop-btn" : "play-btn"}`}
-          onClick={togglePreview}
+          onClick={() => setPreviewMode(!isPreviewMode)}
           style={{
             display: "flex",
             alignItems: "center",

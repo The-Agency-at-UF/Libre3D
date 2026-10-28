@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 import { isEffectivelyLocked } from "../store/entityIndex";
+import { editPath } from "../viewport/hooks/useViewportPenTool";
 
 interface UseHotkeysProps {
   onDuplicate?: () => void;
@@ -12,10 +13,14 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      // Don't trigger hotkeys if user is typing in an input field
+      // Don't trigger hotkeys if user is typing in an input field. Undo is the exception from a
+      // slider: it keeps focus after a drag, and it steps history like everywhere else.
       const activeEl = document.activeElement;
+      const isSlider = activeEl?.tagName === "INPUT" && (activeEl as HTMLInputElement).type === "range";
+      const isUndo = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z";
       if (
         activeEl &&
+        !(isSlider && isUndo) &&
         (activeEl.tagName === "INPUT" ||
           activeEl.tagName === "TEXTAREA" ||
           activeEl.getAttribute("contenteditable") === "true")
@@ -24,6 +29,13 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
       }
 
       const cmdOrCtrl = event.ctrlKey || event.metaKey;
+
+      // Play is for looking: Stop must find the scene and selection as they were, so only the
+      // camera zoom shortcuts work while it runs.
+      const isZoomShortcut = cmdOrCtrl && ["=", "+", "-"].includes(event.key);
+      if (useEditorStore.getState().isPreviewMode && !isZoomShortcut) {
+        return;
+      }
 
       // Ctrl/Cmd shortcuts
       if (cmdOrCtrl) {
@@ -88,15 +100,27 @@ export function useHotkeys({ onDuplicate, onNewFile }: UseHotkeysProps = {}) {
       // Single key shortcuts (no modifiers)
       if (!cmdOrCtrl && !event.altKey && !event.shiftKey) {
         switch (event.key.toLowerCase()) {
+          // A transform tool puts the pen down.
           case "w":
-            setEditorState({ activeTransformTool: "translate" });
+            setEditorState({ activeTransformTool: "translate", penTool: null });
             break;
           case "e":
-            setEditorState({ activeTransformTool: "rotate" });
+            setEditorState({ activeTransformTool: "rotate", penTool: null });
             break;
           case "r":
-            setEditorState({ activeTransformTool: "scale" });
+            setEditorState({ activeTransformTool: "scale", penTool: null });
             break;
+          case "p": {
+            const { penTool, setPenTool } = useEditorStore.getState();
+            setPenTool(penTool?.mode === "draw" ? null : { mode: "draw", pathId: null, selectedPoints: [] });
+            break;
+          }
+          // Edits the selected path's points (the pen takes Enter itself while it's on).
+          case "enter": {
+            const selectedIds = useEditorStore.getState().selectedEntityIds;
+            if (selectedIds.length === 1) editPath(selectedIds[0]);
+            break;
+          }
           case "delete":
           case "backspace": {
             const { entities, selectedEntityIds } = useEditorStore.getState();
