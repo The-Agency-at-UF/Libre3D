@@ -122,16 +122,27 @@ function tourCardStyle(rect: DOMRect, placement: Placement): CSSProperties {
  */
 export function HelpMenu() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [openDialog, setOpenDialog] = useState<"tutorial" | "hotkeys" | null>(() =>
-    localStorage.getItem(TUTORIAL_SEEN_KEY) ? null : "tutorial"
-  );
+  const [openDialog, setOpenDialog] = useState<"tutorial" | "hotkeys" | null>(() => {
+    try {
+      return localStorage.getItem(TUTORIAL_SEEN_KEY) ? null : "tutorial";
+    } catch {
+      return null; // Storage blocked: never auto-open, or it would reappear on every load.
+    }
+  });
   const [step, setStep] = useState(0);
   const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
 
-  const closeDialog = () => {
-    if (openDialog === "tutorial") localStorage.setItem(TUTORIAL_SEEN_KEY, "1");
-    setOpenDialog(null);
-  };
+  // Marked seen as soon as it's shown, so leaving mid-tour (Back, reload) doesn't auto-open it again.
+  useEffect(() => {
+    if (openDialog !== "tutorial") return;
+    try {
+      localStorage.setItem(TUTORIAL_SEEN_KEY, "1");
+    } catch {
+      // Nothing to do.
+    }
+  }, [openDialog]);
+
+  const closeDialog = () => setOpenDialog(null);
 
   useEffect(() => {
     if (!openDialog) return;
