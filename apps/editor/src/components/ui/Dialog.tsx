@@ -62,7 +62,7 @@ function Dialog({ title, message, confirmLabel, cancelLabel, danger, defaultValu
         )}
         <div className="ui-dialog-actions">
           {cancelLabel && <Button onClick={() => onClose(null)}>{cancelLabel}</Button>}
-          <Button type="submit" variant="primary" className={danger ? "ui-button--danger" : undefined}>
+          <Button type="submit" variant={danger ? "danger" : "primary"}>
             {confirmLabel}
           </Button>
         </div>
