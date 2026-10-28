@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useEditorStore } from "../../store/useEditorStore";
 import { usePreviewSession } from "../../hooks/usePreviewSession";
+import { HelpMenu } from "../HelpMenu";
 
 interface InspectorTopbarProps {
   setIsModalOpen: (open: boolean) => void;
@@ -261,6 +262,7 @@ export function InspectorTopbar({
           <i className={isPreviewMode ? "ti ti-player-stop" : "ti ti-player-play"} style={{ fontSize: "12px" }}></i>
           <span>{isPreviewMode ? "Stop" : "Play"}</span>
         </button>
+        <HelpMenu />
         <button
           className="btn-chip"
           disabled={isPreviewMode}
