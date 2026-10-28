@@ -1,6 +1,7 @@
 import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
+import { shallow } from "zustand/shallow";
 import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
 import { createId } from "../utils/createId";
 import type { SceneContent, StoredSceneContent } from "../utils/sceneDocument";
@@ -11,8 +12,36 @@ import {
   getWorldPosition,
   type EntityTRS,
 } from "../utils/entityTransforms";
+import {
+  cloneAnimation,
+  cloneStateValues,
+  createEmptyAnimation,
+  createObjectState,
+  duplicateStates,
+  getViewedState,
+  removeStatesOf,
+  resolveState,
+  type ObjectState,
+  type SceneAnimation,
+  type StateValueKey,
+  type StateValues,
+} from "../animation/objectStates";
+import { reparentStates, type ParentChange } from "../animation/reparentStates";
+import {
+  cloneTransition,
+  createEvent,
+  duplicateEvents,
+  removeEventsOf,
+  type EventTrigger,
+  type SceneEvent,
+} from "../animation/events";
+import type { TransitionAction } from "../animation/transitions";
+import { clonePath, createSamplePath, DEFAULT_STROKE, type PathData, type PathStroke } from "../paths/pathGeometry";
+import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
+import { cloneShape, flattenShape, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
+import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
-export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "importedModel" | "group";
+export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "directionalLight" | "importedModel" | "group";
 
 /**
  * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
@@ -20,7 +49,7 @@ export type EntityType = "cube" | "sphere" | "torus" | "directionalLight" | "imp
  */
 export type ReadOnlyReason = "openElsewhere";
 
-export type MaterialLayerType = "color" | "lighting" | "image";
+export type MaterialLayerType = "color" | "lighting" | "image" | "depth";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
 
 // Which glTF texture channel an ImageLayer feeds. "metallicRoughness" is a
@@ -56,6 +85,11 @@ export interface LightingLayer {
   model: LightingModel;
   roughness: number; // only meaningful when model === "physical"
   metalness: number; // only meaningful when model === "physical"
+  // A clear lacquer over the material (glTF's KHR_materials_clearcoat), physical only. Above 0 it
+  // takes a MeshPhysicalMaterial. Undefined on layers from before it (an imported mesh's then keeps
+  // the clearcoat its glTF material came with).
+  clearcoat?: number;
+  clearcoatRoughness?: number;
   shininess: number; // only meaningful when model === "phong"
   emissive: string;
   emissiveIntensity: number; // ignored when model === "none"
@@ -76,7 +110,31 @@ export interface ImageLayer {
   wrapT: number;
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer;
+// Colours the object by distance (like Spline's Depth layer, Vector origin, Local): each vertex's
+// distance from `origin` in the object's own space, straight out ("radial") or along `direction`
+// ("linear"), is placed on the ramp between `near` (its first stop) and `far` (its last). It's
+// painted as vertex colours (utils/depthColors.ts), so it exports and publishes; over the Color
+// layer's colour by `opacity`. At most one per object.
+export interface DepthStop {
+  color: string;
+  position: number; // 0-1 along the ramp
+}
+
+export interface DepthLayer {
+  id: string;
+  type: "depth";
+  enabled: boolean;
+  opacity: number;
+  gradientType: "radial" | "linear";
+  origin: [number, number, number];
+  direction: [number, number, number]; // only meaningful when gradientType === "linear"
+  near: number;
+  far: number;
+  stops: DepthStop[]; // 2-10
+  smooth: boolean; // eased blends between stops
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer;
 
 export interface Entity {
   id: string;
@@ -94,6 +152,34 @@ export interface Entity {
   parentId?: string | null;
   nodePath?: number[];
   rootEntityId?: string;
+  // Paths (type "path", see paths/pathGeometry.ts): the curve, its tube, and how much of it shows
+  // in Base (0–1 of its length; states can set their own).
+  path?: PathData;
+  stroke?: PathStroke;
+  trimStart?: number;
+  trimEnd?: number;
+  // Shapes (type "shape", see paths/shapeGeometry.ts): a filled outline with holes, flat in its own
+  // XY plane unless it has an extrusion (its depth) or a bevel.
+  shape?: ShapeData;
+  extrusion?: number;
+  bevel?: number;
+}
+
+/**
+ * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new shapes or paths ("draw") or editing
+ * one path's or shape's points ("edit"). While drawing, `draws` is what it draws: a filled shape (the
+ * default) or a tube path. `pathId` is the shape or path being drawn (null while the pen is on
+ * between them) or the path or shape edited; `selectedPoints` are the edited path's picked points, indices
+ * into its points, in the order they were picked (the last one is the one the gizmo and the Point row
+ * show). A shape has several closed outlines (paths/shapeGeometry.ts's shapeContours): `contour` is the
+ * one being edited, which `selectedPoints` are in (0 when missing).
+ */
+export interface PenToolState {
+  mode: "draw" | "edit";
+  pathId: string | null;
+  selectedPoints: number[];
+  contour?: number;
+  draws?: "shape" | "path";
 }
 
 export interface ImportNodeSpec {
@@ -178,6 +264,13 @@ export interface SceneSettingsConfig {
   wireframe: boolean;
   fogEnabled: boolean;
   showAxisGuides?: boolean;
+  // Image-based light from a generated room (viewport/sceneEnvironment.ts): soft fill and reflections
+  // for Physical materials. Replaces the ambient light while on. Older scenes open with it off
+  // (scene document v4), new ones with it on.
+  environment: {
+    enabled: boolean;
+    intensity: number;
+  };
   lights: {
     intensity: number;
     color: string;
@@ -256,6 +349,10 @@ export const initialSceneDefaults: SceneSettingsConfig = {
   wireframe: false,
   fogEnabled: false,
   showAxisGuides: false,
+  environment: {
+    enabled: true,
+    intensity: 1,
+  },
   lights: {
     intensity: 0.75,
     color: "#ffffff",
@@ -305,9 +402,45 @@ export interface EditorState {
   toggleLock: (id: string) => void;
   renameEntity: (id: string, newName: string) => void;
   renameEntities: (updates: Record<string, string>) => void;
+  // The radius or cap style of every path among `ids`, in one undo step (not their trim, which
+  // states can set: see updateShownTransforms).
+  updatePathStrokes: (ids: string[], updates: Partial<PathStroke>) => void;
+  // A shape the pen tool drew: one outline (`outline`, in the shape's own XY plane, so turned by
+  // `rotation`), its origin at `origin`. Filled in the default shape colour from both sides, like an
+  // imported one. Selected, like addEntity. Returns its ID.
+  addShape: (origin: [number, number, number], rotation: [number, number, number], outline: PathData) => string;
+  // A path the pen tool drew (the Path pen), its origin at `origin` and its points relative to it.
+  // Selected, like addEntity. Returns its ID.
+  addPath: (origin: [number, number, number], path: PathData) => string;
+  // Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
+  // the path, not to a state, so this changes them in every state.
+  updatePath: (id: string, path: PathData) => void;
+  // Replaces a shape's outlines (the pen tool's edits). Flat: their points' and handles' Z is dropped.
+  updateShape: (id: string, shape: ShapeData) => void;
+  // The shapes and paths of an imported SVG (paths/svgImport.ts), in one undo step: one named `name`,
+  // or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
+  // Returns its ID ("" when there's nothing to add).
+  addImportedSvg: (name: string, items: ImportedSvgItem[]) => string;
+  // The extrusion (depth) or bevel of every shape among `ids`, in one undo step.
+  updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
+  // Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
+  // a path along the middle of its strokes (paths/centerLine.ts), with a tube as thick as the
+  // strokes, in one undo step. A shape keeps its ID, name, place, material, states and events; when
+  // it has several strokes, the others become paths next to it ("Shape 1 (2)"). Returns how many
+  // shapes were converted.
+  convertShapesToPaths: (ids: string[]) => number;
 
   // Viewport / Projection
   activeTransformTool: "translate" | "rotate" | "scale";
+  // Drawing or editing paths (see PenToolState), or null. Not saved and not undoable; off in Play,
+  // during a ▶ preview, and while view only.
+  penTool: PenToolState | null;
+  setPenTool: (penTool: PenToolState | null) => void;
+  // Editing an object's Depth layer in the viewport (useViewportDepthGizmo): its handles show, and
+  // the transform gizmo moves the layer's origin instead of the object. The object's ID, or null.
+  // Not saved and not undoable; off like the pen, and the pen and it end each other.
+  depthEdit: string | null;
+  setDepthEdit: (entityId: string | null) => void;
   projectionMode: "perspective" | "orthographic";
   transformSpace: "world" | "local";
 
@@ -321,8 +454,11 @@ export interface EditorState {
 
   // Play Mode / Preview
   isPreviewMode: boolean;
-  previewGlbUrl: string | null;
-  setPreviewMode: (active: boolean, url: string | null) => void;
+  setPreviewMode: (active: boolean) => void;
+  // The transition the Edit Event panel's ▶ is playing in the editor viewport (useViewportPlay), by
+  // action ID, or null. Not saved and not undoable, and allowed in a view-only scene: it's looking.
+  previewingActionId: string | null;
+  setPreviewingAction: (actionId: string | null) => void;
 
   // Number of .glb imports currently being read/parsed (file picked but
   // entities not yet materialized). Not persisted — like isPreviewMode it's
@@ -336,6 +472,33 @@ export interface EditorState {
   readOnlyReason: ReadOnlyReason | null;
   setReadOnly: (reason: ReadOnlyReason | null) => void;
 
+  // Object states and events (see animation/objectStates.ts and animation/events.ts). Saved with the
+  // scene and undoable.
+  animation: SceneAnimation;
+  // The state each object is shown in while editing (entity ID → state ID; no entry = Base). It
+  // stays when the object is deselected, and is saved with the scene so it reopens as it was left.
+  // Not undoable, and allowed while read-only (looking at a state changes nothing). Read it through
+  // selectViewedObjectState, which treats an entry whose state is gone (deleted, undone) as Base.
+  viewedStates: Record<string, string>;
+  // Shows an object in one of its states, or in Base (null).
+  setViewedState: (entityId: string, stateId: string | null) => void;
+  // Adds "State N" (setting nothing yet) to an object and views it, like addEntity selects. Returns its ID.
+  addState: (entityId: string) => string;
+  renameState: (stateId: string, name: string) => void;
+  removeState: (stateId: string) => void;
+  // Sets values in a state, leaving the ones not passed as they are.
+  setStateValues: (stateId: string, values: StateValues) => void;
+  // Transform edits from the inspector and the gizmo: each object's go to the state it's shown in,
+  // or to its own values in Base. One undo step for all of them.
+  updateShownTransforms: (updates: Record<string, StateValues>) => void;
+  // "Reset to Base": the state stops setting that value, so it follows the object's own again.
+  clearStateValue: (stateId: string, key: StateValueKey) => void;
+  // Adds an event to an object, last in its list, with one transition of the object. Returns its ID.
+  addEvent: (ownerId: string, trigger: EventTrigger) => string;
+  // Changes an event's trigger or replaces its actions (a list edited as a whole).
+  updateEvent: (eventId: string, updates: { trigger?: EventTrigger; actions?: TransitionAction[] }) => void;
+  removeEvent: (eventId: string) => void;
+
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
@@ -347,7 +510,7 @@ export interface EditorState {
   // Replaces the whole scene with a saved one (null = a new scene's starting content) and clears
   // undo history, so Ctrl+Z can't reach into the previously open scene.
   loadScene: (content: StoredSceneContent | null) => void;
-  setEditorState:(updates: Partial<Omit<EditorState, "entities" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
+  setEditorState:(updates: Partial<Omit<EditorState, "entities" | "animation" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "setPreviewingAction" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
 
 const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
@@ -362,6 +525,14 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   torus: {
     name: "Torus",
     color: "#FF7AE0",
+  },
+  path: {
+    name: "Path",
+    color: "#FFC24D",
+  },
+  shape: {
+    name: "Shape",
+    color: "#9AA4B2",
   },
   directionalLight: {
     name: "Directional Light",
@@ -387,6 +558,30 @@ const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
   color,
 });
 
+export const createDepthLayer = (): DepthLayer => ({
+  id: createEntityId(),
+  type: "depth",
+  enabled: true,
+  opacity: 1,
+  gradientType: "radial",
+  origin: [0, 0, 0],
+  direction: [1, 0, 0],
+  near: 0,
+  far: 2,
+  stops: [
+    { color: "#ff3b30", position: 0 },
+    { color: "#ffcc00", position: 0.5 },
+    { color: "#af52de", position: 1 },
+  ],
+  smooth: false,
+});
+
+// A copy that shares nothing with `layer` (a Depth layer holds arrays).
+export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer =>
+  layer.type === "depth"
+    ? { ...layer, origin: cloneVector(layer.origin), direction: cloneVector(layer.direction), stops: layer.stops.map((stop) => ({ ...stop })) }
+    : { ...layer };
+
 const createLightingLayer = (overrides: Partial<LightingLayer> = {}): LightingLayer => ({
   id: createEntityId(),
   type: "lighting",
@@ -395,6 +590,8 @@ const createLightingLayer = (overrides: Partial<LightingLayer> = {}): LightingLa
   model: "physical",
   roughness: 0.45,
   metalness: 0.08,
+  clearcoat: 0,
+  clearcoatRoughness: 0,
   shininess: 30,
   emissive: "#000000",
   emissiveIntensity: 1,
@@ -435,6 +632,8 @@ const createEntity = (type: EntityType): Entity => ({
     : type === "group"
       ? null // groups are pure transform pivots — no material, no color
       : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
+  // The Add menu's path is a sample curve; the Path pen draws its own (addPath).
+  ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
   visible: true,
   locked: false,
 });
@@ -486,7 +685,10 @@ const cloneEntity = (entity: Entity): Entity => ({
   scale: cloneVector(entity.scale),
   visible: entity.visible ?? true,
   locked: entity.locked ?? false,
-  ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map((layer) => ({ ...layer })) } : null),
+  ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map(cloneMaterialLayer) } : null),
+  ...(entity.path ? { path: clonePath(entity.path) } : null),
+  ...(entity.stroke ? { stroke: { ...entity.stroke } } : null),
+  ...(entity.shape ? { shape: cloneShape(entity.shape) } : null),
 });
 
 /** The parts of the state that are saved as the scene (see utils/sceneDocument.ts). */
@@ -497,7 +699,44 @@ export const selectSceneContent = (state: EditorState): SceneContent => ({
   frame: state.frame,
   cameraProfiles: state.cameraProfiles,
   activeProfileId: state.activeProfileId,
+  animation: state.animation,
+  viewedStates: state.viewedStates,
 });
+
+/** The state an object is shown in, or null when it's shown in Base (see `viewedStates`). */
+export const selectViewedObjectState = (state: EditorState, entityId: string): ObjectState | null =>
+  getViewedState(state.viewedStates, state.animation.states, entityId);
+
+// The `animation` part of an update that replaces its states, its events, or both, or nothing when
+// neither changed.
+const withAnimation = (animation: SceneAnimation, changes: Partial<SceneAnimation>) => {
+  const { states = animation.states, events = animation.events } = changes;
+  return states === animation.states && events === animation.events ? null : { animation: { ...animation, states, events } };
+};
+
+// The update that replaces one event through `update`, or no change when it's gone.
+const updatingEvent = (
+  state: EditorState,
+  eventId: string,
+  update: (event: SceneEvent) => SceneEvent,
+): Partial<EditorState> => {
+  const event = state.animation.events[eventId];
+  return event ? withAnimation(state.animation, { events: { ...state.animation.events, [eventId]: update(event) } })! : {};
+};
+
+// The update that replaces one state through `update`, or no change when it's gone.
+const updatingState = (
+  state: EditorState,
+  stateId: string,
+  update: (objectState: ObjectState) => ObjectState,
+): Partial<EditorState> => {
+  const objectState = state.animation.states[stateId];
+  return objectState ? withAnimation(state.animation, { states: { ...state.animation.states, [stateId]: update(objectState) } })! : {};
+};
+
+// Where an object's parent is in the world, from the stored tree (null = the scene).
+const getParentWorld = (entities: Entity[], parentId: string | null | undefined) =>
+  parentId ? getEntityWorldMatrix(entities, parentId) : null;
 
 // What a new scene starts with: a fresh cube (new ID) and the default light.
 const createStartingEntities = (): Entity[] => [
@@ -523,7 +762,7 @@ function deepMerge(target: any, source: any): any {
 // What read-only mode protects: the scene's content, less its cameras. Moving the view (and picking
 // a camera) is how you look at a scene you can't edit, and nothing is saved while read-only; the
 // scene is reloaded from the cloud before editing resumes.
-const PROTECTED_SCENE_KEYS = ["entities", "sceneSettings", "postProcessing", "frame"] as const;
+const PROTECTED_SCENE_KEYS = ["entities", "sceneSettings", "postProcessing", "frame", "animation"] as const;
 
 // What persist saves in this browser (partialize): editor preferences only. The scene is saved per
 // scene in the cloud.
@@ -698,6 +937,12 @@ export const useEditorStore = create<EditorState>()(
               const idMap = new Map<string, string>();
               cloneOrder.forEach((id) => idMap.set(id, createEntityId()));
 
+              // A requested copy is set a little apart from its original (its states too).
+              const copyOffset: [number, number, number] = [0.5, 0, 0.5];
+              const copyOffsets = new Map(
+                cloneOrder.filter((id) => requestedRootIds.has(id)).map((id) => [id, copyOffset] as const),
+              );
+
               const newEntities: Entity[] = cloneOrder.map((id) => {
                 const original = state.entities.find((e) => e.id === id)!;
                 const isRequestedRoot = requestedRootIds.has(id);
@@ -712,17 +957,27 @@ export const useEditorStore = create<EditorState>()(
                   rootEntityId: newRootEntityId,
                   position: isRequestedRoot
                     ? [
-                      original.position[0] + 0.5,
-                      original.position[1],
-                      original.position[2] + 0.5
+                      original.position[0] + copyOffset[0],
+                      original.position[1] + copyOffset[1],
+                      original.position[2] + copyOffset[2],
                     ] as [number, number, number]
                     : cloneVector(original.position),
                 };
               });
 
+              // Copies of the states and events too, and each copy shown in the copy of the state its
+              // original shows.
+              const { states, stateIdMap } = duplicateStates(state.animation.states, idMap, copyOffsets);
+              const events = duplicateEvents(state.animation.events, idMap, stateIdMap);
+              const copiedViews = cloneOrder
+                .map((id) => [idMap.get(id)!, stateIdMap.get(selectViewedObjectState(state, id)?.id ?? "")] as const)
+                .filter((view): view is readonly [string, string] => view[1] !== undefined);
+
               return {
                 entities: [...state.entities, ...newEntities],
                 selectedEntityIds: cloneOrder.filter((id) => requestedRootIds.has(id)).map((id) => idMap.get(id)!),
+                ...withAnimation(state.animation, { states, events }),
+                ...(copiedViews.length > 0 ? { viewedStates: { ...state.viewedStates, ...Object.fromEntries(copiedViews) } } : null),
               };
             });
           },
@@ -736,10 +991,16 @@ export const useEditorStore = create<EditorState>()(
             // Note: this intentionally does NOT free the removed entities'
             // model/texture assets, so undo always gets a working entity back.
             // Local copies are a cache of the cloud ones (assetTransfers.ts);
-            // nothing evicts them yet.
+            // nothing evicts them yet. The removed objects' states and events, and
+            // other objects' actions that move them, go in the same set, so one undo
+            // brings all of it back together.
             set((state) => ({
               entities: state.entities.filter((entity) => !allIds.has(entity.id)),
               selectedEntityIds: state.selectedEntityIds.filter((id) => !allIds.has(id)),
+              ...withAnimation(state.animation, {
+                states: removeStatesOf(state.animation.states, allIds),
+                events: removeEventsOf(state.animation.events, allIds),
+              }),
             }));
           },
           // World-space placement is preserved: the new local TRS is solved from
@@ -756,12 +1017,14 @@ export const useEditorStore = create<EditorState>()(
 
               const parentWorld = newParentId ? getEntityWorldMatrix(state.entities, newParentId) : null;
               const solvedById = new Map<string, EntityTRS>();
+              const parentChanges: ParentChange[] = [];
               for (const id of moveRoots) {
                 const entity = state.entities.find((e) => e.id === id)!;
                 // Same-parent moves are pure sibling reorders — keep the stored
                 // TRS bit-identical instead of a solve/decompose round-trip.
                 if ((entity.parentId ?? null) === (newParentId ?? null)) continue;
                 solvedById.set(id, solveLocalFromWorld(getEntityWorldMatrix(state.entities, id), parentWorld));
+                parentChanges.push({ entity, from: getParentWorld(state.entities, entity.parentId), to: parentWorld });
               }
 
               const movingSet = new Set(moveRoots);
@@ -795,6 +1058,7 @@ export const useEditorStore = create<EditorState>()(
 
               return {
                 entities: [...remaining.slice(0, insertAt), ...moved, ...remaining.slice(insertAt)],
+                ...withAnimation(state.animation, { states: reparentStates(state.animation.states, parentChanges) }),
               };
             }),
           groupEntities: (ids) => {
@@ -845,9 +1109,11 @@ export const useEditorStore = create<EditorState>()(
 
               const movingSet = new Set(moveRoots);
               const firstMemberIndex = state.entities.findIndex((entity) => movingSet.has(entity.id));
+              const parentChanges: ParentChange[] = [];
               const entitiesNext = state.entities.map((entity) => {
                 if (!movingSet.has(entity.id)) return entity;
                 const solved = solveLocalFromWorld(memberWorlds.get(entity.id)!, groupWorld);
+                parentChanges.push({ entity, from: getParentWorld(state.entities, entity.parentId), to: groupWorld });
                 return {
                   ...entity,
                   parentId: group.id,
@@ -858,7 +1124,11 @@ export const useEditorStore = create<EditorState>()(
               });
               entitiesNext.splice(Math.max(firstMemberIndex, 0), 0, group);
 
-              return { entities: entitiesNext, selectedEntityIds: [group.id] };
+              return {
+                entities: entitiesNext,
+                selectedEntityIds: [group.id],
+                ...withAnimation(state.animation, { states: reparentStates(state.animation.states, parentChanges) }),
+              };
             });
             return groupId;
           },
@@ -887,13 +1157,16 @@ export const useEditorStore = create<EditorState>()(
 
               const childIds = getChildren(state.entities, id).map((child) => child.id);
               const parentWorld = group.parentId ? getEntityWorldMatrix(state.entities, group.parentId) : null;
+              const groupWorld = getEntityWorldMatrix(state.entities, id);
               const childSet = new Set(childIds);
+              const parentChanges: ParentChange[] = [];
 
               const entitiesNext = state.entities
                 .filter((entity) => entity.id !== id)
                 .map((entity) => {
                   if (!childSet.has(entity.id)) return entity;
                   const solved = solveLocalFromWorld(getEntityWorldMatrix(state.entities, entity.id), parentWorld);
+                  parentChanges.push({ entity, from: groupWorld, to: parentWorld });
                   return {
                     ...entity,
                     parentId: group.parentId ?? null,
@@ -903,11 +1176,19 @@ export const useEditorStore = create<EditorState>()(
                   };
                 });
 
+              // The group's own states and events go with it (and other objects' actions that move
+              // it); its children's states keep their place.
+              const statesNext = reparentStates(removeStatesOf(state.animation.states, new Set([id])), parentChanges);
+
               return {
                 entities: entitiesNext,
                 selectedEntityIds: childIds.length > 0
                   ? childIds
                   : state.selectedEntityIds.filter((selId) => selId !== id),
+                ...withAnimation(state.animation, {
+                  states: statesNext,
+                  events: removeEventsOf(state.animation.events, new Set([id])),
+                }),
               };
             }),
           updateEntityTransform: (id, updates) =>
@@ -1005,10 +1286,146 @@ export const useEditorStore = create<EditorState>()(
                 return newName ? { ...entity, name: newName } : entity;
               }),
             })),
+          updatePathStrokes: (ids, updates) =>
+            set((state) => {
+              if (updates.radius !== undefined && !(updates.radius > 0)) return state; // a radius of 0 (or NaN) draws nothing
+              const targets = new Set(ids);
+              const isTarget = (entity: Entity) => entity.type === "path" && targets.has(entity.id);
+              if (!state.entities.some(isTarget)) return state;
+              return {
+                entities: state.entities.map((entity) =>
+                  isTarget(entity) ? { ...entity, stroke: { ...DEFAULT_STROKE, ...entity.stroke, ...updates } } : entity,
+                ),
+              };
+            }),
+          addShape: (origin, rotation, outline) => {
+            let newId = "";
+            set((state) => {
+              const entity: Entity = {
+                ...createEntity("shape"),
+                position: cloneVector(origin),
+                rotation: cloneVector(rotation),
+                shape: flattenShape({ regions: [{ outline, holes: [] }] }),
+                materialLayers: [{ ...createColorLayer(ENTITY_DEFAULTS.shape.color, 1), doubleSided: true }, createLightingLayer()],
+              };
+              newId = entity.id;
+              return { entities: [...state.entities, entity], selectedEntityIds: [entity.id] };
+            });
+            return newId;
+          },
+          addPath: (origin, path) => {
+            let newId = "";
+            set((state) => {
+              const entity: Entity = { ...createEntity("path"), position: cloneVector(origin), path: clonePath(path) };
+              newId = entity.id;
+              return { entities: [...state.entities, entity], selectedEntityIds: [entity.id] };
+            });
+            return newId;
+          },
+          updatePath: (id, path) =>
+            set((state) => {
+              const target = state.entities.find((entity) => entity.id === id);
+              if (target?.type !== "path") return state;
+              return { entities: state.entities.map((entity) => (entity === target ? { ...entity, path: clonePath(path) } : entity)) };
+            }),
+          updateShape: (id, shape) =>
+            set((state) => {
+              const target = state.entities.find((entity) => entity.id === id);
+              if (target?.type !== "shape") return state;
+              return { entities: state.entities.map((entity) => (entity === target ? { ...entity, shape: flattenShape(shape) } : entity)) };
+            }),
+          addImportedSvg: (name, items) => {
+            let rootId = "";
+            set((state) => {
+              if (items.length === 0) return state;
+              const toEntity = (imported: ImportedSvgItem, entityName: string, parentId?: string): Entity => ({
+                ...createEntity(imported.kind),
+                name: entityName,
+                position: cloneVector(imported.position),
+                ...(imported.kind === "path"
+                  ? { path: clonePath(imported.path), stroke: { ...imported.stroke } }
+                  : {
+                      shape: cloneShape(imported.shape),
+                      // A flat shape shows from both sides.
+                      materialLayers: [{ ...createColorLayer(imported.color, 1), doubleSided: true }, createLightingLayer()],
+                    }),
+                ...(parentId ? { parentId } : null),
+              });
+
+              // The group sits at the drawing's centre (the import's origin), so it turns the word about its middle.
+              const group = items.length > 1 ? { ...createEntity("group"), name } : null;
+              const counts = { path: 0, shape: 0 };
+              const added = group
+                ? [group, ...items.map((imported) => toEntity(imported, `${ENTITY_DEFAULTS[imported.kind].name} ${++counts[imported.kind]}`, group.id))]
+                : [toEntity(items[0], name)];
+              rootId = added[0].id;
+              return { entities: [...state.entities, ...added], selectedEntityIds: [rootId], penTool: null };
+            });
+            return rootId;
+          },
+          updateShapeSolids: (ids, updates) =>
+            set((state) => {
+              const valid = Object.values(updates).every((value) => value === undefined || value >= 0);
+              const targets = new Set(ids);
+              const isTarget = (entity: Entity) => entity.type === "shape" && targets.has(entity.id);
+              if (!valid || !state.entities.some(isTarget)) return state;
+              return { entities: state.entities.map((entity) => (isTarget(entity) ? { ...entity, ...updates } : entity)) };
+            }),
+          convertShapesToPaths: (ids) => {
+            const { entities, readOnlyReason, isPreviewMode } = get();
+            if (readOnlyReason || isPreviewMode) return 0;
+            const reach = new Set([...ids, ...ids.flatMap((id) => [...getDescendantIds(entities, id)])]);
+            // The maths runs before the store is written: it's the slow part.
+            const converted = new Map<string, CenterLines>();
+            entities.forEach((entity) => {
+              if (entity.type !== "shape" || !reach.has(entity.id) || !entity.shape) return;
+              const lines = shapeCenterLines(entity.shape);
+              if (lines.paths.length > 0) converted.set(entity.id, lines);
+            });
+            if (converted.size === 0) return 0;
+
+            set((state) => ({
+              entities: state.entities.flatMap((entity) => {
+                const lines = converted.get(entity.id);
+                if (!lines || entity.type !== "shape") return [entity];
+                const stroke = { radius: Math.max(MIN_IMPORT_RADIUS, lines.radius), caps: "round" as const };
+                const { shape: _shape, extrusion: _extrusion, bevel: _bevel, ...rest } = entity;
+                const asPath = (path: PathData): Entity => ({ ...rest, type: "path", path: clonePath(path), stroke: { ...stroke }, trimStart: 0, trimEnd: 1 });
+                const [first, ...others] = lines.paths;
+                return [
+                  asPath(first),
+                  ...others.map((path, i) => ({
+                    ...cloneEntity(asPath(path)),
+                    id: createEntityId(),
+                    name: `${entity.name} (${i + 2})`,
+                    materialLayers: entity.materialLayers?.map((layer) => ({ ...cloneMaterialLayer(layer), id: createEntityId() })),
+                  })),
+                ];
+              }),
+              // The pen was editing a shape that's now a path: start again from it.
+              penTool: state.penTool?.pathId && converted.has(state.penTool.pathId) ? null : state.penTool,
+            }));
+            return converted.size;
+          },
           // Viewport / Projection
           activeTransformTool: "translate",
           projectionMode: "perspective",
           transformSpace: "world",
+          penTool: null,
+          // Playing and view only are for looking, so the pen doesn't turn on then.
+          setPenTool: (penTool) =>
+            set((state) =>
+              penTool && (state.readOnlyReason || state.isPreviewMode || state.previewingActionId)
+                ? state
+                : { penTool, ...(penTool ? { depthEdit: null } : null) },
+            ),
+          depthEdit: null,
+          setDepthEdit: (entityId) =>
+            set((state) =>
+              entityId && (state.readOnlyReason || state.isPreviewMode || state.previewingActionId)
+                ? state
+                : { depthEdit: entityId, ...(entityId ? { penTool: null } : null) },
+            ),
 
           sceneSettings: initialSceneDefaults,
           postProcessing: initialPostProcessingDefaults,
@@ -1020,12 +1437,14 @@ export const useEditorStore = create<EditorState>()(
 
           // Play Mode / Preview
           isPreviewMode: false,
-          previewGlbUrl: null,
-          setPreviewMode: (active, url) => set({ isPreviewMode: active, previewGlbUrl: url }),
+          // Play takes over from a ▶ preview, which doesn't come back after Stop. Both end the pen.
+          setPreviewMode: (active) => set({ isPreviewMode: active, previewingActionId: null, ...(active ? { penTool: null, depthEdit: null } : null) }),
+          previewingActionId: null,
+          setPreviewingAction: (actionId) => set({ previewingActionId: actionId, ...(actionId ? { penTool: null, depthEdit: null } : null) }),
 
           readOnlyReason: null,
           setReadOnly: (reason) => {
-            api.setState({ readOnlyReason: reason });
+            api.setState({ readOnlyReason: reason, ...(reason ? { penTool: null, depthEdit: null } : null) });
 
             if (reason) {
               // There's nothing to undo into: the scene can't change here, and it's reloaded from
@@ -1036,6 +1455,112 @@ export const useEditorStore = create<EditorState>()(
           pendingImportCount: 0,
           adjustPendingImports: (delta) =>
             set((state) => ({ pendingImportCount: Math.max(0, state.pendingImportCount + delta) })),
+
+          animation: createEmptyAnimation(),
+          viewedStates: {},
+          setViewedState: (entityId, stateId) =>
+            set((state) => {
+              const viewedStates = { ...state.viewedStates };
+              if (stateId) {
+                viewedStates[entityId] = stateId;
+              } else {
+                delete viewedStates[entityId];
+              }
+              return { viewedStates };
+            }),
+          // A new state starts as a snapshot of the pose on screen (the shown state's, or Base), so
+          // later changes to Base don't reach it.
+          addState: (entityId) => {
+            let stateId = "";
+            set((state) => {
+              const entity = state.entities.find((each) => each.id === entityId);
+              if (!entity) return state;
+              const pose = resolveState(entity, selectViewedObjectState(state, entityId));
+              const objectState = { ...createObjectState(state.animation.states, entityId), values: cloneStateValues(pose) };
+              stateId = objectState.id;
+              return {
+                animation: { ...state.animation, states: { ...state.animation.states, [objectState.id]: objectState } },
+                viewedStates: { ...state.viewedStates, [entityId]: objectState.id },
+              };
+            });
+            return stateId;
+          },
+          renameState: (stateId, name) => {
+            const trimmed = name.trim();
+            if (trimmed) set((state) => updatingState(state, stateId, (objectState) => ({ ...objectState, name: trimmed })));
+          },
+          // An object shown in the removed state is shown in Base (its viewedStates entry stays, so
+          // undoing the removal shows the state again).
+          removeState: (stateId) =>
+            set((state) => {
+              if (!state.animation.states[stateId]) return state;
+              const states = { ...state.animation.states };
+              delete states[stateId];
+              return { animation: { ...state.animation, states } };
+            }),
+          setStateValues: (stateId, values) =>
+            set((state) =>
+              updatingState(state, stateId, (objectState) => ({
+                ...objectState,
+                values: { ...objectState.values, ...cloneStateValues(values) },
+              })),
+            ),
+          clearStateValue: (stateId, key) =>
+            set((state) =>
+              updatingState(state, stateId, (objectState) => {
+                const values = { ...objectState.values };
+                delete values[key];
+                return { ...objectState, values };
+              }),
+            ),
+          updateShownTransforms: (updates) =>
+            set((state) => {
+              const states = { ...state.animation.states };
+              const baseUpdates = new Map<string, StateValues>();
+              let isStateEdit = false;
+
+              for (const [entityId, values] of Object.entries(updates)) {
+                const shown = selectViewedObjectState(state, entityId);
+                if (shown) {
+                  states[shown.id] = { ...shown, values: { ...shown.values, ...cloneStateValues(values) } };
+                  isStateEdit = true;
+                } else {
+                  baseUpdates.set(entityId, cloneStateValues(values));
+                }
+              }
+
+              return {
+                ...(baseUpdates.size > 0
+                  ? { entities: state.entities.map((entity) => (baseUpdates.has(entity.id) ? { ...entity, ...baseUpdates.get(entity.id) } : entity)) }
+                  : null),
+                ...(isStateEdit ? { animation: { ...state.animation, states } } : null),
+              };
+            }),
+          addEvent: (ownerId, trigger) => {
+            let eventId = "";
+            set((state) => {
+              if (!state.entities.some((entity) => entity.id === ownerId)) return state;
+              const event = createEvent(state.animation.events, state.animation.states, ownerId, trigger);
+              eventId = event.id;
+              return withAnimation(state.animation, { events: { ...state.animation.events, [event.id]: event } })!;
+            });
+            return eventId;
+          },
+          updateEvent: (eventId, updates) =>
+            set((state) =>
+              updatingEvent(state, eventId, (event) => ({
+                ...event,
+                ...(updates.trigger ? { trigger: updates.trigger } : null),
+                ...(updates.actions ? { actions: updates.actions.map(cloneTransition) } : null),
+              })),
+            ),
+          removeEvent: (eventId) =>
+            set((state) => {
+              if (!state.animation.events[eventId]) return state;
+              const events = { ...state.animation.events };
+              delete events[eventId];
+              return withAnimation(state.animation, { events })!;
+            }),
 
           updatePostProcessing: (updates) =>
             set((state) => ({
@@ -1059,7 +1584,9 @@ export const useEditorStore = create<EditorState>()(
                 const newLayer: MaterialLayer =
                   layerType === "color"
                     ? createColorLayer(colorLayer?.color ?? "#ffffff")
-                    : createLightingLayer();
+                    : layerType === "depth"
+                      ? createDepthLayer()
+                      : createLightingLayer();
 
                 return {
                   ...entity,
@@ -1138,9 +1665,13 @@ export const useEditorStore = create<EditorState>()(
               frame: deepMerge(initialFrameDefaults, content?.frame ?? {}),
               cameraProfiles,
               activeProfileId,
+              animation: cloneAnimation(content?.animation),
+              viewedStates: { ...content?.viewedStates },
               selectedEntityIds: [],
               isPreviewMode: false,
-              previewGlbUrl: null,
+              previewingActionId: null,
+              penTool: null,
+              depthEdit: null,
             });
 
             // The editor no longer reloads the page between scenes, so history would otherwise
@@ -1182,13 +1713,19 @@ export const useEditorStore = create<EditorState>()(
         }
       ),
       {
+        // What undo restores. Not the cameras: the view changes every frame of an orbit, and undo
+        // shouldn't move it.
         partialize: (state) => ({
           entities: state.entities,
           sceneSettings: state.sceneSettings,
           postProcessing: state.postProcessing,
           frame: state.frame,
-          cameraProfiles: state.cameraProfiles,
+          animation: state.animation,
         }),
+        // Only record a step when something undo restores changed. Every action replaces what it
+        // changes, so comparing references is enough; without this, selecting an object or picking
+        // a state to view added a step that undid nothing.
+        equality: shallow,
       }
     )
   )

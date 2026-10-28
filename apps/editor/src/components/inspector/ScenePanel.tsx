@@ -3,6 +3,7 @@ import { useEditorStore } from "../../store/useEditorStore";
 import { PanelSection } from "../ui/PanelSection";
 import { Switch } from "../ui/Switch";
 import { Select } from "../ui/Select";
+import { Slider } from "../ui/Slider";
 
 export function ScenePanel() {
   const sceneSettings = useEditorStore((state) => state.sceneSettings);
@@ -107,6 +108,22 @@ export function ScenePanel() {
           </div>
         </div>
 
+        {/* Environment light (replaces the ambient light while on) */}
+        <Switch
+          label="Environment Light"
+          checked={sceneSettings.environment.enabled}
+          onChange={(val) => updateSceneSettings({ environment: { enabled: val } })}
+        />
+        {sceneSettings.environment.enabled && (
+          <Slider
+            label="Intensity"
+            min={0}
+            max={2}
+            step={0.05}
+            value={sceneSettings.environment.intensity}
+            onChange={(val) => updateSceneSettings({ environment: { intensity: val } })}
+          />
+        )}
 
         {/* Grid */}
         <Switch

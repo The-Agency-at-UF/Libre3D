@@ -15,17 +15,30 @@ import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHi
 import { pruneImportNodes, type PrunableNode } from "../utils/pruneImportHierarchy";
 import { takeParsedModel } from "../utils/importModel";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
+import { forgetBasePose, rememberBasePose } from "../utils/exportScene";
+import type { Pose } from "../animation/objectStates";
+import { PathMesh } from "../paths/PathMesh";
+import { DEFAULT_STROKE, type PathData } from "../paths/pathGeometry";
+import { ShapeMesh } from "../paths/ShapeMesh";
+import type { ShapeData, ShapeSolid } from "../paths/shapeGeometry";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { depthPaintOf, syncDepthColors } from "../utils/depthColors";
 
 type LayeredMaterial =
   | THREE.MeshBasicMaterial
   | THREE.MeshLambertMaterial
   | THREE.MeshPhongMaterial
   | THREE.MeshStandardMaterial
+  | THREE.MeshPhysicalMaterial
   | THREE.MeshToonMaterial;
 
-const materialClassForModel = (model: LightingLayer["model"]) => {
-  switch (model) {
+// Physical builds the cheaper MeshStandardMaterial unless the layer asks for a clearcoat.
+const wantsClearcoat = (lightingLayer: LightingLayer | undefined): boolean =>
+  (lightingLayer?.model ?? "physical") === "physical" && (lightingLayer?.clearcoat ?? 0) > 0;
+
+const materialClassForLayer = (lightingLayer: LightingLayer | undefined) => {
+  if (wantsClearcoat(lightingLayer)) return THREE.MeshPhysicalMaterial;
+  switch (lightingLayer?.model ?? "physical") {
     case "lambert":
       return THREE.MeshLambertMaterial;
     case "phong":
@@ -46,6 +59,16 @@ function aimDirectionalLight(light: THREE.DirectionalLight): void {
   light.updateMatrixWorld();
   light.lookAt(0, 0, 0);
 }
+
+// A path entity without its path or stroke (a damaged file) draws nothing rather than failing. One
+// object each, so comparing them with the entity's tells PathMesh when to rebuild.
+const NO_PATH: PathData = { points: [], closed: false };
+const pathOf = (entity: Entity) => entity.path ?? NO_PATH;
+const strokeOf = (entity: Entity) => entity.stroke ?? DEFAULT_STROKE;
+// Likewise a shape without its outline draws nothing.
+const NO_SHAPE: ShapeData = { regions: [] };
+const shapeOf = (entity: Entity) => entity.shape ?? NO_SHAPE;
+const solidOf = (entity: Entity): ShapeSolid => ({ extrusion: entity.extrusion ?? 0, bevel: entity.bevel ?? 0 });
 
 export class ObjectManager {
   private scene: THREE.Scene;
@@ -108,7 +131,7 @@ export class ObjectManager {
     const colorLayer = layers?.find((layer): layer is ColorLayer => layer.type === "color");
     const lightingLayer = layers?.find((layer): layer is LightingLayer => layer.type === "lighting");
     const model = lightingLayer?.model ?? "physical";
-    const MaterialClass = materialClassForModel(model);
+    const MaterialClass = materialClassForLayer(lightingLayer);
     const opacity = colorLayer?.opacity ?? 1;
     const alphaState = this.computeAlphaBlendState(colorLayer, opacity);
 
@@ -126,6 +149,36 @@ export class ObjectManager {
     this.applyImageLayers(material, layers);
 
     return material;
+  }
+
+  // A Depth layer (utils/depthColors.ts) is the mesh's vertex colours, which already hold the Color
+  // layer's colour under it, so the material's colour is white while it's on. Whether the material
+  // used vertex colours before (an imported model's own) comes back when the layer goes.
+  private applyDepthLayer(mesh: THREE.Mesh, entity: Entity): void {
+    const paint = depthPaintOf(entity.materialLayers);
+    const key = paint ? JSON.stringify(paint) : null;
+    if (mesh instanceof PathMesh) {
+      mesh.setDepthPaint(paint, key);
+    } else {
+      // An imported mesh's geometry can be shared with other copies of the model: paint its own.
+      if (paint && entity.type === "importedModel" && !mesh.geometry.userData.depthOwned) {
+        mesh.geometry = mesh.geometry.clone();
+        mesh.geometry.userData.depthOwned = true;
+      }
+      syncDepthColors(mesh.geometry, paint, key);
+    }
+
+    const material = mesh.material as LayeredMaterial;
+    if (paint) {
+      material.userData.vertexColorsBeforeDepth ??= material.vertexColors;
+      material.color.set("#ffffff");
+    }
+    const vertexColors: boolean = paint ? true : (material.userData.vertexColorsBeforeDepth ?? material.vertexColors);
+    if (!paint) delete material.userData.vertexColorsBeforeDepth;
+    if (material.vertexColors !== vertexColors) {
+      material.vertexColors = vertexColors;
+      material.needsUpdate = true;
+    }
   }
 
   // The material property (or properties) each ImageLayer slot feeds. The glTF
@@ -366,6 +419,13 @@ export class ObjectManager {
       material.roughness = lightingLayer?.roughness ?? 0.45;
       material.metalness = lightingLayer?.metalness ?? 0.08;
     }
+    // Left alone when the layer has no value, so an imported glTF clearcoat survives layers made
+    // before clearcoat was one. Turning it back to 0 keeps the physical material: three compiles it
+    // without the coat, and swapping materials mid-drag would recompile anyway.
+    if (model === "physical" && material instanceof THREE.MeshPhysicalMaterial && lightingLayer?.clearcoat !== undefined) {
+      material.clearcoat = lightingLayer.clearcoat;
+      material.clearcoatRoughness = lightingLayer.clearcoatRoughness ?? 0;
+    }
     if (model === "phong" && material instanceof THREE.MeshPhongMaterial) {
       material.shininess = lightingLayer?.shininess ?? 30;
     }
@@ -381,10 +441,12 @@ export class ObjectManager {
   // free — it stays a tight, correctly oriented box even when the object is rotated,
   // matching Spline's selection indicator instead of a looser world-axis-aligned box.
   private createSelectionOutline(boundingBox: THREE.Box3, color = 0xffffff): THREE.LineSegments {
+    // An empty box (a path with nothing to draw) has a size of -Infinity; outline a point instead.
+    const box = boundingBox.isEmpty() ? new THREE.Box3(new THREE.Vector3(), new THREE.Vector3()) : boundingBox;
     const size = new THREE.Vector3();
-    boundingBox.getSize(size);
+    box.getSize(size);
     const center = new THREE.Vector3();
-    boundingBox.getCenter(center);
+    box.getCenter(center);
 
     const boxGeometry = new THREE.BoxGeometry(size.x, size.y, size.z);
     boxGeometry.translate(center.x, center.y, center.z);
@@ -460,6 +522,32 @@ export class ObjectManager {
       light.userData.helper = helper;
 
       return light;
+    } else if (entity.type === "path") {
+      // The tube and its caps (paths/PathMesh.ts). The outline is the whole path's box, also while
+      // it's trimmed: it doesn't jump while the trim is dragged, and it shows where a hidden path is.
+      const mesh = new PathMesh(pathOf(entity), strokeOf(entity), this.createMaterialFromLayers(entity.materialLayers));
+      mesh.position.set(...entity.position);
+      mesh.rotation.set(...entity.rotation);
+      mesh.scale.set(...entity.scale);
+      mesh.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
+
+      const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
+      mesh.add(outline);
+      mesh.userData.selectionOutline = outline;
+
+      return mesh;
+    } else if (entity.type === "shape") {
+      // A filled outline (paths/ShapeMesh.ts), flat or extruded.
+      const mesh = new ShapeMesh(shapeOf(entity), solidOf(entity), this.createMaterialFromLayers(entity.materialLayers));
+      mesh.position.set(...entity.position);
+      mesh.rotation.set(...entity.rotation);
+      mesh.scale.set(...entity.scale);
+
+      const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
+      mesh.add(outline);
+      mesh.userData.selectionOutline = outline;
+
+      return mesh;
     } else {
       const geometry = this.createGeometry(entity);
       geometry.computeBoundingBox();
@@ -627,9 +715,36 @@ export class ObjectManager {
     this.hydratingRootIds.delete(rootEntityId);
   }
 
+  // A path's tube is rebuilt when its path, radius or caps change (never for a trim). The selection
+  // outline is sized from the geometry's bounds when it's made, so it's made again too.
+  private rebuildPath(mesh: PathMesh, entity: Entity): void {
+    mesh.rebuild(pathOf(entity), strokeOf(entity));
+    this.replaceSelectionOutline(mesh);
+  }
+
+  // A shape's geometry is rebuilt when its outline, extrusion or bevel changes, and its outline with it.
+  private rebuildShape(mesh: ShapeMesh, entity: Entity): void {
+    mesh.rebuild(shapeOf(entity), solidOf(entity));
+    this.replaceSelectionOutline(mesh);
+  }
+
+  private replaceSelectionOutline(mesh: THREE.Mesh): void {
+    const oldOutline = mesh.userData.selectionOutline as THREE.LineSegments | undefined;
+    const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
+    if (oldOutline) {
+      outline.visible = oldOutline.visible;
+      mesh.remove(oldOutline);
+      oldOutline.geometry.dispose();
+      (oldOutline.material as THREE.Material).dispose();
+    }
+    mesh.add(outline);
+    mesh.userData.selectionOutline = outline;
+  }
+
   public disposeSceneObject(obj: THREE.Object3D): void {
     if (obj instanceof THREE.Mesh) {
-      obj.geometry.dispose();
+      if (obj instanceof PathMesh) obj.disposeGeometry();
+      else obj.geometry.dispose();
       const material = obj.material;
       if (Array.isArray(material)) {
         material.forEach((entry) => entry.dispose());
@@ -689,10 +804,19 @@ export class ObjectManager {
     isBeingDragged: boolean,
     entities: Entity[] = useEditorStore.getState().entities,
   ): void {
+    if (obj instanceof PathMesh && (obj.path !== pathOf(entity) || obj.stroke !== strokeOf(entity))) {
+      this.rebuildPath(obj, entity);
+    }
+    if (obj instanceof ShapeMesh && !obj.isBuiltFrom(shapeOf(entity), solidOf(entity))) {
+      this.rebuildShape(obj, entity);
+    }
+
     if (!isBeingDragged) {
       obj.position.set(...entity.position);
       obj.rotation.set(...entity.rotation);
       obj.scale.set(...entity.scale);
+      if (obj instanceof PathMesh) obj.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
+      forgetBasePose(obj);
       // Re-aim after a move so the baked rotation keeps tracking the origin.
       // (A directional light's stored entity.rotation has never affected its
       // direction — three drives that from position → target.)
@@ -709,20 +833,22 @@ export class ObjectManager {
       const colorLayer = entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
       const lightingLayer = entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
       const model = lightingLayer?.model ?? "physical";
-      const MaterialClass = materialClassForModel(model);
+      const MaterialClass = materialClassForLayer(lightingLayer);
 
       // A parsed glTF PBR material is often MeshPhysicalMaterial (a subclass of
       // MeshStandardMaterial). Treat that as already matching "physical" so we take
       // the in-place branch and keep its textures/advanced features, rather than
       // rebuilding it into a plain textureless MeshStandardMaterial on first sync.
+      // A clearcoat needs the physical one, so a standard material is rebuilt when one is added.
       const materialMatches =
         model === "physical"
-          ? obj.material instanceof THREE.MeshStandardMaterial
+          ? obj.material instanceof (wantsClearcoat(lightingLayer) ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial)
           : obj.material.constructor === MaterialClass;
 
       if (!materialMatches) {
         const oldMaterial = obj.material as THREE.Material;
         obj.material = this.createMaterialFromLayers(entity.materialLayers);
+        if (obj instanceof PathMesh) obj.shareMaterialWithCaps();
         oldMaterial.dispose();
       } else {
         const material = obj.material as LayeredMaterial;
@@ -750,6 +876,7 @@ export class ObjectManager {
         this.applyLightingProperties(material, lightingLayer, model);
         this.applyImageLayers(material, entity.materialLayers);
       }
+      this.applyDepthLayer(obj, entity);
     } else if (obj instanceof THREE.DirectionalLight) {
       obj.color.set(entity.color ?? "#ffffff");
       if (obj.userData.helper) {
@@ -811,6 +938,7 @@ export class ObjectManager {
         if (isPendingImportNode) continue;
 
         const obj = this.createSceneObject(entity);
+        if (obj instanceof THREE.Mesh && entity.materialLayers) this.applyDepthLayer(obj, entity);
         obj.userData.entityId = entity.id;
         obj.userData.entityType = entity.type;
         obj.userData.locked = isEffectivelyLocked(entities, entity.id);
@@ -1038,6 +1166,25 @@ export class ObjectManager {
       obj.position.set(...entity.position);
       obj.rotation.set(...entity.rotation);
       obj.scale.set(...entity.scale);
+    }
+  }
+
+  // Shows an object in a pose other than its own values (the state being viewed, or where Play has
+  // moved it) without touching the store, so clicks, the outline, and the gizmo follow it. A path's
+  // pose includes its trim. syncMeshes puts every object back in Base, so the caller applies the
+  // pose again after each sync (except in Play, which shows Base). Exports and thumbnails still see
+  // Base (showBasePoses).
+  public applyPose(entityId: string, pose: Pose): void {
+    const obj = this.meshMap.get(entityId);
+    if (!obj) return;
+
+    rememberBasePose(obj);
+    obj.position.set(...pose.position);
+    obj.rotation.set(...pose.rotation);
+    obj.scale.set(...pose.scale);
+    if (obj instanceof THREE.DirectionalLight) aimDirectionalLight(obj);
+    if (obj instanceof PathMesh && (pose.trimStart !== undefined || pose.trimEnd !== undefined)) {
+      obj.setTrim(pose.trimStart ?? 0, pose.trimEnd ?? 1);
     }
   }
 

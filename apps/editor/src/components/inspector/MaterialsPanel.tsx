@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import {
   useEditorStore,
   type Entity,
@@ -8,12 +8,16 @@ import {
   type MaterialLayer as MaterialLayerData,
   type ImageLayer,
   type ImageSlot,
+  type DepthLayer,
 } from "../../store/useEditorStore";
 import { loadTextureForScene } from "../../utils/assetTransfers";
 import { PanelSection } from "../ui/PanelSection";
 import { Slider } from "../ui/Slider";
 import { Select } from "../ui/Select";
 import { Switch } from "../ui/Switch";
+import { Vector3Input } from "../ui/Vector3Input";
+import { DepthRamp } from "./DepthRamp";
+import { editDepth } from "../../viewport/hooks/useViewportDepthGizmo";
 
 // ─── Layer chrome ────────────────────────────────────────────────────────────
 // Each material category (Color, Lighting, texture maps) renders as a compact
@@ -83,10 +87,77 @@ function ColorSwatchField({
   onChange: (color: string) => void;
 }) {
   const [localValue, setLocalValue] = useState(value);
+  // What the picker shows: the colour it was last moved to, which the store catches up with a frame later.
+  const [pickedColor, setPickedColor] = useState(value);
 
   useEffect(() => {
     setLocalValue(value);
   }, [value]);
+
+  // The native picker fires on every move of a drag. The store gets one write per frame, and the whole
+  // drag is one undo step: its first colour records the step, and history resumes when the picker
+  // closes (its `change` event).
+  const picker = useRef<HTMLInputElement>(null);
+  const latestOnChange = useRef(onChange);
+  latestOnChange.current = onChange;
+  const shown = useRef(value);
+  const pending = useRef<string | null>(null);
+  const written = useRef<string | null>(null); // the colour this picker last wrote, while it's open
+  const frame = useRef<number | null>(null);
+  const historyPaused = useRef(false);
+
+  const flush = () => {
+    frame.current = null;
+    const color = pending.current;
+    if (color === null) return;
+    pending.current = null;
+    written.current = color;
+    latestOnChange.current(color);
+  };
+
+  const endPicking = () => {
+    if (frame.current !== null) window.cancelAnimationFrame(frame.current);
+    flush();
+    written.current = null;
+    if (historyPaused.current) {
+      historyPaused.current = false;
+      useEditorStore.temporal.getState().resume();
+    }
+  };
+
+  useEffect(() => {
+    const input = picker.current;
+    input?.addEventListener("change", endPicking);
+    return () => {
+      input?.removeEventListener("change", endPicking);
+      endPicking();
+    };
+    // Set up once: endPicking reads only refs and the store.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // The store catching up with the colours being dragged (a frame behind) leaves the picker alone.
+    if (value === written.current) return;
+    shown.current = value;
+    setPickedColor(value);
+  }, [value]);
+
+  const pickColor = (color: string) => {
+    // The picker's change event fires again with the colour already shown: nothing to do.
+    if (color === shown.current) return;
+    shown.current = color;
+    setLocalValue(color);
+    setPickedColor(color);
+    if (!historyPaused.current) {
+      latestOnChange.current(color);
+      useEditorStore.temporal.getState().pause();
+      historyPaused.current = true;
+      return;
+    }
+    pending.current = color;
+    if (frame.current === null) frame.current = window.requestAnimationFrame(flush);
+  };
 
   const hexRegex = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 
@@ -110,12 +181,10 @@ function ColorSwatchField({
           style={{ background: mixed ? "repeating-linear-gradient(45deg, #444 0 4px, #666 4px 8px)" : value }}
         >
           <input
+            ref={picker}
             type="color"
-            value={mixed ? "#ffffff" : value}
-            onChange={(e) => {
-              setLocalValue(e.target.value);
-              onChange(e.target.value);
-            }}
+            value={mixed ? "#ffffff" : pickedColor}
+            onChange={(e) => pickColor(e.target.value)}
             aria-label={`${label} picker`}
           />
         </div>
@@ -217,6 +286,175 @@ function ImageLayerRow({
   );
 }
 
+// ─── Depth layer ─────────────────────────────────────────────────────────────
+
+// Two or three choices side by side, in a label/control row.
+function SegmentedRow<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: { label: string; value: T }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="prop">
+      <span className="prop-label">{label}</span>
+      <div className="seg" style={{ flex: 1 }}>
+        {options.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            className={`seg-btn ${option.value === value ? "on" : ""}`}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function NumberRow({ label, value, min, onChange }: { label: string; value: number; min?: number; onChange: (value: number) => void }) {
+  return (
+    <div className="prop">
+      <span className="prop-label">{label}</span>
+      <input
+        type="number"
+        step="0.1"
+        min={min}
+        value={Number(value.toFixed(2))}
+        onChange={(e) => {
+          const next = parseFloat(e.target.value);
+          if (Number.isFinite(next) && next !== value) onChange(min === undefined ? next : Math.max(min, next));
+        }}
+        aria-label={label}
+      />
+    </div>
+  );
+}
+
+const DEPTH_TYPE_OPTIONS: { label: string; value: DepthLayer["gradientType"] }[] = [
+  { label: "Radial", value: "radial" },
+  { label: "Linear", value: "linear" },
+];
+
+const BLENDING_OPTIONS: { label: string; value: "linear" | "smooth" }[] = [
+  { label: "Linear", value: "linear" },
+  { label: "Smooth", value: "smooth" },
+];
+
+// The Depth layer of one object (utils/depthColors.ts says how it colours). The picked stop is this
+// panel's own state; it starts on the first stop for each layer (MaterialsPanel keys it by layer).
+function DepthLayerSection({
+  layer,
+  isEditing,
+  onToggleEditing,
+  onUpdate,
+  onRemove,
+}: {
+  layer: DepthLayer;
+  isEditing: boolean;
+  onToggleEditing: () => void;
+  onUpdate: (updates: Partial<DepthLayer>) => void;
+  onRemove: () => void;
+}) {
+  const [selected, setSelected] = useState(0);
+  const index = Math.min(selected, layer.stops.length - 1);
+  const stop = layer.stops[index];
+
+  const setVector = (key: "origin" | "direction", axis: number, value: number) => {
+    if (value === layer[key][axis]) return;
+    const next: [number, number, number] = [...layer[key]];
+    next[axis] = value;
+    onUpdate({ [key]: next });
+  };
+
+  const setStop = (updates: Partial<DepthLayer["stops"][number]>) =>
+    onUpdate({ stops: layer.stops.map((each, i) => (i === index ? { ...each, ...updates } : each)) });
+
+  return (
+    <MaterialLayer
+      name="Depth"
+      icon={<i className="ti ti-circles"></i>}
+      action={
+        <>
+          <button
+            type="button"
+            className={`mat-icon-btn ${isEditing ? "on" : ""}`}
+            title={isEditing ? "Stop editing in the viewport (Enter)" : "Edit in the viewport: the gizmo moves the origin"}
+            aria-label="Edit the Depth layer in the viewport"
+            aria-pressed={isEditing}
+            onClick={onToggleEditing}
+          >
+            <i className="ti ti-pointer"></i>
+          </button>
+          <button type="button" className="mat-icon-btn" title="Remove the Depth layer" aria-label="Remove the Depth layer" onClick={onRemove}>
+            <i className="ti ti-trash"></i>
+          </button>
+        </>
+      }
+    >
+      <SegmentedRow label="Type" options={DEPTH_TYPE_OPTIONS} value={layer.gradientType} onChange={(gradientType) => onUpdate({ gradientType })} />
+      <SegmentedRow
+        label="Blending"
+        options={BLENDING_OPTIONS}
+        value={layer.smooth ? "smooth" : "linear"}
+        onChange={(value) => onUpdate({ smooth: value === "smooth" })}
+      />
+      <DepthRamp layer={layer} selected={index} onSelect={setSelected} onChange={(stops) => onUpdate({ stops })} />
+      {stop && (
+        <>
+          <ColorSwatchField label="Stop Color" value={stop.color} mixed={false} onChange={(color) => setStop({ color })} />
+          <div className="prop">
+            <span className="prop-label">Stop Position</span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              step={1}
+              value={Math.round(stop.position * 100)}
+              onChange={(e) => setStop({ position: Math.min(1, Math.max(0, (parseFloat(e.target.value) || 0) / 100)) })}
+              aria-label="Stop position"
+            />
+            <button
+              type="button"
+              className="mat-icon-btn"
+              disabled={layer.stops.length <= 2}
+              title={layer.stops.length <= 2 ? "A ramp needs two stops" : "Remove this stop"}
+              aria-label="Remove this stop"
+              onClick={() => {
+                onUpdate({ stops: layer.stops.filter((_, i) => i !== index) });
+                setSelected(Math.max(0, index - 1));
+              }}
+            >
+              <i className="ti ti-trash"></i>
+            </button>
+          </div>
+        </>
+      )}
+      <Vector3Input label="Origin" values={layer.origin} onChange={(axis, value) => setVector("origin", axis, value)} />
+      {layer.gradientType === "linear" && (
+        <Vector3Input label="Direction" values={layer.direction} onChange={(axis, value) => setVector("direction", axis, value)} />
+      )}
+      <NumberRow label="Near" value={layer.near} min={0} onChange={(near) => onUpdate({ near })} />
+      <NumberRow label="Far" value={layer.far} min={0} onChange={(far) => onUpdate({ far })} />
+      <Slider
+        label="Opacity"
+        min={0}
+        max={100}
+        step={1}
+        value={Math.round(layer.opacity * 100)}
+        onChange={(val) => onUpdate({ opacity: val / 100 })}
+      />
+    </MaterialLayer>
+  );
+}
+
 // ─── Panel ───────────────────────────────────────────────────────────────────
 
 interface MaterialsPanelProps {
@@ -250,10 +488,16 @@ const getColorLayer = (entity: Entity): ColorLayer | undefined =>
 const getLightingLayer = (entity: Entity): LightingLayer | undefined =>
   entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
 
+const getDepthLayer = (entity: Entity): DepthLayer | undefined =>
+  entity.materialLayers?.find((layer): layer is DepthLayer => layer.type === "depth");
+
 export function MaterialsPanel({ selectedEntities: allSelectedEntities }: MaterialsPanelProps) {
   const updateMultipleEntityMaterialLayers = useEditorStore((state) => state.updateMultipleEntityMaterialLayers);
   const updateMaterialLayer = useEditorStore((state) => state.updateMaterialLayer);
   const addMaterialLayer = useEditorStore((state) => state.addMaterialLayer);
+  const removeMaterialLayer = useEditorStore((state) => state.removeMaterialLayer);
+  const depthEdit = useEditorStore((state) => state.depthEdit);
+  const setDepthEdit = useEditorStore((state) => state.setDepthEdit);
 
   // Imported meshes now carry derived materialLayers, so they belong here too —
   // only the layer stack existing matters, not the entity type. Directional lights
@@ -264,6 +508,9 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
   // Image layers are surfaced only on a single selection — one texture stack per
   // mesh, no meaningful "mixed" merge across a multi-select the way Color/Lighting has.
   const imageLayers = selectedEntities.length === 1 ? getImageLayers(selectedEntities[0]) : [];
+  // The Depth layer too: its ramp and origin are one object's.
+  const depthLayer = selectedEntities.length === 1 ? getDepthLayer(selectedEntities[0]) : undefined;
+  const entitiesMissingDepth = selectedEntities.filter((e) => !getDepthLayer(e));
 
   const colorLayers = selectedEntities.map((e) => ({ entity: e, layer: getColorLayer(e) })).filter((x) => x.layer);
   const lightingLayers = selectedEntities.map((e) => ({ entity: e, layer: getLightingLayer(e) })).filter((x) => x.layer);
@@ -399,6 +646,24 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
                       value={firstLighting.metalness ?? 0.08}
                       onChange={(val) => applyLightingUpdate({ metalness: val })}
                     />
+                    <Slider
+                      label="Clearcoat"
+                      min={0}
+                      max={1}
+                      step={0.01}
+                      value={firstLighting.clearcoat ?? 0}
+                      onChange={(val) => applyLightingUpdate({ clearcoat: val })}
+                    />
+                    {(firstLighting.clearcoat ?? 0) > 0 && (
+                      <Slider
+                        label="Coat Rough."
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={firstLighting.clearcoatRoughness ?? 0}
+                        onChange={(val) => applyLightingUpdate({ clearcoatRoughness: val })}
+                      />
+                    )}
                   </>
                 )}
 
@@ -432,6 +697,17 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
           </MaterialLayer>
         )}
 
+        {depthLayer && (
+          <DepthLayerSection
+            key={depthLayer.id}
+            layer={depthLayer}
+            isEditing={depthEdit === selectedEntities[0].id}
+            onToggleEditing={() => (depthEdit === selectedEntities[0].id ? setDepthEdit(null) : editDepth(selectedEntities[0].id))}
+            onUpdate={(updates) => updateMaterialLayer(selectedEntities[0].id, depthLayer.id, updates)}
+            onRemove={() => removeMaterialLayer(selectedEntities[0].id, depthLayer.id)}
+          />
+        )}
+
         {/* Image layers — one per texture map derived from an imported material */}
         {imageLayers.map((layer) => (
           <ImageLayerRow
@@ -463,6 +739,20 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
           >
             <i className="ti ti-plus"></i>
             <span>Lighting</span>
+          </button>
+          <button
+            type="button"
+            className="mat-add-btn"
+            disabled={entitiesMissingDepth.length === 0}
+            title={entitiesMissingDepth.length === 0 ? "Depth layer already present" : "Add a Depth layer: colours by distance from a point"}
+            onClick={() => {
+              entitiesMissingDepth.forEach((e) => addMaterialLayer(e.id, "depth"));
+              // One object's new layer opens for editing in the viewport.
+              if (selectedEntities.length === 1) editDepth(selectedEntities[0].id);
+            }}
+          >
+            <i className="ti ti-plus"></i>
+            <span>Depth</span>
           </button>
         </div>
       </div>
