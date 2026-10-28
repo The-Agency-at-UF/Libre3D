@@ -4,6 +4,7 @@ CLAUDE.md
 apps/editor/dist
 .env
 .env.local
+notes/*
 
 apps/editor/*.tsbuildinfo
 apps/editor/vite.config.js
