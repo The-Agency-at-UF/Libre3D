@@ -44,6 +44,12 @@
   color: var(--text-on-accent);
 }
 
+.ui-button--danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--text-on-accent);
+}
+
 .ui-button--secondary {
   background: var(--bg-surface);
   border-color: var(--border-strong);
@@ -687,4 +693,75 @@
 .ui-menu-popover--end {
   left: auto;
   right: 0;
+}
+
+/* Dialog (ui/Dialog.tsx): replaces window.alert/confirm/prompt. Tokens only, so it follows the theme. */
+.ui-dialog {
+  width: min(400px, calc(100vw - 2 * var(--space-4)));
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font-family: var(--font);
+  box-shadow: 0 24px 80px var(--backdrop-bg);
+  animation: ui-dialog-in 160ms ease;
+}
+
+.ui-dialog::backdrop {
+  background: var(--backdrop-bg);
+  backdrop-filter: blur(6px);
+}
+
+.ui-dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-6);
+}
+
+.ui-dialog-title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: 600;
+}
+
+.ui-dialog-message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ui-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: var(--font-size-sm);
+  outline: none;
+}
+
+.ui-dialog-input:focus {
+  border-color: var(--input-border-focus);
+  box-shadow: 0 0 0 2px var(--input-focus-shadow);
+}
+
+.ui-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+@keyframes ui-dialog-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
 }

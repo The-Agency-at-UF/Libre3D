@@ -93,10 +93,11 @@ Nothing in this folder depends on the store, React, or the DOM, so the share-lin
 
 ## `apps/editor/src/components/ui/` — generic UI primitives
 
-The pages outside the editor (landing, gallery, status screens) are built only from these primitives (`Avatar`, `Button`, `Link`, `Menu`, `NavItem`, `PageLayout`, `PageStatus`, `SearchField`, `SidebarLayout`) plus `styles/pages.css`, so a design system can replace their styling without touching page logic.
+The pages outside the editor (landing, gallery, status screens) are built only from these primitives (`Avatar`, `Button`, `Dialog`, `Link`, `Menu`, `NavItem`, `PageLayout`, `PageStatus`, `SearchField`, `SidebarLayout`) plus `styles/pages.css`, so a design system can replace their styling without touching page logic.
 
 - **`Avatar.tsx`** — A round initial standing in for a person (no profile pictures).
-- **`Button.tsx`** — Button primitive for the pages outside the editor, with `primary`/`secondary`/`ghost` variants styled by `ui-button` classes in `pages.css`.
+- **`Button.tsx`** — Button primitive for the pages outside the editor, with `primary`/`secondary`/`ghost`/`danger` variants styled by `ui-button` classes in `pages.css`.
+- **`Dialog.tsx`** — The app's replacement for the browser's popups: `showAlert`, `showConfirm` (optionally a `danger` confirm button) and `showPrompt` are awaitable and need no provider, so they work on any page, editor included. Each opens a native `<dialog>` (`showModal`, so focus and Escape are the browser's) in its own short-lived React root, styled by `ui-dialog` classes in `pages.css`. Don't use `window.alert`/`confirm`/`prompt`.
 - **`Link.tsx`** — An `<a href>` for in-app paths: a plain left click navigates without a reload (`utils/navigation.ts`); modified clicks keep the browser's default (new tab, copy link).
 - **`Menu.tsx`** — A trigger button with a dropdown of actions (`items: { label, icon?, onSelect }[]` plus an optional header line); closes on select, outside click, or Escape.
 - **`NavItem.tsx`** — A sidebar navigation entry (icon + label, `aria-current` when active).

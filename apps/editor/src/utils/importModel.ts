@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { showAlert } from "../components/ui/Dialog";
 import { saveModelAsset } from "./modelAssetStore";
 import { createId } from "./createId";
 import { walkGltfScene, nodePathKey, collectSkinnedBones } from "./gltfHierarchy";
@@ -90,13 +91,13 @@ function computeImportRootScale(scene: THREE.Object3D): number {
 // addImportedModelHierarchy.
 export async function prepareModelImport(file: File): Promise<{ assetId: string; nodes: ImportNodeSpec[] }> {
   if (!/\.glb$/i.test(file.name)) {
-    window.alert("Only .glb and .svg files can be imported.");
+    void showAlert("Only .glb and .svg files can be imported.");
     throw new Error("Unsupported file type: only .glb and .svg files can be imported.");
   }
 
   // Checked before reading the file: anything bigger couldn't be uploaded with the scene.
   if (file.size > MAX_ASSET_BYTES) {
-    window.alert(`This model is too large to import. Models can be up to ${MAX_ASSET_BYTES / (1024 * 1024)} MB.`);
+    void showAlert(`This model is too large to import. Models can be up to ${MAX_ASSET_BYTES / (1024 * 1024)} MB.`);
     throw new Error(`Model too large to import: ${file.size} bytes.`);
   }
 

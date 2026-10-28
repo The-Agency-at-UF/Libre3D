@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { showAlert } from "./ui/Dialog";
 
 import { EditorLayout } from "./EditorLayout";
 import { ReadOnlyBanner } from "./ReadOnlyBanner";
@@ -137,7 +138,7 @@ function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: Edito
       navigate(`/edit/${encodeURIComponent(sceneId)}`);
     } catch (error) {
       console.error("Failed to create a scene.", error);
-      window.alert(error instanceof ApiAuthError ? error.message : "A new scene could not be created. Try again.");
+      void showAlert(error instanceof ApiAuthError ? error.message : "A new scene could not be created. Try again.");
     } finally {
       isCreatingSceneRef.current = false;
     }

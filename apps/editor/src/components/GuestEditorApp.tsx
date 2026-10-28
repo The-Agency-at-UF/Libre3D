@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { shallow } from "zustand/shallow";
+import { showConfirm } from "./ui/Dialog";
 
 import { EditorLayout } from "./EditorLayout";
 import { Button } from "./ui/Button";
@@ -99,8 +100,14 @@ export function GuestEditorApp({ isSignedIn }: GuestEditorAppProps) {
   }
 
   // There's one guest scene, so a new one replaces it.
-  const handleStartOver = () => {
-    if (window.confirm("Start over with a new scene? The scene kept in this browser will be replaced.")) {
+  const handleStartOver = async () => {
+    if (
+      await showConfirm("The scene kept in this browser will be replaced. This can't be undone.", {
+        title: "Start over with a new scene?",
+        confirmLabel: "Start over",
+        danger: true,
+      })
+    ) {
       useEditorStore.getState().loadScene(null);
     }
   };

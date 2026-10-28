@@ -1,4 +1,5 @@
 import { useEditorStore, type Entity } from "../../store/useEditorStore";
+import { showAlert } from "../ui/Dialog";
 import { PanelSection } from "../ui/PanelSection";
 import { PathField, RangeRow } from "./PathPanel";
 
@@ -28,7 +29,7 @@ export function ShapePanel({ shapes, selectedIds }: ShapePanelProps) {
 
   const convert = () => {
     if (convertShapesToPaths(selectedIds) === 0) {
-      window.alert("No strokes found to convert: the shape is too small or has no area.");
+      void showAlert("No strokes found to convert: the shape is too small or has no area.");
     }
   };
 
