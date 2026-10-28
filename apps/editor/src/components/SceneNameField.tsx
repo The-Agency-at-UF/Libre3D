@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { showAlert } from "./ui/Dialog";
 
 import { ApiAuthError } from "../utils/apiFetch";
 import { renameScene } from "../utils/sceneLibrary";
@@ -34,7 +35,7 @@ export function SceneNameField({ sceneId, initialName }: SceneNameFieldProps) {
     } catch (error) {
       console.error("Failed to rename the scene.", error);
       setName(previousName);
-      window.alert(error instanceof ApiAuthError ? error.message : "The scene could not be renamed. Try again.");
+      void showAlert(error instanceof ApiAuthError ? error.message : "The scene could not be renamed. Try again.");
     }
   };
 

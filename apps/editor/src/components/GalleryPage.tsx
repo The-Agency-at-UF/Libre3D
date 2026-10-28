@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { showAlert, showConfirm, showPrompt } from "./ui/Dialog";
 
 import { Avatar } from "./ui/Avatar";
 import { Button } from "./ui/Button";
@@ -98,7 +99,7 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
       navigate(`/edit/${encodeURIComponent(sceneId)}`);
     } catch (error) {
       console.error("Failed to create a scene.", error);
-      window.alert("The scene could not be created. Check the console for details.");
+      void showAlert("The scene could not be created. Check the console for details.");
       setIsCreating(false);
     }
   };
@@ -107,7 +108,7 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
     setGallery((current) => (current.status === "ready" ? { status: "ready", scenes: update(current.scenes) } : current));
 
   const handleRenameScene = async (scene: SceneSummary) => {
-    const name = window.prompt("Rename scene", scene.name)?.trim();
+    const name = (await showPrompt("Enter a new name for this scene.", scene.name, { title: "Rename scene", confirmLabel: "Rename" }))?.trim();
 
     if (!name || name === scene.name) {
       return;
@@ -118,7 +119,7 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
       updateScenes((scenes) => scenes.map((item) => (item.sceneId === scene.sceneId ? { ...item, name: renamed.name } : item)));
     } catch (error) {
       console.error("Failed to rename the scene.", error);
-      window.alert(error instanceof ApiAuthError ? error.message : "The scene could not be renamed. Try again.");
+      void showAlert(error instanceof ApiAuthError ? error.message : "The scene could not be renamed. Try again.");
     }
   };
 
@@ -131,7 +132,7 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
     } catch (error) {
       // E.g. clipboard access refused: show it to copy by hand instead.
       console.warn("Failed to copy the share link.", error);
-      window.prompt(`Share link for “${scene.name}”`, shareUrl);
+      void showPrompt("Copy the link below to share it.", shareUrl, { title: `Share link for “${scene.name}”`, confirmLabel: "Done" });
     }
   };
 
@@ -141,7 +142,7 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
       ? `Delete “${scene.name}”? It's published: its share link will stop working for everyone. This can't be undone.`
       : `Delete “${scene.name}”? This can't be undone.`;
 
-    if (!window.confirm(message)) {
+    if (!(await showConfirm(message, { title: "Delete scene", confirmLabel: "Delete", danger: true }))) {
       return;
     }
 
@@ -150,7 +151,7 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
       updateScenes((scenes) => scenes.filter((item) => item.sceneId !== scene.sceneId));
     } catch (error) {
       console.error("Failed to delete the scene.", error);
-      window.alert(error instanceof ApiAuthError ? error.message : "The scene could not be deleted. Try again.");
+      void showAlert(error instanceof ApiAuthError ? error.message : "The scene could not be deleted. Try again.");
     }
   };
 
