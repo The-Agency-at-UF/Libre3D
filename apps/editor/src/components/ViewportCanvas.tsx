@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
 import { useEditorStore } from "../store/useEditorStore";
+import { filterMoveRoots } from "../store/entityIndex";
 import { SceneManager } from "../viewport/SceneManager";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
@@ -21,6 +22,7 @@ export function ViewportCanvas() {
   const activeProfileId = useEditorStore((state) => state.activeProfileId);
   const activeProfile   = useEditorStore((state) => state.cameraProfiles[activeProfileId] ?? state.cameraProfiles.personal);
   const isPreviewMode   = useEditorStore((state) => state.isPreviewMode);
+  const isReadOnly      = useEditorStore((state) => state.readOnlyReason !== null);
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
   const entities        = useEditorStore((state) => state.entities);
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
@@ -123,9 +125,20 @@ export function ViewportCanvas() {
   }, [scene]);
 
   // -- Multi-select Drag Handlers --
+  // Only the selection's move roots are driven by the proxy. A selected
+  // descendant of another selected entity already follows its parent through
+  // the scene graph; writing it too would solve its local transform against the
+  // parent's pre-update matrix and then move it again when the parent syncs —
+  // an overshoot that compounds per nesting level (visible as skinned meshes
+  // smearing when box-select grabs a whole bone chain).
   useEffect(() => {
     const tc = transformControlsRef.current;
     if (!tc) return;
+
+    const getDragRootIds = () => {
+      const { entities, selectedEntityIds } = useEditorStore.getState();
+      return filterMoveRoots(entities, selectedEntityIds);
+    };
 
     const onDragChange = (event: any) => {
       const isDragging = event.value;
@@ -134,7 +147,7 @@ export function ViewportCanvas() {
         initialOffsetsRef.current.clear();
         proxy.updateMatrixWorld(true);
         const proxyInverse = proxy.matrixWorld.clone().invert();
-        useEditorStore.getState().selectedEntityIds.forEach(id => {
+        getDragRootIds().forEach(id => {
           const obj = objectManager.getObject(id);
           if (obj) {
             obj.updateMatrixWorld(true);
@@ -151,7 +164,7 @@ export function ViewportCanvas() {
         const updates: Record<string, any> = {};
         proxy.updateMatrixWorld(true);
         const proxyMat = proxy.matrixWorld;
-        useEditorStore.getState().selectedEntityIds.forEach(id => {
+        getDragRootIds().forEach(id => {
           const localMat = initialOffsetsRef.current.get(id);
           const obj = objectManager.getObject(id);
           if (localMat && obj) {
@@ -249,8 +262,10 @@ export function ViewportCanvas() {
     const locked = selectedEntityIds.some(id => objectManager.getObject(id)?.userData.locked);
     // Preview hides the editor viewport behind the overlay but keeps the canvas
     // hit-testable for camera control, so detach the gizmo — otherwise it stays
-    // draggable while completely invisible.
-    if (isPreviewMode || locked || selectedEntityIds.length === 0) {
+    // draggable while completely invisible. View only: TransformControls moves the
+    // object itself before the store (which drops the change) hears of it, so
+    // there must be no gizmo to drag.
+    if (isPreviewMode || isReadOnly || locked || selectedEntityIds.length === 0) {
       tc?.detach();
     } else if (selectedEntityIds.length === 1) {
       const selectedObj = objectManager.getObject(selectedEntityIds[0]);
@@ -303,7 +318,7 @@ export function ViewportCanvas() {
         }
       }
     });
-  }, [entities, selectedEntityIds, objectManager, sceneManager, transformControlsRef, isPreviewMode]);
+  }, [entities, selectedEntityIds, objectManager, sceneManager, transformControlsRef, isPreviewMode, isReadOnly]);
 
   // -- Resize Logic --
   useEffect(() => {
@@ -446,6 +461,8 @@ export function ViewportCanvas() {
       event.preventDefault();
       const files = event.dataTransfer?.files;
       if (!files || files.length === 0) return;
+      // View only: the store would drop the new entities anyway, so don't store the model's bytes.
+      if (useEditorStore.getState().readOnlyReason) return;
 
       Array.from(files).forEach((file) => {
         useEditorStore.getState().adjustPendingImports(1);

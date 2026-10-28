@@ -6,6 +6,8 @@ import {
   getAncestorIds,
   getChildren,
   getDescendantIds,
+  isEffectivelyLocked,
+  isLockedByAncestor,
 } from "./entityIndex";
 
 const makeEntity = (id: string, overrides: Partial<Entity> = {}): Entity => ({
@@ -226,5 +228,44 @@ describe("canReparentEntities", () => {
     it("allows an ordinary entity to be parented under an imported node", () => {
       expect(canReparentEntities(buildScene(), ["b1"], "modelArm")).toBe(true);
     });
+  });
+});
+
+describe("inherited locks", () => {
+  const lockIds = (entities: Entity[], ids: string[]): Entity[] =>
+    entities.map((entity) => (ids.includes(entity.id) ? { ...entity, locked: true } : entity));
+
+  it("locks every descendant of a locked group", () => {
+    const entities = lockIds(buildScene(), ["groupA"]);
+    for (const id of ["groupA", "a1", "a1x", "a1xDeep", "a2"]) {
+      expect(isEffectivelyLocked(entities, id)).toBe(true);
+    }
+  });
+
+  it("leaves siblings and unrelated subtrees unlocked", () => {
+    const entities = lockIds(buildScene(), ["a1"]);
+    expect(isEffectivelyLocked(entities, "a1xDeep")).toBe(true);
+    expect(isEffectivelyLocked(entities, "a2")).toBe(false);
+    expect(isEffectivelyLocked(entities, "groupA")).toBe(false);
+    expect(isEffectivelyLocked(entities, "b1")).toBe(false);
+  });
+
+  it("distinguishes an own lock from an inherited one", () => {
+    const entities = lockIds(buildScene(), ["groupA"]);
+    expect(isLockedByAncestor(entities, "groupA")).toBe(false);
+    expect(isLockedByAncestor(entities, "a1")).toBe(true);
+    // The child's own flag is untouched, so unlocking the group restores it.
+    expect(entities.find((e) => e.id === "a1")?.locked).toBe(false);
+  });
+
+  it("keeps a child's own lock when its group is unlocked", () => {
+    const entities = lockIds(buildScene(), ["a2"]);
+    expect(isEffectivelyLocked(entities, "a2")).toBe(true);
+    expect(isEffectivelyLocked(entities, "a1")).toBe(false);
+  });
+
+  it("covers imported-model nodes under a locked model root", () => {
+    const entities = lockIds(buildScene(), ["model"]);
+    expect(isEffectivelyLocked(entities, "modelHand")).toBe(true);
   });
 });

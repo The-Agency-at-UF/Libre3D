@@ -6,6 +6,8 @@ import { HelpMenu } from "../HelpMenu";
 interface InspectorTopbarProps {
   setIsModalOpen: (open: boolean) => void;
   setActiveTab: (tab: "export" | "share") => void;
+  /** False hides the Share button (a guest's scene isn't in the cloud). */
+  canShare: boolean;
   viewportZoom: number;
   hasSelection: boolean;
 }
@@ -13,6 +15,7 @@ interface InspectorTopbarProps {
 export function InspectorTopbar({
   setIsModalOpen,
   setActiveTab,
+  canShare,
   viewportZoom,
   hasSelection,
 }: InspectorTopbarProps) {
@@ -263,16 +266,18 @@ export function InspectorTopbar({
           <span>{isPreviewMode ? "Stop" : "Play"}</span>
         </button>
         <HelpMenu />
-        <button
-          className="btn-chip"
-          disabled={isPreviewMode}
-          onClick={() => {
-            setActiveTab("share");
-            setIsModalOpen(true);
-          }}
-        >
-          Share
-        </button>
+        {canShare && (
+          <button
+            className="btn-chip"
+            disabled={isPreviewMode}
+            onClick={() => {
+              setActiveTab("share");
+              setIsModalOpen(true);
+            }}
+          >
+            Share
+          </button>
+        )}
         <button
           className="btn-chip primary"
           disabled={isPreviewMode}

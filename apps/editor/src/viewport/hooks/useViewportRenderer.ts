@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
 import Stats from "three/examples/jsm/libs/stats.module.js";
+import { hasPendingThumbnail, renderPendingThumbnail } from "../thumbnailCapture";
 
 // model-viewer's exposure boost for Neutral tone mapping without an explicit
 // environment/skybox image. Keep in step with the `tone-mapping` attribute on the
@@ -84,6 +85,9 @@ export function useViewportRenderer(
       if (useEditorStore.getState().isPreviewMode) return;
       stats.update();
       if (onRender) onRender();
+      // A gallery picture asked for since the last frame (thumbnailCapture.ts) is taken here,
+      // before the normal render paints over it.
+      if (hasPendingThumbnail()) renderPendingThumbnail(renderer, scene, cameraRef.current);
       // cameraRef.current is always the active camera — no stale closure.
       renderer.render(scene, cameraRef.current);
       if (onAfterRender) onAfterRender();

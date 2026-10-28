@@ -1,0 +1,51 @@
+# Checks every pull request into dev or main, and every push to them, the same way you would
+# locally: a frozen install (like Vercel's), `pnpm build` (tsc -b + vite build, which also
+# type-checks the tests), `pnpm test` (Vitest), and the CDK app's type-check.
+#
+# No secrets or AWS access: the unit tests run against in-memory fakes, and the build doesn't need
+# the VITE_* sign-in values (they're only read at runtime).
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+# A newer push to the same PR or branch cancels the run it makes obsolete.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # pnpm's version comes from `packageManager` in package.json.
+      - uses: pnpm/action-setup@v6
+        with:
+          cache: true
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Type-check and build the editor
+        run: pnpm build
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Type-check the infrastructure
+        run: pnpm --filter infra typecheck

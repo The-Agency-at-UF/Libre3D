@@ -1,4 +1,4 @@
-import { useEditorStore } from "../store/useEditorStore";
+import { shareUrlFor } from "../utils/navigation";
 
 export interface ExportModalProps {
   isModalOpen: boolean;
@@ -7,7 +7,10 @@ export interface ExportModalProps {
   setActiveTab: (tab: "export" | "share") => void;
   isExporting: boolean;
   isPublishing: boolean;
-  shareUrl: string | null;
+  /** False hides the Share Scene tab (a guest's scene isn't in the cloud). */
+  canShare: boolean;
+  /** The scene's publish ID once it's published; its share link is shown and can be copied. */
+  publishId: string | null;
   isCopied: boolean;
   setIsCopied: (copied: boolean) => void;
   handleExportAsset: () => Promise<void>;
@@ -22,16 +25,17 @@ export function ExportModal({
   setActiveTab,
   isExporting,
   isPublishing,
-  shareUrl,
+  canShare,
+  publishId,
   isCopied,
   setIsCopied,
   handleExportAsset,
   handleExportJson,
   handlePublishLink,
 }: ExportModalProps) {
-  const currentPublishId = useEditorStore((state) => state.currentPublishId);
-
   if (!isModalOpen) return null;
+
+  const shareUrl = publishId ? shareUrlFor(publishId) : null;
 
   return (
     <div className="editor-modal-backdrop" role="presentation" onClick={() => setIsModalOpen(false)}>
@@ -50,16 +54,18 @@ export function ExportModal({
           >
             Export Asset
           </button>
-          <button
-            className={`modal-tab-btn ${activeTab === "share" ? "active" : ""}`}
-            type="button"
-            onClick={() => setActiveTab("share")}
-          >
-            Share Scene
-          </button>
+          {canShare && (
+            <button
+              className={`modal-tab-btn ${activeTab === "share" ? "active" : ""}`}
+              type="button"
+              onClick={() => setActiveTab("share")}
+            >
+              Share Scene
+            </button>
+          )}
         </div>
 
-        {activeTab === "export" ? (
+        {activeTab === "export" || !canShare ? (
           <div className="modal-tab-content">
             <h2 className="editor-modal-title" id="modal-dialog-title">
               Export Scene Options
@@ -100,7 +106,7 @@ export function ExportModal({
                 onClick={handlePublishLink}
                 disabled={isPublishing}
               >
-                {isPublishing ? "Publishing..." : currentPublishId ? "Update Published Scene" : "Publish Scene to Cloud"}
+                {isPublishing ? "Publishing..." : publishId ? "Update Published Scene" : "Publish Scene to Cloud"}
               </button>
 
               {shareUrl ? (

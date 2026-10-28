@@ -1,11 +1,14 @@
 {
   "compilerOptions": {
     "composite": true,
+    "outDir": "./node_modules/.tmp/tsconfig.node",
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
     "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "allowSyntheticDefaultImports": true,
+    "strict": true,
     "types": ["node"]
   },
-  "include": ["vite.config.ts", "src/utils/awsPublishHandler.ts"]
+  "include": ["vite.config.ts", "src/utils/awsConfig.ts", "src/utils/awsPublishHandler.ts", "src/utils/awsSceneHandler.ts", "src/utils/publishedSceneStyle.ts", "src/utils/sceneAssets.ts", "src/utils/verifyAuth.ts"]
 }

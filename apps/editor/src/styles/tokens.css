@@ -43,6 +43,21 @@
   --radius-base: 10px;
   --text-on-accent: #ffffff;
   --bg-surface-sunken: #181820;
+
+  /* Spacing & type scale for the pages outside the editor (pages.css). Theme-independent, so not
+     repeated under .light-theme. A design system can re-point these before replacing pages.css. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --font-size-sm: 13px;
+  --font-size-md: 15px;
+  --font-size-lg: 20px;
+  --font-size-xl: 32px;
+  --page-max-width: 1120px;
 }
 
 :root.light-theme {

@@ -4,6 +4,7 @@ import { createId } from "./createId";
 import { walkGltfScene, nodePathKey, collectSkinnedBones } from "./gltfHierarchy";
 import { pruneImportNodes, type PrunableNode } from "./pruneImportHierarchy";
 import { createConfiguredGltfLoader } from "./createGltfLoader";
+import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
 import type { ImportNodeSpec } from "../store/useEditorStore";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
@@ -83,7 +84,8 @@ function computeImportRootScale(scene: THREE.Object3D): number {
 }
 
 // The single entry point for importing a .glb: validates, reads the file once,
-// stores the raw buffer, parses it once into a node hierarchy, and names the
+// stores the raw buffer under its content hash (the asset's ID here and in the
+// cloud, see sceneAssets.ts), parses it once into a node hierarchy, and names the
 // import root after the file. Call sites just hand the result to
 // addImportedModelHierarchy.
 export async function prepareModelImport(file: File): Promise<{ assetId: string; nodes: ImportNodeSpec[] }> {
@@ -92,8 +94,14 @@ export async function prepareModelImport(file: File): Promise<{ assetId: string;
     throw new Error("Unsupported file type: only .glb files are supported for import.");
   }
 
+  // Checked before reading the file: anything bigger couldn't be uploaded with the scene.
+  if (file.size > MAX_ASSET_BYTES) {
+    window.alert(`This model is too large to import. Models can be up to ${MAX_ASSET_BYTES / (1024 * 1024)} MB.`);
+    throw new Error(`Model too large to import: ${file.size} bytes.`);
+  }
+
   const buffer = await file.arrayBuffer();
-  const assetId = createId("asset");
+  const assetId = await hashAsset(buffer);
   await saveModelAsset(assetId, buffer);
 
   const nodes = await extractModelHierarchy(buffer, assetId);

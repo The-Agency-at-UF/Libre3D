@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createId } from "./createId";
+import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
 import { saveTextureAsset } from "./textureAssetStore";
 import type {
   ColorLayer,
@@ -30,7 +31,6 @@ import type {
 // original compression), which is imperceptible for editing purposes.
 
 const createLayerId = (): string => createId("layer");
-const createTextureAssetId = (): string => createId("texture");
 
 // Maps a parsed material's class to our LightingModel, mirroring
 // ObjectManager.materialClassForModel in reverse. MeshPhysicalMaterial extends
@@ -129,7 +129,8 @@ async function extractTextureBlob(texture: THREE.Texture): Promise<Blob | null> 
 // and meshes (a shared packed metallic-roughness map is the classic case) — this
 // dedupes so each unique image is extracted and saved to OPFS exactly once, with
 // one shared textureAssetId. A cached `null` records "extraction already failed"
-// so a failing image isn't retried per-slot.
+// so a failing image isn't retried per-slot. The ID itself is the PNG's content
+// hash (sceneAssets.ts), so the same image across imports is also stored once.
 export type TextureDedupCache = Map<unknown, string | null>;
 export const createTextureDedupCache = (): TextureDedupCache => new Map();
 
@@ -138,11 +139,13 @@ async function resolveTextureAssetId(texture: THREE.Texture, cache: TextureDedup
   if (cache.has(key)) return cache.get(key) ?? null;
 
   const blob = await extractTextureBlob(texture);
-  if (!blob) {
+  if (!blob || blob.size > MAX_ASSET_BYTES) {
+    // Too large to upload with the scene: skip the layer like an image that couldn't be read.
+    if (blob) console.warn("[Libre3D] An imported texture is too large to keep; skipping that image layer.");
     cache.set(key, null);
     return null;
   }
-  const id = createTextureAssetId();
+  const id = await hashAsset(blob);
   await saveTextureAsset(id, blob);
   cache.set(key, id);
   return id;

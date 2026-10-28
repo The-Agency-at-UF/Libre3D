@@ -409,9 +409,9 @@ Use these components for consistent styling and UX across the app.
 
 ### "Values don't persist"
 
-1. Is the field in store's `partialize` config? (Only persisted fields survive reload)
+1. Is it saved at all? Settings inside `sceneSettings`/`postProcessing`/`frame` are saved with the scene automatically; a new top-level scene field must be added to `SceneContent`, `selectSceneContent`, and `loadScene`; an editor preference to `persist`'s `partialize` (see architecture.md §5)
 2. Is the store action using `set()` correctly? (Must return new object)
-3. Check localStorage: does "editor-store" exist and contain your field?
+3. Did it save? The status under the scene name in the editor header should read Saved
 
 ---
 
