@@ -1,3 +1,4 @@
+import { showAlert } from "../components/ui/Dialog";
 import { svgShapesToItems } from "../paths/svgImport";
 import { useEditorStore } from "../store/useEditorStore";
 
@@ -25,12 +26,12 @@ export async function importSvgFile(file: File): Promise<void> {
     }));
     items = svgShapesToItems(shapes);
   } catch (error) {
-    window.alert("This SVG couldn't be read.");
+    void showAlert("This SVG couldn't be read.");
     throw error;
   }
 
   if (items.length === 0) {
-    window.alert("Nothing to import in this SVG. Live text isn't imported: convert the text to outlines and export it again.");
+    void showAlert("Nothing to import in this SVG. Live text isn't imported: convert the text to outlines and export it again.");
     return;
   }
 

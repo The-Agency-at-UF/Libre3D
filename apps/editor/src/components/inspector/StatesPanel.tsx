@@ -2,6 +2,7 @@ import { useState } from "react";
 import { selectViewedObjectState, useEditorStore, type Entity } from "../../store/useEditorStore";
 import { getObjectStates, type ObjectState } from "../../animation/objectStates";
 import { getEventsUsingState } from "../../animation/events";
+import { showConfirm } from "../ui/Dialog";
 import { PanelSection } from "../ui/PanelSection";
 
 interface StatesPanelProps {
@@ -28,13 +29,15 @@ export function StatesPanel({ entity }: StatesPanelProps) {
 
   // A state an event goes through asks first: those events' rows would say "Pick a state", and
   // Play would skip them until another is picked (or the deletion is undone).
-  const deleteState = (objectState: ObjectState) => {
+  const deleteState = async (objectState: ObjectState) => {
     const users = getEventsUsingState(useEditorStore.getState().animation.events, objectState.id);
     const used = users.length === 1 ? ["an event", "that event"] : [`${users.length} events`, "those events"];
     const message =
       `${objectState.name} is used by ${used[0]}. Deleting it leaves "Pick a state" in ${used[1]}, ` +
       `which Play skips until another state is picked. Delete it anyway?`;
-    if (users.length === 0 || window.confirm(message)) removeState(objectState.id);
+    if (users.length === 0 || (await showConfirm(message, { title: "Delete state", confirmLabel: "Delete", danger: true }))) {
+      removeState(objectState.id);
+    }
   };
 
   const startRename = (objectState: ObjectState) => {
