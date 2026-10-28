@@ -293,6 +293,7 @@ After making ANY change, run these tests to ensure you didn't break existing fea
 - [ ] Select, rename, delete entities
 - [ ] Undo/redo work
 - [ ] Scene persists after reload
+- [ ] Messages and questions (delete a scene, rename, start over, an unsupported import) open the in-app dialog, never the browser's; it follows the theme, and Escape cancels
 
 ### Transforms
 - [ ] Translate entities (move with gizmo)
