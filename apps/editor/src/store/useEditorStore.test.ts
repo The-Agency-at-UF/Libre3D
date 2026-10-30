@@ -1,6 +1,8 @@
+import * as THREE from "three";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
+import { collectAssetRefs } from "../utils/sceneAssets";
 import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
 import type { PathData, PathPoint } from "../paths/pathGeometry";
 import type { ImportedPath, ImportedSvgItem } from "../paths/svgImport";
@@ -1115,6 +1117,75 @@ describe("shapes", () => {
 
     expect(reloaded).toMatchObject({ type: "shape", shape: bar, extrusion: 0.2 });
     expect(reloaded.shape).not.toBe(bar);
+  });
+});
+
+describe("image planes", () => {
+  const hash = "a".repeat(64);
+  const storeWithLight = async () => {
+    const module = await loadStore();
+    module.useEditorStore.getState().loadScene({ entities: [light] });
+    return module;
+  };
+
+  it("adds a plane named after the file, selected, showing the picture unlit from both sides", async () => {
+    const { useEditorStore } = await storeWithLight();
+
+    const id = useEditorStore.getState().addImagePlane("photo", hash, 1.5, false);
+    const added = useEditorStore.getState().entities.find((e) => e.id === id)!;
+
+    expect(added).toMatchObject({ type: "image", name: "photo", imageAspect: 1.5, position: [0, 0, 0], scale: [1, 1, 1] });
+    expect(added.materialLayers).toEqual([
+      expect.objectContaining({ type: "color", color: "#ffffff", opacity: 1, doubleSided: true }),
+      expect.objectContaining({ type: "lighting", model: "none" }),
+      expect.objectContaining({ type: "image", enabled: true, textureAssetId: hash, slot: "color", wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping }),
+    ]);
+    expect(added.materialLayers![0]).not.toHaveProperty("alphaMode");
+    expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
+    expect(collectAssetRefs(useEditorStore.getState().entities)).toEqual([{ id: hash, kind: "texture" }]);
+  });
+
+  it("blends a picture with see-through pixels", async () => {
+    const { useEditorStore } = await storeWithLight();
+
+    const id = useEditorStore.getState().addImagePlane("logo", hash, 1, true);
+
+    expect(useEditorStore.getState().entities.find((e) => e.id === id)!.materialLayers![0]).toMatchObject({ type: "color", alphaMode: "BLEND" });
+  });
+
+  it("is one undo step and puts the pen down", async () => {
+    const { useEditorStore } = await storeWithLight();
+    useEditorStore.getState().setPenTool({ mode: "draw", pathId: null, selectedPoints: [] });
+    const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().addImagePlane("photo", hash, 1, false);
+
+    expect(useEditorStore.getState().penTool).toBeNull();
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().entities.map((e) => e.id)).toEqual(["directional-light-1"]);
+  });
+
+  it("adds nothing in a view-only tab", async () => {
+    const { useEditorStore } = await storeWithLight();
+    const before = useEditorStore.getState().entities;
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().addImagePlane("photo", hash, 1, false);
+
+    expect(useEditorStore.getState().entities).toBe(before);
+  });
+
+  it("keeps a plane through save and reload", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithLight();
+    useEditorStore.getState().addImagePlane("photo", hash, 0.75, true);
+    const content = selectSceneContent(useEditorStore.getState());
+    const saved = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().loadScene(saved.ok ? saved.content : null);
+
+    expect(useEditorStore.getState().entities).toEqual(content.entities);
   });
 });
 

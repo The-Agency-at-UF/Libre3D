@@ -83,3 +83,26 @@ describe("ObjectManager clearcoat", () => {
     expect(sync({ model: "lambert", clearcoat: 1 })).toBeInstanceOf(THREE.MeshLambertMaterial);
   });
 });
+
+describe("ObjectManager image planes", () => {
+  it("draws an image as an unlit, double-sided plane the picture's shape, and loads its texture", async () => {
+    vi.resetModules();
+    const loadTextureForScene = vi.fn(() => new Promise<Blob | null>(() => {}));
+    vi.doMock("../utils/assetTransfers", () => ({ loadTextureForScene, loadModelForScene: vi.fn() }));
+    const [{ useEditorStore }, { ObjectManager }] = await Promise.all([import("../store/useEditorStore"), import("./ObjectManager")]);
+    const meshMap = new Map<string, THREE.Object3D>();
+    const manager = new ObjectManager(new THREE.Scene(), meshMap);
+    const hash = "b".repeat(64);
+
+    const id = useEditorStore.getState().addImagePlane("logo", hash, 2, true);
+    manager.syncMeshes(useEditorStore.getState().entities, null, false);
+    const mesh = meshMap.get(id) as THREE.Mesh<THREE.PlaneGeometry, THREE.Material>;
+
+    expect(mesh.geometry).toBeInstanceOf(THREE.PlaneGeometry);
+    expect(mesh.geometry.parameters).toMatchObject({ width: 2, height: 1 });
+    expect(mesh.material).toBeInstanceOf(THREE.MeshBasicMaterial);
+    expect(mesh.material).toMatchObject({ side: THREE.DoubleSide, transparent: true, depthWrite: true });
+    expect(loadTextureForScene).toHaveBeenCalledWith(hash);
+    vi.doUnmock("../utils/assetTransfers");
+  });
+});

@@ -23,6 +23,7 @@ import { ShapeMesh } from "../paths/ShapeMesh";
 import type { ShapeData, ShapeSolid } from "../paths/shapeGeometry";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { depthPaintOf, syncDepthColors } from "../utils/depthColors";
+import { createImagePlaneGeometry } from "../utils/imagePlane";
 
 type LayeredMaterial =
   | THREE.MeshBasicMaterial
@@ -98,6 +99,8 @@ export class ObjectManager {
         return new THREE.SphereGeometry(0.5, 32, 16);
       case "torus":
         return new THREE.TorusGeometry(0.55, 0.2, 16, 48);
+      case "image":
+        return createImagePlaneGeometry(entity.imageAspect);
       case "cube":
       default:
         return new THREE.BoxGeometry(1, 1, 1);
