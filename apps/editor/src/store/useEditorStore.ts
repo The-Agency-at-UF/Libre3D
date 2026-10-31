@@ -1,3 +1,4 @@
+import { ClampToEdgeWrapping } from "three";
 import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
@@ -41,7 +42,7 @@ import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
 import { cloneShape, flattenShape, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
 import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
-export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "directionalLight" | "importedModel" | "group";
+export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
 
 /**
  * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
@@ -163,6 +164,9 @@ export interface Entity {
   shape?: ShapeData;
   extrusion?: number;
   bevel?: number;
+  // Images (type "image", see utils/imagePlane.ts): a flat plane as wide for its height as the picture
+  // (width / height), which its Image layer shows.
+  imageAspect?: number;
 }
 
 /**
@@ -421,6 +425,11 @@ export interface EditorState {
   // or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
   // Returns its ID ("" when there's nothing to add).
   addImportedSvg: (name: string, items: ImportedSvgItem[]) => string;
+  // An imported picture (utils/importImage.ts) as a plane named `name`, at the origin: `aspect` is its
+  // width / height, and `textureAssetId` its bytes in the texture store, shown unlit from both sides
+  // and blended when it has see-through pixels (`transparent`). Selects it and puts the pen down.
+  // Returns its ID.
+  addImagePlane: (name: string, textureAssetId: string, aspect: number, transparent: boolean) => string;
   // The extrusion (depth) or bevel of every shape among `ids`, in one undo step.
   updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
   // Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
@@ -533,6 +542,10 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   shape: {
     name: "Shape",
     color: "#9AA4B2",
+  },
+  image: {
+    name: "Image",
+    color: "#ffffff",
   },
   directionalLight: {
     name: "Directional Light",
@@ -1362,6 +1375,36 @@ export const useEditorStore = create<EditorState>()(
               return { entities: [...state.entities, ...added], selectedEntityIds: [rootId], penTool: null };
             });
             return rootId;
+          },
+          addImagePlane: (name, textureAssetId, aspect, transparent) => {
+            let newId = "";
+            set((state) => {
+              const image: ImageLayer = {
+                id: createEntityId(),
+                type: "image",
+                enabled: true,
+                opacity: 1,
+                textureAssetId,
+                slot: "color",
+                // The picture covers the plane once; clamping keeps its edges from bleeding into each other.
+                wrapS: ClampToEdgeWrapping,
+                wrapT: ClampToEdgeWrapping,
+              };
+              const entity: Entity = {
+                ...createEntity("image"),
+                name,
+                imageAspect: aspect,
+                // White, so the picture shows in its own colours (the Color layer tints it), whatever the lights.
+                materialLayers: [
+                  { ...createColorLayer(ENTITY_DEFAULTS.image.color, 1), doubleSided: true, ...(transparent ? { alphaMode: "BLEND" as const } : null) },
+                  createLightingLayer({ model: "none" }),
+                  image,
+                ],
+              };
+              newId = entity.id;
+              return { entities: [...state.entities, entity], selectedEntityIds: [entity.id], penTool: null };
+            });
+            return newId;
           },
           updateShapeSolids: (ids, updates) =>
             set((state) => {

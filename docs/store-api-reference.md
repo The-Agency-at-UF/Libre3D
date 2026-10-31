@@ -146,6 +146,11 @@ Adds the shapes and paths of an imported SVG (made by `svgShapesToItems` in `pat
 - **Returns**: ID of the item, or of the group (`""` when `items` is empty)
 - **Auto-selects**: The item or the group becomes selected
 
+#### `addImagePlane(name: string, textureAssetId: string, aspect: number, transparent: boolean) → string`
+Adds an imported picture (`importImageFile` in `utils/importImage.ts`) as an `"image"` entity named `name` at the origin: a flat plane `aspect` (width / height) wide, its longer side 2 units (`utils/imagePlane.ts`), stored as `imageAspect`. Its layers are a white Color layer shown from both sides (`alphaMode: "BLEND"` when `transparent`, the picture having see-through pixels), an unlit Lighting layer (`model: "none"`), and a Base Color Image layer pointing at `textureAssetId` (the file's SHA-256 in the texture store), clamped at the edges. One undo step; refused in view only; puts the pen down.
+- **Returns**: New entity ID
+- **Auto-selects**: The new plane becomes selected
+
 #### `updateShapeSolids(ids: string[], updates: Partial<ShapeSolid>) → void`
 Sets the `extrusion` (depth) or `bevel` of every shape among `ids`, one undo step. Other entity types are skipped; a negative value is ignored.
 
