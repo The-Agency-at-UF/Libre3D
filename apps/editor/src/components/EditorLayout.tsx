@@ -19,6 +19,7 @@ import { useHotkeys } from "../hooks/useHotkeys";
 //import tsx utils for editor export and publish
 import { exportLiveScene, getLiveScene, createDownload } from "../utils/exportScene";
 import { publishLiveScene } from "../utils/publishScene";
+import { downloadSceneFile } from "../utils/sceneFileTransfers";
 import { ApiAuthError } from "../utils/apiFetch";
 import { getSafeColor } from "../utils/sceneColor";
 import { toggleTheme } from "../utils/theme";
@@ -49,6 +50,11 @@ export interface EditorLayoutProps {
   viewOnlyBanner: ReactNode | null;
   /** The cloud scene that Share publishes. Null hides Share (a guest's scene isn't in the cloud). */
   publishing: { sceneId: string; initialPublishId: string | null } | null;
+  /** The scene's name, for the menu's Download (`<name>.libre3d`). */
+  sceneName: string;
+  /** A `.libre3d` dropped on the editor, and what opening one does, shown on the drop overlay. */
+  onOpenSceneFile: (file: File) => void;
+  sceneFileAction: string;
 }
 
 /*
@@ -67,6 +73,9 @@ export function EditorLayout({
   account,
   viewOnlyBanner,
   publishing,
+  sceneName,
+  onOpenSceneFile,
+  sceneFileAction,
 }: EditorLayoutProps) {
   const entities = useEditorStore((state) => state.entities) ?? [];
   // The scene's share link once published. Kept on its row by the server; publishing the first
@@ -256,6 +265,7 @@ export function EditorLayout({
             <HamburgerMenu
               canEdit={canEdit}
               onNewFile={onNewFile}
+              onDownloadSceneFile={() => void downloadSceneFile(sceneName)}
               onDuplicate={handleDuplicate}
               onResetCamera={handleResetCamera}
               onToggleTheme={toggleTheme}
@@ -357,7 +367,7 @@ export function EditorLayout({
         handlePublishLink={handlePublishLink}
       />
 
-      <DropOverlay />
+      <DropOverlay onOpenSceneFile={onOpenSceneFile} sceneFileAction={sceneFileAction} />
     </>
   );
 }

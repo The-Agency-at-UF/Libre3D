@@ -11,6 +11,8 @@ interface HamburgerMenuProps {
   /** False while the scene is view only: the items that would change it are disabled. */
   canEdit: boolean;
   onNewFile: () => void;
+  /** Download the scene as a `.libre3d` file. Allowed while view only: it changes nothing. */
+  onDownloadSceneFile: () => void;
   onDuplicate: () => void;
   onResetCamera: () => void;
   onToggleTheme: () => void;
@@ -23,11 +25,12 @@ interface HamburgerMenuProps {
 /*
  * BLOCK: HamburgerMenu (React Component)
  * PURPOSE: Renders the sidebar menu button and the dropdown list containing editor action items
- *          (New Scene, Duplicate, Undo/Redo, Reset Camera, Toggle Theme).
+ *          (New Scene, Download Scene, Duplicate, Undo/Redo, Reset Camera, Toggle Theme).
  */
 export function HamburgerMenu({
   canEdit,
   onNewFile,
+  onDownloadSceneFile,
   onDuplicate,
   onResetCamera,
   onToggleTheme,
@@ -78,6 +81,17 @@ export function HamburgerMenu({
                 New Scene
               </span>
               <span className="hamburger-dropdown-shortcut">Ctrl+N</span>
+            </button>
+            <button
+              className="hamburger-dropdown-btn"
+              type="button"
+              onClick={() => handleItemClick(onDownloadSceneFile)}
+            >
+              <span>
+                <i className="ti ti-download" style={{ marginRight: "6px" }}></i>
+                Download Scene
+              </span>
+              <span className="hamburger-dropdown-shortcut">.libre3d</span>
             </button>
             <button
               className="hamburger-dropdown-btn"

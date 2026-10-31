@@ -9,6 +9,7 @@ import { PageStatus } from "./ui/PageStatus";
 import { selectSceneContent, useEditorStore } from "../store/useEditorStore";
 import { setSceneForAssetDownloads } from "../utils/assetTransfers";
 import { readGuestScene, writeGuestScene } from "../utils/guestScene";
+import { readSceneFileForOpening } from "../utils/sceneFileTransfers";
 import { HOME_PATH, navigate } from "../utils/navigation";
 
 // How long after the last edit the scene is written to this browser.
@@ -112,6 +113,22 @@ export function GuestEditorApp({ isSignedIn }: GuestEditorAppProps) {
     }
   };
 
+  // A dropped .libre3d replaces the one guest scene too.
+  const handleOpenSceneFile = async (file: File) => {
+    const opened = await readSceneFileForOpening(file);
+
+    if (
+      opened &&
+      (await showConfirm(`The scene kept in this browser will be replaced by "${opened.name}". This can't be undone.`, {
+        title: "Open this scene?",
+        confirmLabel: "Open",
+        danger: true,
+      }))
+    ) {
+      useEditorStore.getState().loadScene(opened.content);
+    }
+  };
+
   return (
     <EditorLayout
       backTitle="Back to the home page"
@@ -133,6 +150,9 @@ export function GuestEditorApp({ isSignedIn }: GuestEditorAppProps) {
       account={null}
       viewOnlyBanner={null}
       publishing={null}
+      sceneName="Guest scene"
+      onOpenSceneFile={(file) => void handleOpenSceneFile(file)}
+      sceneFileAction="Replaces this scene"
     />
   );
 }
