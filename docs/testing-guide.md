@@ -291,7 +291,7 @@ After making ANY change, run these tests to ensure you didn't break existing fea
 ### Basic Operations
 - [ ] Add cube, sphere, torus, plane
 - [ ] Drag a file over the editor: the drop overlay shows (3D Model, Vector, Image, Libre3D Scene) and goes when the drag leaves the window; a `.glb`, `.svg` or `.png` dropped on a sidebar is imported, not opened by the browser
-- [ ] Export → Download Scene saves `<name>.libre3d`; dropping it on the editor opens it as a new scene (in `/try`: replaces the scene after asking) with its imported models and pictures
+- [ ] Export → Download Scene saves `<name>.libre3d`; dropping it on the editor, or Upload scene in the gallery, opens it as a new scene (in `/try`: replaces the scene after asking) with its imported models and pictures
 - [ ] Add directional light
 - [ ] Select, rename, delete entities
 - [ ] Undo/redo work
