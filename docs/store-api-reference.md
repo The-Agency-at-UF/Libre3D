@@ -157,6 +157,9 @@ Sets the `extrusion` (depth) or `bevel` of every shape among `ids`, one undo ste
 #### `updateShape(id: string, shape: ShapeData) → void`
 Replaces a shape's outlines (copied in, every Z set to 0), one undo step; the pen tool's edits. Ignored for other entity types.
 
+#### `centerOrigin(id: string) → void`
+Moves a path's or shape's origin to the middle of the box round its curves (`pathsCenter` in `paths/pathGeometry.ts`) without moving it on screen: its points shift by minus the centre, and its position by the centre through its own scale and rotation. Its states keep their transforms, so it's meant for one that has none yet: the pen tool calls it as it finishes drawing a path or shape. Ignored for other entity types and for a path that draws nothing.
+
 #### `convertShapesToPaths(ids: string[]) → number`
 Convert to Path: every shape among `ids` and among their descendants becomes a path along the middle of its strokes (`shapeCenterLines` in `paths/centerLine.ts`), with round caps and the strokes' half-width as radius (at least 0.01), drawn in full. The shape keeps its ID, name, parent, transform and material, so its states and events stay; extra strokes become paths right after it ("Shape 1 (2)", …) with the same place and a copy of the material. One undo step; does nothing in view only or Play, or for a shape with no strokes; ends the pen if it was editing a converted shape.
 - **Returns**: How many shapes were converted
