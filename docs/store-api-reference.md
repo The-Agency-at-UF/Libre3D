@@ -373,10 +373,10 @@ Each entity can have multiple material layers (color, lighting, textures) stacke
 
 ### Adding Layers
 
-#### `addMaterialLayer(entityId: string, layerType: MaterialLayerType) → void`
+#### `addMaterialLayer(entityId: string, layerType: MaterialLayerType, depthFar?: number) → void`
 Add a color, lighting, image, or depth layer to an entity (at most one of each; a second does nothing). Only a depth layer can be removed again.
 - **Types**: "color" | "lighting" | "image" | "depth"
-- **Defaults**: New layers created with sensible defaults
+- **Defaults**: New layers created with sensible defaults. A depth layer is radial from the object's origin, near 0; its far is `depthFar` when given (above 0), else 2. The Materials panel passes the object's reach (`depthReach` in `utils/depthColors.ts`, its mesh's farthest vertex from its origin), so the ramp ends on the object rather than past it.
 
 ### Removing Layers
 

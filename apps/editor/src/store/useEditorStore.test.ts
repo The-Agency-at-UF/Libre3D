@@ -1330,6 +1330,17 @@ describe("depth layers", () => {
     expect(depthOf()).toBeDefined();
   });
 
+  it("ends a new layer's ramp at the object's reach when it's measured, and at 2 otherwise", async () => {
+    const { useEditorStore, cubeId, depthOf } = await storeWithCube();
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth", 0.87);
+    expect(depthOf()).toMatchObject({ near: 0, far: 0.87 });
+
+    useEditorStore.getState().removeMaterialLayer(cubeId, depthOf()!.id);
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth", 0);
+    expect(depthOf()).toMatchObject({ near: 0, far: 2 });
+  });
+
   it("gives a duplicate its own copy of the origin and stops", async () => {
     const { useEditorStore, cubeId, depthOf } = await storeWithCube();
     useEditorStore.getState().addMaterialLayer(cubeId, "depth");

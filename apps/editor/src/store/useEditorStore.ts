@@ -516,7 +516,8 @@ export interface EditorState {
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
-  addMaterialLayer: (entityId: string, layerType: MaterialLayerType) => void;
+  // `depthFar`: where a new Depth layer's ramp ends (its object's reach); 2 when not given.
+  addMaterialLayer: (entityId: string, layerType: MaterialLayerType, depthFar?: number) => void;
   removeMaterialLayer: (entityId: string, layerId: string) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
@@ -580,7 +581,8 @@ const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
   color,
 });
 
-export const createDepthLayer = (): DepthLayer => ({
+// `far` is fitted to the object when the panel can measure it (utils/depthColors.ts, depthReach).
+export const createDepthLayer = (far = 2): DepthLayer => ({
   id: createEntityId(),
   type: "depth",
   enabled: true,
@@ -589,7 +591,7 @@ export const createDepthLayer = (): DepthLayer => ({
   origin: [0, 0, 0],
   direction: [1, 0, 0],
   near: 0,
-  far: 2,
+  far,
   stops: [
     { color: "#ff3b30", position: 0 },
     { color: "#ffcc00", position: 0.5 },
@@ -1647,7 +1649,7 @@ export const useEditorStore = create<EditorState>()(
             set((state) => ({
               frame: deepMerge(state.frame, updates),
             })),
-          addMaterialLayer: (entityId, layerType) =>
+          addMaterialLayer: (entityId, layerType, depthFar) =>
             set((state) => ({
               entities: state.entities.map((entity) => {
                 if (entity.id !== entityId || !entity.materialLayers) return entity;
@@ -1658,7 +1660,7 @@ export const useEditorStore = create<EditorState>()(
                   layerType === "color"
                     ? createColorLayer(colorLayer?.color ?? "#ffffff")
                     : layerType === "depth"
-                      ? createDepthLayer()
+                      ? createDepthLayer(depthFar !== undefined && depthFar > 0 ? depthFar : undefined)
                       : createLightingLayer();
 
                 return {
