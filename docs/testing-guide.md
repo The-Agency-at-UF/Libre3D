@@ -290,6 +290,7 @@ After making ANY change, run these tests to ensure you didn't break existing fea
 
 ### Basic Operations
 - [ ] Add cube, sphere, torus, plane
+- [ ] Drag a file over the editor: the drop overlay shows (3D Model, Vector, Image) and goes when the drag leaves the window; a `.glb`, `.svg` or `.png` dropped on a sidebar is imported, not opened by the browser
 - [ ] Add directional light
 - [ ] Select, rename, delete entities
 - [ ] Undo/redo work

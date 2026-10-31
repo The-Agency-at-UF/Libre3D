@@ -10,6 +10,7 @@ import { ExportModal } from "./ExportModal";
 import { HamburgerMenu, type MenuAccount } from "./HamburgerMenu";
 import { FloatingToolbar } from "./FloatingToolbar";
 import { PreviewControls } from "./PreviewControls";
+import { DropOverlay } from "./DropOverlay";
 
 // Custom state hook to manage right sidebar UI states like exporting, publishing, search, and tab selections
 import { useRightSidebarState } from "../hooks/useRightSidebarState";
@@ -355,6 +356,8 @@ export function EditorLayout({
         handleExportJson={handleExportJson}
         handlePublishLink={handlePublishLink}
       />
+
+      <DropOverlay />
     </>
   );
 }
