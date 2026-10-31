@@ -14,7 +14,7 @@ interface FloatingToolbarProps {
  * BLOCK: FloatingToolbar (React Component)
  * PURPOSE: Renders the toolbar overlays in the center of the viewport canvas, providing buttons
  *          to select transform tools (translate, rotate, scale), toggle transform space (Local/Global),
- *          and add primitives (Cubes, Spheres, Toruses, Lights) via a dropdown menu.
+ *          and add primitives (Cubes, Spheres, Toruses, Planes, Lights) via a dropdown menu.
  */
 export function FloatingToolbar({
   isShapeDropdownOpen,
@@ -247,6 +247,28 @@ export function FloatingToolbar({
               }}
             >
               + Torus
+            </button>
+            <button
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text-primary)",
+                padding: "6px 10px",
+                borderRadius: "3px",
+                textAlign: "left",
+                fontSize: "11px",
+                cursor: "pointer",
+                fontFamily: "var(--font)",
+              }}
+              type="button"
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              onClick={() => {
+                addEntity("plane");
+                setIsShapeDropdownOpen(false);
+              }}
+            >
+              + Plane
             </button>
             <button
               style={{

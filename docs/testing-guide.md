@@ -289,7 +289,7 @@ Test in:
 After making ANY change, run these tests to ensure you didn't break existing features:
 
 ### Basic Operations
-- [ ] Add cube, sphere, torus
+- [ ] Add cube, sphere, torus, plane
 - [ ] Add directional light
 - [ ] Select, rename, delete entities
 - [ ] Undo/redo work

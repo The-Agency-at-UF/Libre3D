@@ -122,8 +122,8 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, path, directional light, or group). A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
-- **Signature**: `(type: "cube" | "sphere" | "torus" | "path" | "directionalLight" | "group") => string`
+Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, or group). A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), lit like the other primitives, with its Color layer shown from both sides (`doubleSided: true`). A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
+- **Signature**: `(type: "cube" | "sphere" | "torus" | "plane" | "path" | "directionalLight" | "group") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
 - **Example**:
