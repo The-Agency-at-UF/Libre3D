@@ -1,4 +1,4 @@
-import { ClampToEdgeWrapping } from "three";
+import { ClampToEdgeWrapping, Euler, Vector3 } from "three";
 import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
@@ -37,9 +37,10 @@ import {
   type SceneEvent,
 } from "../animation/events";
 import type { TransitionAction } from "../animation/transitions";
-import { clonePath, createSamplePath, DEFAULT_STROKE, type PathData, type PathStroke } from "../paths/pathGeometry";
+import { clonePath, createSamplePath, DEFAULT_STROKE, pathsCenter, type PathData, type PathStroke } from "../paths/pathGeometry";
+import { shiftPoints } from "../paths/pathEditing";
 import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
-import { cloneShape, flattenShape, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
+import { cloneShape, flattenShape, shapeContours, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
 import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
 export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
@@ -421,6 +422,10 @@ export interface EditorState {
   updatePath: (id: string, path: PathData) => void;
   // Replaces a shape's outlines (the pen tool's edits). Flat: their points' and handles' Z is dropped.
   updateShape: (id: string, shape: ShapeData) => void;
+  // Moves a path's or shape's origin to the middle of its curves (pathsCenter) without moving it on
+  // screen: its points shift one way and its position the other. Its states keep their transforms,
+  // so it's for one that has none yet: the pen tool's, as it finishes drawing one.
+  centerOrigin: (id: string) => void;
   // The shapes and paths of an imported SVG (paths/svgImport.ts), in one undo step: one named `name`,
   // or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
   // Returns its ID ("" when there's nothing to add).
@@ -1346,6 +1351,24 @@ export const useEditorStore = create<EditorState>()(
               const target = state.entities.find((entity) => entity.id === id);
               if (target?.type !== "shape") return state;
               return { entities: state.entities.map((entity) => (entity === target ? { ...entity, shape: flattenShape(shape) } : entity)) };
+            }),
+          centerOrigin: (id) =>
+            set((state) => {
+              const target = state.entities.find((entity) => entity.id === id);
+              const contours = target?.type === "path" && target.path ? [target.path] : target?.type === "shape" && target.shape ? shapeContours(target.shape) : [];
+              const center = pathsCenter(contours);
+              if (!target || !center) return state;
+              const back: [number, number, number] = [-center[0], -center[1], -center[2]];
+              const shift = (path: PathData) => shiftPoints(path, path.points.map((_, index) => index), back);
+              // Where the centre is in the parent's space: through the object's own size and turn.
+              const offset = new Vector3(...center).multiply(new Vector3(...target.scale)).applyEuler(new Euler(...target.rotation, "XYZ"));
+              const moved: Entity = {
+                ...target,
+                position: [target.position[0] + offset.x, target.position[1] + offset.y, target.position[2] + offset.z],
+                ...(target.path ? { path: shift(target.path) } : null),
+                ...(target.shape ? { shape: { regions: target.shape.regions.map((region) => ({ outline: shift(region.outline), holes: region.holes.map(shift) })) } } : null),
+              };
+              return { entities: state.entities.map((entity) => (entity === target ? moved : entity)) };
             }),
           addImportedSvg: (name, items) => {
             let rootId = "";

@@ -53,6 +53,7 @@ const MIN_SEGMENTS = 8;
 export const MAX_SEGMENTS = 2000;
 const INDICES_PER_QUAD = 6; // two triangles
 const MIN_LENGTH = 1e-6; // shorter is a point (Bézier sums aren't exactly 0 for one)
+const BOUNDS_SAMPLES = 32; // per segment, where pathsCenter measures a curve
 
 export const DEFAULT_STROKE: PathStroke = { radius: 0.12, caps: "round" };
 
@@ -101,6 +102,18 @@ export const buildPathCurve = (path: PathData): THREE.CurvePath<THREE.Vector3> |
   }
 
   return curve.getLength() > MIN_LENGTH ? curve : null;
+};
+
+/**
+ * The middle of the box round these paths' curves, in their own space: measured along the curves,
+ * so a handle reaching past the curve doesn't count. Null when none of them draws anything.
+ */
+export const pathsCenter = (paths: PathData[]): [number, number, number] | null => {
+  const box = new THREE.Box3();
+  paths.forEach((path) => buildPathCurve(path)?.getPoints(BOUNDS_SAMPLES).forEach((point) => box.expandByPoint(point)));
+  if (box.isEmpty()) return null;
+  const { x, y, z } = box.getCenter(new THREE.Vector3());
+  return [x, y, z];
 };
 
 /** How many segments a tube of this length gets: enough that its bends look round. */

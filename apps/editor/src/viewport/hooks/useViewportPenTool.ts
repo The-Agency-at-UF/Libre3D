@@ -123,8 +123,9 @@ export function editPath(pathId: string): boolean {
  * (where a shape is flat) lies on it. The shape entity is made by the second point (one point draws
  * nothing), with its origin at the orbit target, and each point after that is one undo step. It fills
  * as it's drawn. Clicking the first point closes the outline; clicking the last point, Enter or
- * Escape finishes it (closing it, since a shape's outlines are closed), and the pen stays on for the
- * next one. Backspace takes the last point back. Convert to Path makes a tube of a shape.
+ * Escape finishes it (closing it, since a shape's outlines are closed, and moving its origin to its
+ * middle), and the pen stays on for the next one. Backspace takes the last point back. Convert to
+ * Path makes a tube of a shape.
  * The Path pen (`draws: "path"`) draws a tube path the same way, unturned and in 3D on the plane;
  * finishing it leaves it open, and it's made at its second point like a shape.
  * While the pen is on, a dot under the cursor shows where the next click puts a point, or the
@@ -275,20 +276,27 @@ export function useViewportPenTool(
       else if (entity?.shape) store().updateShape(id, replaceContour(entity.shape, 0, outline));
     };
 
-    // A shape's outlines are closed, so finishing one closes it, in the undo step of its last point
-    // (written with history paused); one with under 3 points fills nothing, so it goes. Called after
-    // the store update that ended drawing, not from inside it: zundo would record a write made inside
-    // another set as that set's own undo step. Not in Play or while view only (the pen goes off then).
+    // Finishing a shape or path, in the undo step of its last point (written with history paused): a
+    // shape's outlines are closed, so it closes (one with under 3 points fills nothing, so it goes),
+    // and its origin moves from the orbit target to its middle, so it turns and scales about itself.
+    // Called after the store update that ended drawing, not from inside it: zundo would record a write
+    // made inside another set as that set's own undo step. Not in Play or while view only (the pen
+    // goes off then).
     const closeDrawn = (id: string) => {
       const drawn = findDrawn(id);
       const { readOnlyReason, isPreviewMode, previewingActionId } = store();
-      if (!drawn || drawn.entity.type !== "shape" || drawn.outline.closed || readOnlyReason || isPreviewMode || previewingActionId) return;
+      if (!drawn || readOnlyReason || isPreviewMode || previewingActionId) return;
+      const isShape = drawn.entity.type === "shape";
       const history = useEditorStore.temporal.getState();
       // Mid-gesture history is paused already, and resumes on up.
       const isTracking = history.isTracking;
       if (isTracking) history.pause();
-      if (drawn.outline.points.length < 3) store().removeEntity([id]);
-      else writeDrawn(id, { ...drawn.outline, closed: true });
+      if (isShape && drawn.outline.points.length < 3) {
+        store().removeEntity([id]);
+      } else {
+        if (isShape && !drawn.outline.closed) writeDrawn(id, { ...drawn.outline, closed: true });
+        store().centerOrigin(id);
+      }
       if (isTracking) history.resume();
     };
 
@@ -824,7 +832,7 @@ export function useViewportPenTool(
       (state) => state.penTool,
       (pen, previous) => {
         // Backspace back to the lone first point removes the shape straight after, so it's gone by then.
-        // A finished path stays open (closeDrawn leaves paths alone).
+        // A finished path stays open (closeDrawn only moves its origin).
         const finished = previous?.mode === "draw" && previous.pathId !== pen?.pathId ? previous.pathId : null;
         if (finished) queueMicrotask(() => closeDrawn(finished));
         if (pen?.mode !== "draw") {

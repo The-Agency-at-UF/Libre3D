@@ -855,6 +855,49 @@ describe("paths", () => {
     expect(useEditorStore.getState().entities.some((e) => e.id === pathId)).toBe(false);
   });
 
+  it("moves a path's or shape's origin to its middle without moving it", async () => {
+    const { useEditorStore } = await loadStore();
+    const corner = (position: [number, number, number]): PathPoint => ({ position, handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "corner" });
+    const drawn: PathData = { points: [corner([1, 1, 0]), corner([3, 2, 0]), corner([3, 1, 0])], closed: false };
+    // The shape is turned a quarter about Y and twice as big, so its centre turns and grows with it.
+    useEditorStore.getState().loadScene({
+      entities: [
+        light,
+        entity("path-1", { type: "path", position: [0, 1, 2], path: drawn }),
+        entity("shape-1", { type: "shape", position: [0, 1, 2], rotation: [0, Math.PI / 2, 0], scale: [2, 2, 2], shape: { regions: [{ outline: { ...drawn, closed: true }, holes: [] }] } }),
+      ],
+    });
+    const find = (id: string) => useEditorStore.getState().entities.find((e) => e.id === id)!;
+    const worldPoints = (id: string) => {
+      const { position, rotation, scale, path, shape } = find(id);
+      const matrix = new THREE.Matrix4().compose(
+        new THREE.Vector3(...position),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(...rotation, "XYZ")),
+        new THREE.Vector3(...scale),
+      );
+      return (path ?? shape!.regions[0].outline).points.map((point) => new THREE.Vector3(...point.position).applyMatrix4(matrix));
+    };
+    const before = { path: worldPoints("path-1"), shape: worldPoints("shape-1") };
+
+    useEditorStore.getState().centerOrigin("path-1");
+    useEditorStore.getState().centerOrigin("shape-1");
+
+    expect(find("path-1").position).toEqual([2, 2.5, 2]);
+    expect(find("path-1").path!.points.map((point) => point.position)).toEqual([
+      [-1, -0.5, 0],
+      [1, 0.5, 0],
+      [1, -0.5, 0],
+    ]);
+    // The centre (2, 1.5, 0), doubled and turned: Z = -4.
+    find("shape-1").position.forEach((value, i) => expect(value).toBeCloseTo([0, 4, -2][i], 6));
+    worldPoints("path-1").forEach((point, i) => expect(point.distanceTo(before.path[i])).toBeLessThan(1e-9));
+    worldPoints("shape-1").forEach((point, i) => expect(point.distanceTo(before.shape[i])).toBeLessThan(1e-9));
+
+    const entities = useEditorStore.getState().entities;
+    useEditorStore.getState().centerOrigin("directional-light-1");
+    expect(useEditorStore.getState().entities).toBe(entities);
+  });
+
   it("replaces a path's points in one undo step, for every state", async () => {
     const { useEditorStore, pathId, path } = await storeWithPath();
     const before = path().path!;
