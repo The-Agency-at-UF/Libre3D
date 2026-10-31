@@ -14,7 +14,8 @@ export interface ExportModalProps {
   isCopied: boolean;
   setIsCopied: (copied: boolean) => void;
   handleExportAsset: () => Promise<void>;
-  handleExportJson: () => void;
+  /** The scene as a `.libre3d` file, which can be dropped on the editor to open it again. */
+  handleDownloadSceneFile: () => void;
   handlePublishLink: () => Promise<void>;
 }
 
@@ -30,7 +31,7 @@ export function ExportModal({
   isCopied,
   setIsCopied,
   handleExportAsset,
-  handleExportJson,
+  handleDownloadSceneFile,
   handlePublishLink,
 }: ExportModalProps) {
   if (!isModalOpen) return null;
@@ -71,7 +72,7 @@ export function ExportModal({
               Export Scene Options
             </h2>
             <p className="editor-modal-copy">
-              Download the current scene locally as a standard 3D asset or save its configuration data.
+              Download the scene as a standard 3D asset, or as a Libre3D scene file you can drop back on the editor to keep editing.
             </p>
             <div className="modal-export-actions">
               <button
@@ -85,9 +86,9 @@ export function ExportModal({
               <button
                 className="editor-action"
                 type="button"
-                onClick={handleExportJson}
+                onClick={handleDownloadSceneFile}
               >
-                Download Scene Config (.json)
+                Download Scene (.libre3d)
               </button>
             </div>
           </div>

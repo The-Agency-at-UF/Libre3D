@@ -17,7 +17,7 @@ import { useRightSidebarState } from "../hooks/useRightSidebarState";
 import { useHotkeys } from "../hooks/useHotkeys";
 
 //import tsx utils for editor export and publish
-import { exportLiveScene, getLiveScene, createDownload } from "../utils/exportScene";
+import { exportLiveScene, getLiveScene } from "../utils/exportScene";
 import { publishLiveScene } from "../utils/publishScene";
 import { downloadSceneFile } from "../utils/sceneFileTransfers";
 import { ApiAuthError } from "../utils/apiFetch";
@@ -50,7 +50,7 @@ export interface EditorLayoutProps {
   viewOnlyBanner: ReactNode | null;
   /** The cloud scene that Share publishes. Null hides Share (a guest's scene isn't in the cloud). */
   publishing: { sceneId: string; initialPublishId: string | null } | null;
-  /** The scene's name, for the menu's Download (`<name>.libre3d`). */
+  /** The scene's name, for the Export dialog's Download Scene (`<name>.libre3d`). */
   sceneName: string;
   /** A `.libre3d` dropped on the editor, and what opening one does, shown on the drop overlay. */
   onOpenSceneFile: (file: File) => void;
@@ -77,7 +77,6 @@ export function EditorLayout({
   onOpenSceneFile,
   sceneFileAction,
 }: EditorLayoutProps) {
-  const entities = useEditorStore((state) => state.entities) ?? [];
   // The scene's share link once published. Kept on its row by the server; publishing the first
   // time sets it, and it never changes after that.
   const [publishId, setPublishId] = useState<string | null>(publishing?.initialPublishId ?? null);
@@ -185,15 +184,6 @@ export function EditorLayout({
     }
   };
 
-  const handleExportJson = () => {
-    try {
-      const dataStr = JSON.stringify(entities, null, 2);
-      createDownload(dataStr, "libre3d-scene.json", "application/json");
-    } catch (error) {
-      console.error("Failed to export JSON:", error);
-      void showAlert("Failed to export JSON.");
-    }
-  };
 
   const handlePublishLink = async (): Promise<void> => {
     if (!publishing || sidebarUI.isPublishing) {
@@ -265,7 +255,6 @@ export function EditorLayout({
             <HamburgerMenu
               canEdit={canEdit}
               onNewFile={onNewFile}
-              onDownloadSceneFile={() => void downloadSceneFile(sceneName)}
               onDuplicate={handleDuplicate}
               onResetCamera={handleResetCamera}
               onToggleTheme={toggleTheme}
@@ -363,7 +352,7 @@ export function EditorLayout({
         isCopied={sidebarUI.isCopied}
         setIsCopied={sidebarUI.setIsCopied}
         handleExportAsset={handleExportAsset}
-        handleExportJson={handleExportJson}
+        handleDownloadSceneFile={() => void downloadSceneFile(sceneName)}
         handlePublishLink={handlePublishLink}
       />
 
