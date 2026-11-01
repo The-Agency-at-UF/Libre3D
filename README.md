@@ -2,7 +2,7 @@
 <img width="1277" height="800" alt="editor" src="https://github.com/user-attachments/assets/944122cd-cf01-4354-b2da-de22f462571e" />
 
 
-An open-source, code-free browser tool for building interactive 3D elements for websites.
+An open-source, code-free browser tool for building interactive 3D scenes for websites.
 
 ## Table of Contents
 
