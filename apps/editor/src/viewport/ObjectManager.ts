@@ -99,6 +99,10 @@ export class ObjectManager {
         return new THREE.SphereGeometry(0.5, 32, 16);
       case "torus":
         return new THREE.TorusGeometry(0.55, 0.2, 16, 48);
+      case "plane":
+        // In its own XY plane, facing +Z (the default camera), like an image. Subdivided only so a
+        // Depth layer, painted per vertex, blends smoothly across it.
+        return new THREE.PlaneGeometry(1, 1, 32, 32);
       case "image":
         return createImagePlaneGeometry(entity.imageAspect);
       case "cube":

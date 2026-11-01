@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
+import * as THREE from "three";
 import {
   useEditorStore,
   type Entity,
@@ -11,6 +12,8 @@ import {
   type DepthLayer,
 } from "../../store/useEditorStore";
 import { loadTextureForScene } from "../../utils/assetTransfers";
+import { depthReach } from "../../utils/depthColors";
+import { getLiveScene } from "../../utils/exportScene";
 import { PanelSection } from "../ui/PanelSection";
 import { Slider } from "../ui/Slider";
 import { Select } from "../ui/Select";
@@ -491,6 +494,16 @@ const getLightingLayer = (entity: Entity): LightingLayer | undefined =>
 const getDepthLayer = (entity: Entity): DepthLayer | undefined =>
   entity.materialLayers?.find((layer): layer is DepthLayer => layer.type === "depth");
 
+// How far a new Depth layer on `entityId` reaches: its mesh's farthest point, measured in the live
+// scene (only a mesh takes depth paint). Undefined, for the default, while it isn't drawn yet.
+const liveDepthReach = (entityId: string): number | undefined => {
+  let mesh: THREE.Mesh | undefined;
+  getLiveScene()?.traverse((object) => {
+    if (!mesh && object instanceof THREE.Mesh && object.userData.entityId === entityId) mesh = object;
+  });
+  return (mesh && depthReach(mesh.geometry)) ?? undefined;
+};
+
 export function MaterialsPanel({ selectedEntities: allSelectedEntities }: MaterialsPanelProps) {
   const updateMultipleEntityMaterialLayers = useEditorStore((state) => state.updateMultipleEntityMaterialLayers);
   const updateMaterialLayer = useEditorStore((state) => state.updateMaterialLayer);
@@ -746,7 +759,7 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
             disabled={entitiesMissingDepth.length === 0}
             title={entitiesMissingDepth.length === 0 ? "Depth layer already present" : "Add a Depth layer: colours by distance from a point"}
             onClick={() => {
-              entitiesMissingDepth.forEach((e) => addMaterialLayer(e.id, "depth"));
+              entitiesMissingDepth.forEach((e) => addMaterialLayer(e.id, "depth", liveDepthReach(e.id)));
               // One object's new layer opens for editing in the viewport.
               if (selectedEntities.length === 1) editDepth(selectedEntities[0].id);
             }}

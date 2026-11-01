@@ -84,6 +84,48 @@ describe("ObjectManager clearcoat", () => {
   });
 });
 
+describe("ObjectManager planes", () => {
+  const buildPlane = async () => {
+    const { useEditorStore, ObjectManager } = await loadModules();
+    const meshMap = new Map<string, THREE.Object3D>();
+    const manager = new ObjectManager(new THREE.Scene(), meshMap);
+    const id = useEditorStore.getState().addEntity("plane");
+    const sync = () => {
+      manager.syncMeshes(useEditorStore.getState().entities, null, false);
+      return meshMap.get(id) as THREE.Mesh<THREE.PlaneGeometry, THREE.MeshStandardMaterial>;
+    };
+    return { useEditorStore, id, sync };
+  };
+
+  it("draws a plane as a lit, double-sided 1×1 square in its own XY plane, facing +Z", async () => {
+    const { sync } = await buildPlane();
+
+    const mesh = sync();
+
+    expect(mesh.geometry).toBeInstanceOf(THREE.PlaneGeometry);
+    expect(mesh.geometry.parameters).toMatchObject({ width: 1, height: 1 });
+    expect(mesh.geometry.boundingBox).toMatchObject({ min: { x: -0.5, y: -0.5, z: 0 }, max: { x: 0.5, y: 0.5, z: 0 } });
+    expect(new THREE.Vector3().fromBufferAttribute(mesh.geometry.getAttribute("normal"), 0)).toEqual(new THREE.Vector3(0, 0, 1));
+    expect(mesh.material).toBeInstanceOf(THREE.MeshStandardMaterial);
+    expect(mesh.material.side).toBe(THREE.DoubleSide);
+  });
+
+  it("has enough vertices for a Depth layer to blend across it", async () => {
+    const { useEditorStore, id, sync } = await buildPlane();
+    useEditorStore.getState().addMaterialLayer(id, "depth");
+
+    const mesh = sync();
+    const colors = mesh.geometry.getAttribute("color");
+
+    expect(mesh.geometry.getAttribute("position").count).toBeGreaterThanOrEqual(33 * 33);
+    expect(colors.count).toBe(mesh.geometry.getAttribute("position").count);
+    // The corners, farther from the centre, sit further along the ramp than the middle does.
+    const middle = Math.floor(colors.count / 2);
+    expect([colors.getX(0), colors.getY(0), colors.getZ(0)]).not.toEqual([colors.getX(middle), colors.getY(middle), colors.getZ(middle)]);
+    expect(mesh.material.vertexColors).toBe(true);
+  });
+});
+
 describe("ObjectManager image planes", () => {
   it("draws an image as an unlit, double-sided plane the picture's shape, and loads its texture", async () => {
     vi.resetModules();

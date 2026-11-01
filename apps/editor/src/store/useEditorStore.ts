@@ -43,7 +43,7 @@ import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
 import { cloneShape, flattenShape, shapeContours, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
 import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
-export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
+export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
 
 /**
  * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
@@ -69,7 +69,7 @@ export interface ColorLayer {
   // glTF alpha-blending mode, captured from the source material at derivation
   // time so imported meshes preserve texture-alpha-driven transparency (BLEND)
   // and cutout masking (MASK) instead of only reacting to the scalar opacity
-  // above. Undefined for layers on primitives (cube/sphere/torus), which have
+  // above. Undefined for layers on primitives (cube/sphere/torus/plane), which have
   // no glTF material to inherit this from -- treated as "OPAQUE".
   alphaMode?: "OPAQUE" | "MASK" | "BLEND";
   alphaCutoff?: number; // only meaningful when alphaMode === "MASK"
@@ -516,7 +516,8 @@ export interface EditorState {
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
-  addMaterialLayer: (entityId: string, layerType: MaterialLayerType) => void;
+  // `depthFar`: where a new Depth layer's ramp ends (its object's reach); 2 when not given.
+  addMaterialLayer: (entityId: string, layerType: MaterialLayerType, depthFar?: number) => void;
   removeMaterialLayer: (entityId: string, layerId: string) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
@@ -539,6 +540,10 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   torus: {
     name: "Torus",
     color: "#FF7AE0",
+  },
+  plane: {
+    name: "Plane",
+    color: "#B39DFF",
   },
   path: {
     name: "Path",
@@ -576,7 +581,8 @@ const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
   color,
 });
 
-export const createDepthLayer = (): DepthLayer => ({
+// `far` is fitted to the object when the panel can measure it (utils/depthColors.ts, depthReach).
+export const createDepthLayer = (far = 2): DepthLayer => ({
   id: createEntityId(),
   type: "depth",
   enabled: true,
@@ -585,7 +591,7 @@ export const createDepthLayer = (): DepthLayer => ({
   origin: [0, 0, 0],
   direction: [1, 0, 0],
   near: 0,
-  far: 2,
+  far,
   stops: [
     { color: "#ff3b30", position: 0 },
     { color: "#ffcc00", position: 0.5 },
@@ -649,7 +655,10 @@ const createEntity = (type: EntityType): Entity => ({
     ? { color: ENTITY_DEFAULTS[type].color }
     : type === "group"
       ? null // groups are pure transform pivots — no material, no color
-      : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
+      : type === "plane"
+        ? // flat, so shown from both sides, like a shape or an image
+          { materialLayers: [{ ...createColorLayer(ENTITY_DEFAULTS.plane.color, 1), doubleSided: true }, createLightingLayer()] }
+        : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
   // The Add menu's path is a sample curve; the Path pen draws its own (addPath).
   ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
   visible: true,
@@ -1640,7 +1649,7 @@ export const useEditorStore = create<EditorState>()(
             set((state) => ({
               frame: deepMerge(state.frame, updates),
             })),
-          addMaterialLayer: (entityId, layerType) =>
+          addMaterialLayer: (entityId, layerType, depthFar) =>
             set((state) => ({
               entities: state.entities.map((entity) => {
                 if (entity.id !== entityId || !entity.materialLayers) return entity;
@@ -1651,7 +1660,7 @@ export const useEditorStore = create<EditorState>()(
                   layerType === "color"
                     ? createColorLayer(colorLayer?.color ?? "#ffffff")
                     : layerType === "depth"
-                      ? createDepthLayer()
+                      ? createDepthLayer(depthFar !== undefined && depthFar > 0 ? depthFar : undefined)
                       : createLightingLayer();
 
                 return {

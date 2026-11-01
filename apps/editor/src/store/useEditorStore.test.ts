@@ -1163,6 +1163,38 @@ describe("shapes", () => {
   });
 });
 
+describe("planes", () => {
+  it("adds a lit 1×1 plane at the origin, selected, shown from both sides", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+
+    const id = useEditorStore.getState().addEntity("plane");
+    const added = useEditorStore.getState().entities.find((e) => e.id === id)!;
+
+    expect(added).toMatchObject({ type: "plane", name: "Plane", position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] });
+    expect(added.materialLayers).toEqual([
+      expect.objectContaining({ type: "color", color: "#B39DFF", opacity: 1, doubleSided: true }),
+      expect.objectContaining({ type: "lighting", model: "physical" }),
+    ]);
+    expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
+  });
+
+  it("keeps a plane through save and reload", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+    const id = useEditorStore.getState().addEntity("plane");
+    useEditorStore.getState().updateEntityTransform(id, { rotation: [-Math.PI / 2, 0, 0], scale: [4, 4, 1] });
+    useEditorStore.getState().addMaterialLayer(id, "depth");
+    const content = selectSceneContent(useEditorStore.getState());
+    const saved = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().loadScene(saved.ok ? saved.content : null);
+
+    expect(useEditorStore.getState().entities).toEqual(content.entities);
+  });
+});
+
 describe("image planes", () => {
   const hash = "a".repeat(64);
   const storeWithLight = async () => {
@@ -1296,6 +1328,17 @@ describe("depth layers", () => {
     expect(depthOf()).toBeUndefined();
     useEditorStore.temporal.getState().undo();
     expect(depthOf()).toBeDefined();
+  });
+
+  it("ends a new layer's ramp at the object's reach when it's measured, and at 2 otherwise", async () => {
+    const { useEditorStore, cubeId, depthOf } = await storeWithCube();
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth", 0.87);
+    expect(depthOf()).toMatchObject({ near: 0, far: 0.87 });
+
+    useEditorStore.getState().removeMaterialLayer(cubeId, depthOf()!.id);
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth", 0);
+    expect(depthOf()).toMatchObject({ near: 0, far: 2 });
   });
 
   it("gives a duplicate its own copy of the origin and stops", async () => {
