@@ -13,8 +13,9 @@ import { Libre3dStack } from "../lib/libre3d-stack";
 
 const app = new App();
 
-// The agency's Libre3D account. us-east-2 is the agency's chosen Region.
-const env = { account: "574317421428", region: "us-east-2" };
+// The account comes from the credentials the CDK CLI runs with (CDK_DEFAULT_ACCOUNT), so no
+// account ID lives in the repo. us-east-2 is the agency's chosen Region.
+const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: "us-east-2" };
 
 const shared = new Libre3dSharedStack(app, "Libre3d-shared", { env });
 
