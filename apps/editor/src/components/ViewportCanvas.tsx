@@ -15,9 +15,6 @@ import { useViewportGizmo } from "../viewport/hooks/useViewportGizmo";
 import { useViewportPlay } from "../viewport/hooks/useViewportPlay";
 import { useViewportPenTool } from "../viewport/hooks/useViewportPenTool";
 import { useViewportDepthGizmo } from "../viewport/hooks/useViewportDepthGizmo";
-import { prepareModelImport } from "../utils/importModel";
-import { importSvgFile, isSvgFile } from "../utils/importSvg";
-import { importImageFile, isImageFile } from "../utils/importImage";
 
 export function ViewportCanvas() {
   const wrapperRef   = useRef<HTMLDivElement | null>(null);
@@ -544,55 +541,7 @@ export function ViewportCanvas() {
     };
   }, [orbitControlsRef, objectManager, cameraRef]);
 
-  // -- Drag-and-drop import: .svg as paths, .png/.jpg as an image plane, anything else as a model (.glb) --
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const handleDragOver = (event: DragEvent) => {
-      event.preventDefault();
-    };
-
-    const handleDrop = (event: DragEvent) => {
-      event.preventDefault();
-      const files = event.dataTransfer?.files;
-      if (!files || files.length === 0) return;
-      // View only: the store would drop the new entities anyway, so don't store the model's bytes.
-      // Play is for looking, so nothing is added while it runs.
-      const store = useEditorStore.getState();
-      if (store.readOnlyReason || store.isPreviewMode) return;
-
-      Array.from(files).forEach((file) => {
-        if (isSvgFile(file)) {
-          importSvgFile(file).catch((error) => console.error("[Libre3D] Failed to import dropped SVG:", error));
-          return;
-        }
-        if (isImageFile(file)) {
-          importImageFile(file).catch((error) => console.error("[Libre3D] Failed to import dropped image:", error));
-          return;
-        }
-
-        useEditorStore.getState().adjustPendingImports(1);
-        prepareModelImport(file)
-          .then(({ assetId, nodes }) => {
-            useEditorStore.getState().addImportedModelHierarchy(assetId, nodes);
-          })
-          .catch((error) => {
-            console.error("[Libre3D] Failed to import dropped model:", error);
-          })
-          .finally(() => {
-            useEditorStore.getState().adjustPendingImports(-1);
-          });
-      });
-    };
-
-    container.addEventListener("dragover", handleDragOver);
-    container.addEventListener("drop", handleDrop);
-    return () => {
-      container.removeEventListener("dragover", handleDragOver);
-      container.removeEventListener("drop", handleDrop);
-    };
-  }, []);
+  // Files dropped on the editor are imported by DropOverlay (EditorLayout), not here.
 
   const frameScaleLabel = `${Math.round(autoScaleFactor * 100)}%`;
 

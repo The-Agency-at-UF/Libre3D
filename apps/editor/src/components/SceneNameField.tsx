@@ -7,6 +7,8 @@ import { renameScene } from "../utils/sceneLibrary";
 interface SceneNameFieldProps {
   sceneId: string;
   initialName: string;
+  /** The name the server kept, after each rename. */
+  onRenamed?: (name: string) => void;
 }
 
 /*
@@ -14,7 +16,7 @@ interface SceneNameFieldProps {
  * PURPOSE: The scene's name in the editor header; click it to rename. Enter or clicking away saves,
  *          Escape cancels. The name lives on the scene's row, so this never touches the document.
  */
-export function SceneNameField({ sceneId, initialName }: SceneNameFieldProps) {
+export function SceneNameField({ sceneId, initialName, onRenamed }: SceneNameFieldProps) {
   const [name, setName] = useState(initialName);
   const [draft, setDraft] = useState<string | null>(null);
 
@@ -32,6 +34,7 @@ export function SceneNameField({ sceneId, initialName }: SceneNameFieldProps) {
     try {
       const renamed = await renameScene(sceneId, nextName);
       setName(renamed.name);
+      onRenamed?.(renamed.name);
     } catch (error) {
       console.error("Failed to rename the scene.", error);
       setName(previousName);

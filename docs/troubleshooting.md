@@ -303,7 +303,7 @@ useEditorStore.getState().updateEntityTransform(id, updates);
 **Solutions**:
 1. Check scene has entities (Scene Panel shows entity count)
 2. Check export doesn't have errors (DevTools console during export)
-3. Try downloading as JSON instead (Export Asset → JSON)
+3. Check what the scene holds without the GLB exporter: `__libre3dStore.getState().entities` in the devtools console (development builds)
 4. Verify entities are visible (eye icon in hierarchy)
 5. Try opening GLB in different viewer (babylonjs.com/sandbox or Three.js viewer)
 

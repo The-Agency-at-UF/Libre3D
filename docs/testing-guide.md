@@ -188,7 +188,7 @@ Signed out (or in a private window).
 - [ ] **No Share anywhere** (top-right buttons are Play and Export; the Export dialog has only Export Asset) and no account or Sign Out in the menu
 - [ ] **Kept in this browser** (edit, reload: the edit is still there; DevTools → Network shows no `/api/` requests)
 - [ ] **Imported models** (import a .glb: it appears, survives a reload, nothing uploads)
-- [ ] **Play and Export** work (preview, Download .glb / .json)
+- [ ] **Play and Export** work (preview, Download .glb / .libre3d)
 - [ ] **New Scene** asks, then starts over from the default scene
 - [ ] **Signed in**, `/try` still works and its link says "Your scenes"
 
@@ -290,6 +290,8 @@ After making ANY change, run these tests to ensure you didn't break existing fea
 
 ### Basic Operations
 - [ ] Add cube, sphere, torus, plane
+- [ ] Drag a file over the editor: the drop overlay shows (3D Model, Vector, Image, Libre3D Scene) and goes when the drag leaves the window; a `.glb`, `.svg` or `.png` dropped on a sidebar is imported, not opened by the browser
+- [ ] Export → Download Scene saves `<name>.libre3d`; dropping it on the editor, or Upload scene in the gallery, opens it as a new scene (in `/try`: replaces the scene after asking) with its imported models and pictures
 - [ ] Add directional light
 - [ ] Select, rename, delete entities
 - [ ] Undo/redo work

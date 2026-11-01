@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { showAlert, showConfirm, showPrompt } from "./ui/Dialog";
 
 import { Avatar } from "./ui/Avatar";
@@ -15,6 +15,8 @@ import { signOut } from "../utils/authSession";
 import { HOME_PATH, navigate, shareUrlFor } from "../utils/navigation";
 import { ApiAuthError } from "../utils/apiFetch";
 import { createScene, deleteScene, listScenes, renameScene, type SceneSummary } from "../utils/sceneLibrary";
+import { SCENE_FILE_EXTENSION } from "../utils/sceneFile";
+import { openSceneFileAsNewScene } from "../utils/sceneFileTransfers";
 import { toggleTheme } from "../utils/theme";
 
 interface GalleryPageProps {
@@ -38,12 +40,15 @@ type ViewMode = (typeof VIEW_MODES)[number];
 /*
  * BLOCK: GalleryPage (React Component)
  * PURPOSE: The signed-in home at `/scenes`, laid out like a file browser: a sidebar (account menu,
- *          search, sections), a header bar with "New scene", a sort/view toolbar, and the user's
- *          scenes as cards that open the editor. Reads scenes only through utils/sceneLibrary.ts.
+ *          search, sections), a header bar with "Upload scene" (a .libre3d file) and "New scene", a
+ *          sort/view toolbar, and the user's scenes as cards that open the editor. Reads scenes only
+ *          through utils/sceneLibrary.ts.
  */
 export function GalleryPage({ accountEmail }: GalleryPageProps) {
   const [gallery, setGallery] = useState<GalleryState>({ status: "loading" });
   const [isCreating, setIsCreating] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const uploadInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [sortOrder, setSortOrder] = useStoredChoice<SortOrder>("libre3d-gallery-sort", SORT_ORDERS, "modified");
   const [viewMode, setViewMode] = useStoredChoice<ViewMode>("libre3d-gallery-view", VIEW_MODES, "grid");
@@ -90,6 +95,17 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
       ? matching.sort((a, b) => a.name.localeCompare(b.name))
       : matching.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
   }, [allScenes, searchQuery, sortOrder]);
+
+  // A .libre3d file becomes a new scene, opened in the editor, which saves it (utils/sceneFileTransfers.ts).
+  const handleUploadScene = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setIsUploading(true);
+    await openSceneFileAsNewScene(file);
+    setIsUploading(false); // still on this page only when the file couldn't be opened
+  };
 
   const handleNewScene = async () => {
     setIsCreating(true);
@@ -168,10 +184,23 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
   );
 
   const headerActions = (
-    <Button variant="primary" onClick={handleNewScene} disabled={isCreating}>
-      <i className="ti ti-plus" aria-hidden="true" />
-      {isCreating ? "Creating…" : "New scene"}
-    </Button>
+    <>
+      <Button onClick={() => uploadInputRef.current?.click()} disabled={isCreating || isUploading}>
+        <i className="ti ti-upload" aria-hidden="true" />
+        {isUploading ? "Uploading…" : "Upload scene"}
+      </Button>
+      <input
+        ref={uploadInputRef}
+        type="file"
+        accept={SCENE_FILE_EXTENSION}
+        hidden
+        onChange={(event) => void handleUploadScene(event)}
+      />
+      <Button variant="primary" onClick={handleNewScene} disabled={isCreating || isUploading}>
+        <i className="ti ti-plus" aria-hidden="true" />
+        {isCreating ? "Creating…" : "New scene"}
+      </Button>
+    </>
   );
 
   return (
@@ -184,7 +213,7 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
         <div className="gallery-empty">
           <i className="ti ti-cube gallery-empty-icon" aria-hidden="true" />
           <h2 className="gallery-empty-title">No scenes yet</h2>
-          <p className="page-message">Select New scene to start building. Your scenes will appear here.</p>
+          <p className="page-message">Select New scene to start building, or Upload scene to open a .libre3d file. Your scenes will appear here.</p>
         </div>
       )}
 

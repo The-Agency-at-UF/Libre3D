@@ -1,9 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 import { TranslateIcon, RotateIcon, ScaleIcon, PenIcon, PathIcon, CheckIcon, PlusIcon } from "./ui/Icons";
-import { prepareModelImport } from "../utils/importModel";
-import { importSvgFile, isSvgFile } from "../utils/importSvg";
-import { importImageFile, isImageFile } from "../utils/importImage";
+import { importFileIntoScene } from "../utils/importFile";
 
 interface FloatingToolbarProps {
   isShapeDropdownOpen: boolean;
@@ -29,7 +27,6 @@ export function FloatingToolbar({
   const setEditorState = useEditorStore((state) => state.setEditorState);
   const setPenTool = useEditorStore((state) => state.setPenTool);
   const addEntity = useEditorStore((state) => state.addEntity);
-  const addImportedModelHierarchy = useEditorStore((state) => state.addImportedModelHierarchy);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isPenMenuOpen, setIsPenMenuOpen] = useState(false);
   const penMenuRef = useRef<HTMLDivElement | null>(null);
@@ -47,26 +44,7 @@ export function FloatingToolbar({
   const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file) return;
-
-    if (isSvgFile(file)) {
-      await importSvgFile(file).catch((error) => console.error("[Libre3D] Failed to import SVG:", error));
-      return;
-    }
-    if (isImageFile(file)) {
-      await importImageFile(file).catch((error) => console.error("[Libre3D] Failed to import image:", error));
-      return;
-    }
-
-    useEditorStore.getState().adjustPendingImports(1);
-    try {
-      const { assetId, nodes } = await prepareModelImport(file);
-      addImportedModelHierarchy(assetId, nodes);
-    } catch (error) {
-      console.error("[Libre3D] Failed to import model:", error);
-    } finally {
-      useEditorStore.getState().adjustPendingImports(-1);
-    }
+    if (file) await importFileIntoScene(file);
   };
 
   return (
