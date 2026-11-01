@@ -16,7 +16,6 @@ import { HOME_PATH, navigate, shareUrlFor } from "../utils/navigation";
 import { ApiAuthError } from "../utils/apiFetch";
 import { createScene, deleteScene, listScenes, renameScene, type SceneSummary } from "../utils/sceneLibrary";
 import { SCENE_FILE_EXTENSION } from "../utils/sceneFile";
-import { openSceneFileAsNewScene } from "../utils/sceneFileTransfers";
 import { toggleTheme } from "../utils/theme";
 
 interface GalleryPageProps {
@@ -103,6 +102,8 @@ export function GalleryPage({ accountEmail }: GalleryPageProps) {
     if (!file) return;
 
     setIsUploading(true);
+    // Loaded when needed: it brings the editor's store, and with it Three.js, which this page doesn't load.
+    const { openSceneFileAsNewScene } = await import("../utils/sceneFileTransfers");
     await openSceneFileAsNewScene(file);
     setIsUploading(false); // still on this page only when the file couldn't be opened
   };
