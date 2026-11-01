@@ -197,6 +197,17 @@ export interface ImportNodeSpec {
   scale: [number, number, number];
 }
 
+// How the camera moves in Play (viewport/PlayCamera.ts): it stays put, turns towards the pointer,
+// turns by dragging, or turns by itself.
+export type PlayCameraMode = "fixed" | "softOrbit" | "orbit" | "autoRotate";
+
+export interface PlayCameraSettings {
+  mode: PlayCameraMode;
+  range: number; // softOrbit: degrees at the canvas's edge
+  smoothness: number; // softOrbit and orbit: 0-1, how slowly it eases
+  speed: number; // autoRotate: degrees a second
+}
+
 export interface CameraProfile {
   id: string;
   name: string;
@@ -206,6 +217,8 @@ export interface CameraProfile {
   near: number;
   far: number;
   zoom: number;
+  // Missing (cameras from before it) or partly missing fields are defaults: resolvePlayCamera.
+  play?: Partial<PlayCameraSettings>;
 }
 
 type EntityTransformUpdates = Partial<Pick<Entity, "position" | "rotation" | "scale" | "color">> & {
@@ -690,6 +703,7 @@ const cloneCameraProfile = (profile: CameraProfile): CameraProfile => ({
   ...profile,
   position: cloneVector(profile.position),
   target: cloneVector(profile.target),
+  ...(profile.play ? { play: { ...profile.play } } : null),
 });
 
 const createCameraProfile = (id: string, data: Partial<CameraProfile> = {}): CameraProfile => ({
@@ -882,6 +896,7 @@ export const useEditorStore = create<EditorState>()(
                 ...updates,
                 position: updates.position ? cloneVector(updates.position) : cloneVector(existingProfile.position),
                 target: updates.target ? cloneVector(updates.target) : cloneVector(existingProfile.target),
+                ...(updates.play ? { play: { ...updates.play } } : null),
               };
 
               return {

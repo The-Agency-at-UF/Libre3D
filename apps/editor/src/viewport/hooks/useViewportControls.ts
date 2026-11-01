@@ -194,12 +194,15 @@ export function useViewportControls(
     let isMiddlePanning = false;
 
     const updateOrbitControls = () => {
+      // Play looks through a camera of its own (useViewportPlay, PlayCamera), so nothing here may
+      // move, and save, the scene's camera meanwhile.
+      const isPlaying = useEditorStore.getState().isPreviewMode;
       orbitControls.enableRotate = isAltPressed && !isSpacePressed;
       orbitControls.enablePan =
         isAltPressed || isSpacePressed || isMiddlePanning;
-      orbitControls.enabled = !isDragging;
+      orbitControls.enabled = !isDragging && !isPlaying;
 
-      if (isSpacePressed) {
+      if (isSpacePressed && !isPlaying) {
         orbitControls.mouseButtons.LEFT = THREE.MOUSE.PAN;
         if (rendererRef.current)
           rendererRef.current.domElement.style.cursor = "grab";
@@ -401,11 +404,13 @@ export function useViewportControls(
       { fireImmediately: true },
     );
 
+    const unsubPlay = useEditorStore.subscribe((s) => s.isPreviewMode, updateOrbitControls);
+
     const unsubViewportZoom = useEditorStore.subscribe(
       (s) => s.viewportZoom,
       (newZoom) => {
         const liveCamera = cameraRef.current;
-        if (!liveCamera || !orbitControls) return;
+        if (!liveCamera || !orbitControls || useEditorStore.getState().isPreviewMode) return;
 
         const isPerspective = liveCamera instanceof THREE.PerspectiveCamera;
         const isOrthographic = liveCamera instanceof THREE.OrthographicCamera;
@@ -456,6 +461,7 @@ export function useViewportControls(
       unsubActiveTransformTool();
       unsubTransformSpace();
       unsubShowAxisGuides();
+      unsubPlay();
       unsubViewportZoom();
       scene.remove(transformControls.getHelper());
       transformControls.dispose();

@@ -11,6 +11,7 @@ import { getDescendantIds } from "../store/entityIndex";
 import { MaterialsPanel } from "./inspector/MaterialsPanel";
 import { ScenePanel } from "./inspector/ScenePanel";
 import { CameraPanel } from "./inspector/CameraPanel";
+import { PlayCameraPanel } from "./inspector/PlayCameraPanel";
 import { FramePanel } from "./inspector/FramePanel";
 import { ViewportSettingsPanel } from "./inspector/ViewportSettingsPanel";
 
@@ -90,7 +91,13 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
             </fieldset>
           </>
         ) : (
-          <CameraPanel />
+          <>
+            <CameraPanel />
+            {/* How Play moves the camera is part of the scene, so it's locked while view only. */}
+            <fieldset className="inspector-fieldset" disabled={isReadOnly}>
+              <PlayCameraPanel />
+            </fieldset>
+          </>
         )}
       </div>
 
