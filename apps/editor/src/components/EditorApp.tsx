@@ -170,7 +170,7 @@ function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: Edito
           />
         ) : null
       }
-      publishing={{ sceneId: scene.sceneId, initialPublishId: scene.publishId ?? null }}
+      publishing={{ sceneId: scene.sceneId, initialPublishId: scene.publishId ?? null, saveFirst: autosave.flush }}
       sceneName={sceneName}
       onOpenSceneFile={(file) => void openSceneFileAsNewScene(file)}
       sceneFileAction="Opens as a new scene"
