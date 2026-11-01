@@ -1163,6 +1163,27 @@ describe("shapes", () => {
   });
 });
 
+describe("the Play camera setting", () => {
+  it("is saved with the scene's camera, a copy of its own, and isn't undoable", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    const play = { mode: "softOrbit" as const, range: 12 };
+    useEditorStore.getState().updateProfileData("personal", { play });
+    play.range = 40;
+    const content = selectSceneContent(useEditorStore.getState());
+    const saved = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    expect(useEditorStore.getState().cameraProfiles.personal.play).toEqual({ mode: "softOrbit", range: 12 });
+    expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
+
+    useEditorStore.getState().loadScene(null);
+    expect(useEditorStore.getState().cameraProfiles.personal.play).toBeUndefined();
+    useEditorStore.getState().loadScene(saved.ok ? saved.content : null);
+    const reloaded = useEditorStore.getState().cameraProfiles.personal.play;
+    expect(reloaded).toEqual({ mode: "softOrbit", range: 12 });
+    expect(reloaded).not.toBe(saved.ok && saved.content.cameraProfiles!.personal.play);
+  });
+});
+
 describe("planes", () => {
   it("adds a lit 1×1 plane at the origin, selected, shown from both sides", async () => {
     const { useEditorStore } = await loadStore();

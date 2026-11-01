@@ -583,8 +583,15 @@ Create a new named camera profile.
   near: number; // near clip plane
   far: number; // far clip plane
   zoom: number; // zoom level (orthographic only)
+  play?: { // how Play moves the camera (viewport/PlayCamera.ts); missing fields are defaults (Orbit)
+    mode: "fixed" | "softOrbit" | "orbit" | "autoRotate";
+    range: number; // Soft Orbit: degrees at the canvas's edge, 1-45
+    smoothness: number; // Soft Orbit and Orbit: 0-1, how slowly it eases
+    speed: number; // Auto-Rotate: degrees a second, 1-90
+  };
 }
 ```
+Play reads the active profile once when it starts and never writes it: it looks through a camera of its own. Profiles aren't in undo history, so changing `play` isn't undoable.
 
 ### Deleting Profiles
 
@@ -598,7 +605,7 @@ Delete a profile by ID.
 #### `updateProfileData(id: string, updates: Partial<CameraProfile>) → void`
 Update an existing profile's data.
 - **Clones vectors**: Position and target are cloned (never hand out references)
-- **Partial updates**: Only provided fields are changed
+- **Partial updates**: Only provided fields are changed; `play` is replaced as a whole, so pass it merged (`PlayCameraPanel` does)
 
 ---
 

@@ -5,6 +5,7 @@ import { SceneRuntime } from "../../animation/sceneRuntime";
 import { previewTiming, type TransitionAction } from "../../animation/transitions";
 import { selectViewedObjectState, useEditorStore, type EditorState } from "../../store/useEditorStore";
 import type { ObjectManager } from "../ObjectManager";
+import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
 import { pickEntityAt } from "../pickEntity";
 
 // A runtime running in the viewport: Play's, or the ▶ preview of one transition. A preview stops
@@ -15,6 +16,8 @@ interface Session {
   entities: EditorState["entities"];
   animation: EditorState["animation"];
   selection: EditorState["selectedEntityIds"];
+  // Play's own camera, and the editor's to give back on Stop. The ▶ preview keeps the editor's.
+  view: { camera: PlayCamera; editorCamera: THREE.Camera; detach: () => void } | null;
 }
 
 const findAction = (state: EditorState, actionId: string): TransitionAction | undefined => {
@@ -37,9 +40,15 @@ const findAction = (state: EditorState, actionId: string): TransitionAction | un
  * in Base between frames never shows. On Stop the runtime is dropped and each moved object goes
  * back to the state it's shown in while editing.
  *
- * Clicks in Play (left button, without Alt or Space, which orbit and pan) fire Mouse Down events,
- * and the cursor is a pointer over objects that have one. Locked objects count: locking is for
- * editing.
+ * Play looks through a camera of its own (PlayCamera): it starts where the scene's camera is and
+ * moves as the camera's Play setting says (Fixed, Soft Orbit, Orbit, Auto-Rotate), while the
+ * editor's camera, which is scene data, stays put and unsaved-to (useViewportControls switches its
+ * orbiting off). `cameraRef` points at it from Play's first frame to Stop, so rendering and clicks
+ * use it; on Stop the editor's camera is put back exactly as it was.
+ *
+ * Clicks in Play (left button, without Alt or Space) fire Mouse Down events, and the cursor is a
+ * pointer over objects that have one. With an Orbit camera, a press on an object fires its Mouse
+ * Down and dragging from it still turns the camera. Locked objects count: locking is for editing.
  *
  * The ▶ preview (`previewingActionId`) works the same way outside Play, for one transition: without
  * its Delay and run once (there and back for a ping-pong loop), starting from the state its target
@@ -88,14 +97,31 @@ export function useViewportPlay(
         const entity = store.entities.find((candidate) => candidate.id === entityId);
         if (entity) objectManager.applyPose(entityId, resolveState(entity, selectViewedObjectState(store, entityId)));
       });
+      if (session.view) {
+        session.view.detach();
+        if (cameraRef.current === session.view.camera.camera) cameraRef.current = session.view.editorCamera;
+      }
       session = null;
       hoverPoint = null;
       setCursor("");
     };
 
+    const canvasAspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
+
+    // Play's camera starts where the scene's camera is, with its Play setting, read once here.
+    const startView = (store: EditorState): NonNullable<Session["view"]> => {
+      const profile = store.cameraProfiles[store.activeProfileId] ?? store.cameraProfiles.personal;
+      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      const camera = new PlayCamera(profile, resolvePlayCamera(profile.play), canvasAspect(), { reduceMotion });
+      const editorCamera = cameraRef.current;
+      cameraRef.current = camera.camera;
+      return { camera, editorCamera, detach: camera.attach(canvas) };
+    };
+
     const startSession = (store: EditorState, preview: boolean): SceneRuntime => {
       const runtime = new SceneRuntime({ entities: store.entities, animation: store.animation });
-      session = { runtime, preview, entities: store.entities, animation: store.animation, selection: store.selectedEntityIds };
+      const view = preview ? null : startView(store);
+      session = { runtime, preview, entities: store.entities, animation: store.animation, selection: store.selectedEntityIds, view };
       return runtime;
     };
 
@@ -120,6 +146,8 @@ export function useViewportPlay(
         if (session) {
           runtime = session.runtime;
           runtime.tick((now - lastFrameTime) / 1000);
+          session.view?.camera.setAspect(canvasAspect());
+          session.view?.camera.update((now - lastFrameTime) / 1000);
         } else {
           runtime = startSession(store, false);
           runtime.start();
@@ -198,6 +226,11 @@ export function useViewportPlay(
     window.addEventListener("blur", onBlur);
 
     return () => {
+      // Torn down mid-Play (leaving the editor): the editor's camera comes back all the same.
+      if (session?.view) {
+        session.view.detach();
+        if (cameraRef.current === session.view.camera.camera) cameraRef.current = session.view.editorCamera;
+      }
       frameRef.current = null;
       unsubscribePlay();
       unsubscribePreview();

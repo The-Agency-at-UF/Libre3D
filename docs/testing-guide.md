@@ -189,6 +189,7 @@ Signed out (or in a private window).
 - [ ] **Kept in this browser** (edit, reload: the edit is still there; DevTools → Network shows no `/api/` requests)
 - [ ] **Imported models** (import a .glb: it appears, survives a reload, nothing uploads)
 - [ ] **Play and Export** work (preview, Download .glb / .libre3d)
+- [ ] **Play camera**: with nothing selected, Play Camera's Movement sets how Play moves the camera (Fixed, Soft Orbit follows the pointer and settles back, Orbit drags, Auto-Rotate turns); Stop puts the editor's camera back exactly, and Play never autosaves a camera change
 - [ ] **New Scene** asks, then starts over from the default scene
 - [ ] **Signed in**, `/try` still works and its link says "Your scenes"
 
