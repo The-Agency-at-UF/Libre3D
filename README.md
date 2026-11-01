@@ -1,7 +1,5 @@
 # Libre3D
-<video src="docs/media/demo.mp4" controls muted loop playsinline width="100%"></video>
-
-
+https://github.com/user-attachments/assets/55db0141-9a11-4020-9c2f-b829fce38bae
 An open-source, code-free browser tool for building interactive 3D scenes for websites.
 
 ## Table of Contents
