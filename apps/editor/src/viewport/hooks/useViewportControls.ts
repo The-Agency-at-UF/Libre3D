@@ -166,8 +166,10 @@ export function useViewportControls(
         const nextProfile = currentState.cameraProfiles[currentProfileId];
         if (!nextProfile) return;
 
-        // Read the live camera from the ref for accurate position/type data.
-        const liveCamera = cameraRef.current;
+        // The camera the controls move: the editor's, whichever projection is on. Not `cameraRef`,
+        // which points at Play's own camera during Play (useViewportPlay), so a commit landing then
+        // would save Play's view into the editor's profile.
+        const liveCamera = orbitControls.object;
         const isPerspectiveCamera =
           liveCamera instanceof THREE.PerspectiveCamera;
         const isOrthographicCamera =

@@ -110,6 +110,13 @@ export function useViewportGizmo(
     gizmo.attachControls(orbitControls);
     gizmoRef.current = gizmo;
 
+    // The gizmo turns the camera itself (a drag on it, or the turn to a clicked axis) and says so
+    // on the gizmo, not the controls, so the camera profile never heard of it: Play, autosave, and
+    // Share kept the view from before. Once a move is done, the controls read the camera back,
+    // and their "change" saves it (useViewportControls): one store write per gizmo move.
+    const onGizmoEnd = () => orbitControls.update();
+    gizmo.addEventListener("end", onGizmoEnd);
+
     // Re-theme on dark/light toggle. App.tsx flips a `.light-theme` class on
     // <html> (see tokens.css's `:root.light-theme` block); `gizmoTheme.ts`
     // reads CSS custom properties live, so re-running it after that class
@@ -158,6 +165,7 @@ export function useViewportGizmo(
       unsubscribePreview();
       resizeObserver.disconnect();
       themeObserver.disconnect();
+      gizmo.removeEventListener("end", onGizmoEnd);
       gizmo.detachControls();
       gizmo.dispose();
       if (gizmoRef.current === gizmo) gizmoRef.current = null;
