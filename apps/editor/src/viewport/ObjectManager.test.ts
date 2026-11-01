@@ -7,18 +7,21 @@ import { stubBrowserGlobals } from "../testing/browserStubs";
 // The store reads localStorage while its module loads, so the browser goes in first.
 const loadModules = async () => {
   vi.resetModules();
-  const [{ useEditorStore }, { ObjectManager }] = await Promise.all([
+  const [{ useEditorStore }, { ObjectManager }, { editorSceneSource }] = await Promise.all([
     import("../store/useEditorStore"),
     import("./ObjectManager"),
+    import("./editorSceneSource"),
   ]);
-  return { useEditorStore, ObjectManager };
+  // Built from the store as the editor's viewport builds them.
+  const createObjectManager = (meshMap: Map<string, THREE.Object3D>) => new ObjectManager(new THREE.Scene(), meshMap, editorSceneSource);
+  return { useEditorStore, createObjectManager };
 };
 
 // The starter scene's cube, drawn by the editor itself, with its lighting layer changed by `lighting`.
 const buildCube = async () => {
-  const { useEditorStore, ObjectManager } = await loadModules();
+  const { useEditorStore, createObjectManager } = await loadModules();
   const meshMap = new Map<string, THREE.Object3D>();
-  const manager = new ObjectManager(new THREE.Scene(), meshMap);
+  const manager = createObjectManager(meshMap);
   const cube = useEditorStore.getState().entities.find((entity) => entity.type === "cube")!;
 
   const sync = (lighting: Partial<LightingLayer>): THREE.Material => {
@@ -86,9 +89,9 @@ describe("ObjectManager clearcoat", () => {
 
 describe("ObjectManager planes", () => {
   const buildPlane = async () => {
-    const { useEditorStore, ObjectManager } = await loadModules();
+    const { useEditorStore, createObjectManager } = await loadModules();
     const meshMap = new Map<string, THREE.Object3D>();
-    const manager = new ObjectManager(new THREE.Scene(), meshMap);
+    const manager = createObjectManager(meshMap);
     const id = useEditorStore.getState().addEntity("plane");
     const sync = () => {
       manager.syncMeshes(useEditorStore.getState().entities, null, false);
@@ -131,9 +134,13 @@ describe("ObjectManager image planes", () => {
     vi.resetModules();
     const loadTextureForScene = vi.fn(() => new Promise<Blob | null>(() => {}));
     vi.doMock("../utils/assetTransfers", () => ({ loadTextureForScene, loadModelForScene: vi.fn() }));
-    const [{ useEditorStore }, { ObjectManager }] = await Promise.all([import("../store/useEditorStore"), import("./ObjectManager")]);
+    const [{ useEditorStore }, { ObjectManager }, { editorSceneSource }] = await Promise.all([
+      import("../store/useEditorStore"),
+      import("./ObjectManager"),
+      import("./editorSceneSource"),
+    ]);
     const meshMap = new Map<string, THREE.Object3D>();
-    const manager = new ObjectManager(new THREE.Scene(), meshMap);
+    const manager = new ObjectManager(new THREE.Scene(), meshMap, editorSceneSource);
     const hash = "b".repeat(64);
 
     const id = useEditorStore.getState().addImagePlane("logo", hash, 2, true);

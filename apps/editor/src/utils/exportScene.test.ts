@@ -31,26 +31,30 @@ const readGlbNodes = async (glb: Blob): Promise<GltfNode[]> => (await readGlbJso
 // The store reads localStorage while its module loads, so the browser goes in first.
 const loadModules = async () => {
   vi.resetModules();
-  const [{ useEditorStore }, { ObjectManager }, { createSceneExportBlob }] = await Promise.all([
+  const [{ useEditorStore }, { ObjectManager }, { editorSceneSource }, { createSceneExportBlob }] = await Promise.all([
     import("../store/useEditorStore"),
     import("../viewport/ObjectManager"),
+    import("../viewport/editorSceneSource"),
     import("./exportScene"),
   ]);
-  return { useEditorStore, ObjectManager, createSceneExportBlob };
+  // The editor's own objects, built from the store as the viewport builds them.
+  const createObjectManager = (scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>) =>
+    new ObjectManager(scene, meshMap, editorSceneSource);
+  return { useEditorStore, createObjectManager, createSceneExportBlob };
 };
 
 // The scene a new editor starts with (a cube and the default light), built by the editor itself.
 const buildStarterScene = async () => {
-  const { useEditorStore, ObjectManager, createSceneExportBlob } = await loadModules();
+  const { useEditorStore, createObjectManager, createSceneExportBlob } = await loadModules();
   const scene = new THREE.Scene();
   const meshMap = new Map<string, THREE.Object3D>();
   const entities = useEditorStore.getState().entities;
 
-  new ObjectManager(scene, meshMap).syncMeshes(entities, null, false);
+  createObjectManager(scene, meshMap).syncMeshes(entities, null, false);
 
   const cube = meshMap.get(entities.find((entity) => entity.type === "cube")!.id)!;
   const light = meshMap.get(entities.find((entity) => entity.type === "directionalLight")!.id)!;
-  return { scene, cube, light, createSceneExportBlob, useEditorStore, ObjectManager };
+  return { scene, cube, light, createSceneExportBlob, useEditorStore, createObjectManager };
 };
 
 beforeEach(() => {
@@ -76,12 +80,12 @@ describe("createSceneExportBlob", () => {
   });
 
   it("writes a clearcoat as KHR_materials_clearcoat", async () => {
-    const { useEditorStore, ObjectManager, createSceneExportBlob } = await buildStarterScene();
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
     const cube = useEditorStore.getState().entities.find((entity) => entity.type === "cube")!;
     const lighting = cube.materialLayers!.find((layer) => layer.type === "lighting")!;
     useEditorStore.getState().updateMaterialLayer(cube.id, lighting.id, { clearcoat: 1, clearcoatRoughness: 0.05 });
     const scene = new THREE.Scene();
-    new ObjectManager(scene, new Map()).syncMeshes(useEditorStore.getState().entities, null, false);
+    createObjectManager(scene, new Map()).syncMeshes(useEditorStore.getState().entities, null, false);
 
     const { materials, extensionsUsed } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
 
@@ -174,7 +178,7 @@ describe("createSceneExportBlob with paths", () => {
 
   // The default light and a sample path with the given Base trim, built by the editor itself.
   const buildPathScene = async (trimEnd = 1) => {
-    const { useEditorStore, ObjectManager, createSceneExportBlob } = await loadModules();
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await loadModules();
     useEditorStore.getState().loadScene(null);
     useEditorStore.setState({ entities: useEditorStore.getState().entities.filter((entity) => entity.type !== "cube") });
     const pathId = useEditorStore.getState().addEntity("path");
@@ -182,7 +186,7 @@ describe("createSceneExportBlob with paths", () => {
 
     const scene = new THREE.Scene();
     const meshMap = new Map<string, THREE.Object3D>();
-    const objectManager = new ObjectManager(scene, meshMap);
+    const objectManager = createObjectManager(scene, meshMap);
     objectManager.syncMeshes(useEditorStore.getState().entities, null, false);
     const { PathMesh } = await import("../paths/PathMesh");
     const path = meshMap.get(pathId) as InstanceType<typeof PathMesh>;
