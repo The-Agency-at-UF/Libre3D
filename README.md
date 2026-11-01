@@ -24,7 +24,7 @@ The project is set up as a "monorepo." This means all of Libre3D's code lives in
 
 **The problem:** Building 3D content for the web usually means writing custom code, setting up complex asset pipelines, or relying on closed-source tools that limit how you can use your own creations.
 
-**The solution:** Libre3D is a fast, browser-based 3D workspace. Your work is automatically saved as you go, you can move the camera around freely, and each scene stays self-contained. This means non-technical creators can build 3D scenes, preview them at their real output size, and (eventually) export them for use with `<model-viewer>`, a simple way to display 3D models on any webpage.
+**The solution:** Libre3D is a fast, browser-based 3D workspace. Your work is automatically saved as you go, you can move the camera around freely, and each scene stays self-contained. This means non-technical creators can build 3D scenes, preview them at their real output size, and share them with a link that plays them, interactions and all, or export them as `.glb` for other tools.
 
 **What the editor does today:**
 

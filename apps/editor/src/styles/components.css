@@ -413,6 +413,12 @@
   overflow: hidden;
 }
 
+/* The published scene's canvas fills the page (PublishedSceneView, viewport/SceneViewer.ts). */
+.viewer-canvas {
+  position: absolute;
+  inset: 0;
+}
+
 .viewer-status {
   color: #e2e8f0;
   font-size: 1.15rem;

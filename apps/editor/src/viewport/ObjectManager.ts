@@ -1,15 +1,7 @@
 import * as THREE from "three";
-import {
-  type Entity,
-  type MaterialLayer,
-  type ColorLayer,
-  type LightingLayer,
-  type ImageLayer,
-  type ImageSlot,
-} from "../store/useEditorStore";
-import { useEditorStore } from "../store/useEditorStore";
+import type { Entity, MaterialLayer, ColorLayer, LightingLayer, ImageLayer, ImageSlot } from "../store/useEditorStore";
 import { isEffectivelyLocked } from "../store/entityIndex";
-import { loadModelForScene, loadTextureForScene } from "../utils/assetTransfers";
+import type { SceneSource } from "./sceneSource";
 import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
 import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";
 import { pruneImportNodes, type PrunableNode } from "../utils/pruneImportHierarchy";
@@ -88,9 +80,14 @@ export class ObjectManager {
   // resolved yet.
   private hydratingRootIds = new Set<string>();
 
-  constructor(scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>) {
+  // Where the entities, the wireframe setting and imported assets come from, and where what it
+  // derives for imported models goes: the editor's store, or a published scene (sceneSource.ts).
+  private readonly source: SceneSource;
+
+  constructor(scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>, source: SceneSource) {
     this.scene = scene;
     this.meshMap = meshMap;
+    this.source = source;
   }
 
   private createGeometry(entity: Entity): THREE.BufferGeometry {
@@ -149,7 +146,7 @@ export class ObjectManager {
       alphaTest: alphaState.alphaTest,
       depthWrite: alphaState.depthWrite,
       side: colorLayer?.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
-      wireframe: useEditorStore.getState().sceneSettings.wireframe,
+      wireframe: this.source.isWireframe(),
     });
 
     this.applyLightingProperties(material, lightingLayer, model);
@@ -245,7 +242,7 @@ export class ObjectManager {
     const id = layer.textureAssetId;
     if (!this.loadingTextures.has(id)) {
       this.loadingTextures.add(id);
-      loadTextureForScene(id)
+      this.source.loadTexture(id)
         .then(async (blob) => {
           if (!blob) return;
           const texture = await buildTextureFromLayer(blob, layer);
@@ -263,7 +260,7 @@ export class ObjectManager {
   private assignLoadedTextureToMeshes(textureAssetId: string): void {
     const texture = this.textureCache.get(textureAssetId);
     if (!texture) return;
-    const entities = useEditorStore.getState().entities;
+    const entities = this.source.getEntities();
     for (const [entityId, obj] of this.meshMap) {
       if (!(obj instanceof THREE.Mesh)) continue;
       const layers = entities.find((entity) => entity.id === entityId)?.materialLayers;
@@ -308,7 +305,7 @@ export class ObjectManager {
   private async backfillMaterialLayers(
     resolved: Array<{ entityId: string; object: THREE.Object3D }>,
   ): Promise<void> {
-    const entities = useEditorStore.getState().entities;
+    const entities = this.source.getEntities();
     const pending = resolved.filter(({ entityId, object }) => {
       if (!(object instanceof THREE.Mesh)) return false;
       return !entities.find((entity) => entity.id === entityId)?.materialLayers;
@@ -324,9 +321,10 @@ export class ObjectManager {
       if (!material) continue;
       try {
         const layers = await deriveMaterialLayers(material, cache);
-        // Re-read the store: this runs async, after the hydrate's initial set(),
-        // and setEntityMaterialLayers no-ops if the entity was removed meanwhile.
-        useEditorStore.getState().setEntityMaterialLayers(entityId, layers);
+        // Written through the source at the time: this runs async, after the
+        // hydrate's initial set(), and the editor's setEntityMaterialLayers
+        // no-ops if the entity was removed meanwhile.
+        this.source.setMaterialLayers(entityId, layers);
       } catch (error) {
         console.error(`[Libre3D] Failed to derive material layers for imported node "${entityId}":`, error);
       }
@@ -341,7 +339,7 @@ export class ObjectManager {
   // needed. A no-op (removedIds empty) for any import already pruned, whether
   // at extraction time or a previous hydrate's backfill.
   private backfillPruneHierarchy(gltf: GLTF, rootEntityId: string): void {
-    const entities = useEditorStore.getState().entities;
+    const entities = this.source.getEntities();
     const rootEntity = entities.find((entity) => entity.id === rootEntityId);
     if (!rootEntity) return;
 
@@ -393,7 +391,7 @@ export class ObjectManager {
       updates.set(id, { position: node.position, rotation: node.rotation, scale: node.scale, parentId: node.parentId });
     }
 
-    useEditorStore.getState().applyHierarchyPrune(removedIds, updates);
+    this.source.applyHierarchyPrune(removedIds, updates);
   }
 
   // Resets every parsed Object3D that has no surviving store entity (i.e. was
@@ -602,7 +600,7 @@ export class ObjectManager {
         return;
       }
 
-      const buffer = await loadModelForScene(assetId);
+      const buffer = await this.source.loadModel(assetId);
       if (!buffer) {
         console.error(`[Libre3D] Imported model asset "${assetId}" was found neither in this browser nor in the cloud.`);
         this.showImportedModelError(group);
@@ -654,9 +652,7 @@ export class ObjectManager {
       nodeByPath.set(nodePathKey(nodePath), object);
     });
 
-    const nodeEntities = useEditorStore
-      .getState()
-      .entities.filter((entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId);
+    const nodeEntities = this.source.getEntities().filter((entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId);
 
     const resolvedObjects: Array<{ entityId: string; object: THREE.Object3D }> = [];
     for (const entity of nodeEntities) {
@@ -712,7 +708,7 @@ export class ObjectManager {
     // Now that the nodes exist, apply any store-level hierarchy that
     // diverges from the file structure, and attach any entities that were
     // waiting for one of these nodes as their parent.
-    this.applyParenting(useEditorStore.getState().entities);
+    this.applyParenting(this.source.getEntities());
 
     // Fire-and-forget: derive editable material layers for any resolved mesh
     // that doesn't have them yet (fresh imports and pre-upgrade imports alike).
@@ -804,12 +800,12 @@ export class ObjectManager {
   }
 
   // `entities` resolves inherited locks (a locked ancestor locks this object
-  // too); callers outside syncMeshes read it fresh from the store.
+  // too); callers outside syncMeshes read it fresh from the source.
   private syncEntityToSceneObject(
     obj: THREE.Object3D,
     entity: Entity,
     isBeingDragged: boolean,
-    entities: Entity[] = useEditorStore.getState().entities,
+    entities: Entity[] = this.source.getEntities(),
   ): void {
     if (obj instanceof PathMesh && (obj.path !== pathOf(entity) || obj.stroke !== strokeOf(entity))) {
       this.rebuildPath(obj, entity);
@@ -878,7 +874,7 @@ export class ObjectManager {
         material.alphaTest = alphaState.alphaTest;
         material.depthWrite = alphaState.depthWrite;
         material.side = newSide;
-        material.wireframe = useEditorStore.getState().sceneSettings.wireframe;
+        material.wireframe = this.source.isWireframe();
         if (needsRecompile) material.needsUpdate = true;
         this.applyLightingProperties(material, lightingLayer, model);
         this.applyImageLayers(material, entity.materialLayers);
@@ -998,14 +994,14 @@ export class ObjectManager {
   private async reattachMissingImportNodes(rootEntityId: string, missingIds: string[]): Promise<void> {
     this.hydratingRootIds.add(rootEntityId);
     try {
-      const entities = useEditorStore.getState().entities;
+      const entities = this.source.getEntities();
       const rootEntity = entities.find((entity) => entity.id === rootEntityId);
       const rootObj = this.meshMap.get(rootEntityId);
       if (!rootEntity?.assetId || !rootObj) return;
 
       let gltf: GLTF | null | undefined = takeParsedModel(rootEntity.assetId);
       if (!gltf) {
-        const buffer = await loadModelForScene(rootEntity.assetId);
+        const buffer = await this.source.loadModel(rootEntity.assetId);
         if (!buffer) {
           console.error(`[Libre3D] Imported model asset "${rootEntity.assetId}" was found neither in this browser nor in the cloud.`);
           return;
@@ -1088,7 +1084,7 @@ export class ObjectManager {
         }
       }
 
-      this.applyParenting(useEditorStore.getState().entities);
+      this.applyParenting(this.source.getEntities());
       void this.backfillMaterialLayers(resolvedObjects);
     } finally {
       this.hydratingRootIds.delete(rootEntityId);
@@ -1106,7 +1102,7 @@ export class ObjectManager {
     if (!rootObj) return;
     (rootObj.parent ?? this.scene).remove(rootObj);
     this.disposeSceneObject(rootObj);
-    const entities = useEditorStore.getState().entities;
+    const entities = this.source.getEntities();
     for (const entity of entities) {
       if (entity.rootEntityId === rootEntityId) this.meshMap.delete(entity.id);
     }
