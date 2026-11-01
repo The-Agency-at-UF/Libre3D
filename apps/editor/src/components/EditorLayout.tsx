@@ -10,16 +10,17 @@ import { ExportModal } from "./ExportModal";
 import { HamburgerMenu, type MenuAccount } from "./HamburgerMenu";
 import { FloatingToolbar } from "./FloatingToolbar";
 import { PreviewControls } from "./PreviewControls";
+import { DropOverlay } from "./DropOverlay";
 
 // Custom state hook to manage right sidebar UI states like exporting, publishing, search, and tab selections
 import { useRightSidebarState } from "../hooks/useRightSidebarState";
 import { useHotkeys } from "../hooks/useHotkeys";
 
 //import tsx utils for editor export and publish
-import { exportLiveScene, getLiveScene, createDownload } from "../utils/exportScene";
-import { publishLiveScene } from "../utils/publishScene";
+import { exportLiveScene, getLiveScene } from "../utils/exportScene";
+import { publishScene, PublishError } from "../utils/publishScene";
+import { downloadSceneFile } from "../utils/sceneFileTransfers";
 import { ApiAuthError } from "../utils/apiFetch";
-import { getSafeColor } from "../utils/sceneColor";
 import { toggleTheme } from "../utils/theme";
 
 //import tsx hook for editor store
@@ -47,7 +48,17 @@ export interface EditorLayoutProps {
   /** Shown in the floating toolbar's place, e.g. why the scene is view only. Null shows the toolbar. */
   viewOnlyBanner: ReactNode | null;
   /** The cloud scene that Share publishes. Null hides Share (a guest's scene isn't in the cloud). */
-  publishing: { sceneId: string; initialPublishId: string | null } | null;
+  publishing: {
+    sceneId: string;
+    initialPublishId: string | null;
+    /** Saves pending edits (the server publishes what's saved); false when they couldn't be. */
+    saveFirst: () => Promise<boolean>;
+  } | null;
+  /** The scene's name, for the Export dialog's Download Scene (`<name>.libre3d`). */
+  sceneName: string;
+  /** A `.libre3d` dropped on the editor, and what opening one does, shown on the drop overlay. */
+  onOpenSceneFile: (file: File) => void;
+  sceneFileAction: string;
 }
 
 /*
@@ -66,8 +77,10 @@ export function EditorLayout({
   account,
   viewOnlyBanner,
   publishing,
+  sceneName,
+  onOpenSceneFile,
+  sceneFileAction,
 }: EditorLayoutProps) {
-  const entities = useEditorStore((state) => state.entities) ?? [];
   // The scene's share link once published. Kept on its row by the server; publishing the first
   // time sets it, and it never changes after that.
   const [publishId, setPublishId] = useState<string | null>(publishing?.initialPublishId ?? null);
@@ -175,45 +188,26 @@ export function EditorLayout({
     }
   };
 
-  const handleExportJson = () => {
-    try {
-      const dataStr = JSON.stringify(entities, null, 2);
-      createDownload(dataStr, "libre3d-scene.json", "application/json");
-    } catch (error) {
-      console.error("Failed to export JSON:", error);
-      void showAlert("Failed to export JSON.");
-    }
-  };
 
   const handlePublishLink = async (): Promise<void> => {
     if (!publishing || sidebarUI.isPublishing) {
       return;
     }
 
-    const liveScene = getLiveScene();
-
-    if (!liveScene) {
-      void showAlert("The live scene is not ready yet.");
-      return;
-    }
-
     sidebarUI.setIsPublishing(true);
 
     try {
-      // Read at publish time (not from the render closure) so a colour picked just before
-      // clicking Share is what gets published.
-      const bgColor = getSafeColor(useEditorStore.getState().sceneSettings.bgColor);
-      // Publishing requires a signed-in user; the server checks the session's access token.
-      const publishResult = await publishLiveScene(liveScene, publishing.sceneId, bgColor);
-
-      if (!publishResult) {
-        void showAlert("There is no exportable mesh content in the current scene.");
+      // The server publishes the scene as saved, so what's on screen is saved first.
+      if (!(await publishing.saveFirst())) {
+        void showAlert("The scene couldn't be saved, so it wasn't published. Check your connection and try again.");
         return;
       }
 
-      setPublishId(publishResult.publishId);
+      // Publishing requires a signed-in user; the server checks the session's access token.
+      const { publishId: published } = await publishScene(publishing.sceneId);
+      setPublishId(published);
     } catch (error) {
-      if (error instanceof ApiAuthError) {
+      if (error instanceof ApiAuthError || error instanceof PublishError) {
         void showAlert(error.message);
         return;
       }
@@ -352,9 +346,11 @@ export function EditorLayout({
         isCopied={sidebarUI.isCopied}
         setIsCopied={sidebarUI.setIsCopied}
         handleExportAsset={handleExportAsset}
-        handleExportJson={handleExportJson}
+        handleDownloadSceneFile={() => void downloadSceneFile(sceneName)}
         handlePublishLink={handlePublishLink}
       />
+
+      <DropOverlay onOpenSceneFile={onOpenSceneFile} sceneFileAction={sceneFileAction} />
     </>
   );
 }

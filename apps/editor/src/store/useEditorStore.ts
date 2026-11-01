@@ -1,3 +1,4 @@
+import { ClampToEdgeWrapping, Euler, Vector3 } from "three";
 import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
@@ -36,12 +37,13 @@ import {
   type SceneEvent,
 } from "../animation/events";
 import type { TransitionAction } from "../animation/transitions";
-import { clonePath, createSamplePath, DEFAULT_STROKE, type PathData, type PathStroke } from "../paths/pathGeometry";
+import { clonePath, createSamplePath, DEFAULT_STROKE, pathsCenter, type PathData, type PathStroke } from "../paths/pathGeometry";
+import { shiftPoints } from "../paths/pathEditing";
 import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
-import { cloneShape, flattenShape, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
+import { cloneShape, flattenShape, shapeContours, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
 import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
-export type EntityType = "cube" | "sphere" | "torus" | "path" | "shape" | "directionalLight" | "importedModel" | "group";
+export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
 
 /**
  * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
@@ -67,7 +69,7 @@ export interface ColorLayer {
   // glTF alpha-blending mode, captured from the source material at derivation
   // time so imported meshes preserve texture-alpha-driven transparency (BLEND)
   // and cutout masking (MASK) instead of only reacting to the scalar opacity
-  // above. Undefined for layers on primitives (cube/sphere/torus), which have
+  // above. Undefined for layers on primitives (cube/sphere/torus/plane), which have
   // no glTF material to inherit this from -- treated as "OPAQUE".
   alphaMode?: "OPAQUE" | "MASK" | "BLEND";
   alphaCutoff?: number; // only meaningful when alphaMode === "MASK"
@@ -163,6 +165,9 @@ export interface Entity {
   shape?: ShapeData;
   extrusion?: number;
   bevel?: number;
+  // Images (type "image", see utils/imagePlane.ts): a flat plane as wide for its height as the picture
+  // (width / height), which its Image layer shows.
+  imageAspect?: number;
 }
 
 /**
@@ -192,6 +197,17 @@ export interface ImportNodeSpec {
   scale: [number, number, number];
 }
 
+// How the camera moves in Play (viewport/PlayCamera.ts): it stays put, turns towards the pointer,
+// turns by dragging, or turns by itself.
+export type PlayCameraMode = "fixed" | "softOrbit" | "orbit" | "autoRotate";
+
+export interface PlayCameraSettings {
+  mode: PlayCameraMode;
+  range: number; // softOrbit: degrees at the canvas's edge
+  smoothness: number; // softOrbit and orbit: 0-1, how slowly it eases
+  speed: number; // autoRotate: degrees a second
+}
+
 export interface CameraProfile {
   id: string;
   name: string;
@@ -201,6 +217,8 @@ export interface CameraProfile {
   near: number;
   far: number;
   zoom: number;
+  // Missing (cameras from before it) or partly missing fields are defaults: resolvePlayCamera.
+  play?: Partial<PlayCameraSettings>;
 }
 
 type EntityTransformUpdates = Partial<Pick<Entity, "position" | "rotation" | "scale" | "color">> & {
@@ -417,10 +435,19 @@ export interface EditorState {
   updatePath: (id: string, path: PathData) => void;
   // Replaces a shape's outlines (the pen tool's edits). Flat: their points' and handles' Z is dropped.
   updateShape: (id: string, shape: ShapeData) => void;
+  // Moves a path's or shape's origin to the middle of its curves (pathsCenter) without moving it on
+  // screen: its points shift one way and its position the other. Its states keep their transforms,
+  // so it's for one that has none yet: the pen tool's, as it finishes drawing one.
+  centerOrigin: (id: string) => void;
   // The shapes and paths of an imported SVG (paths/svgImport.ts), in one undo step: one named `name`,
   // or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
   // Returns its ID ("" when there's nothing to add).
   addImportedSvg: (name: string, items: ImportedSvgItem[]) => string;
+  // An imported picture (utils/importImage.ts) as a plane named `name`, at the origin: `aspect` is its
+  // width / height, and `textureAssetId` its bytes in the texture store, shown unlit from both sides
+  // and blended when it has see-through pixels (`transparent`). Selects it and puts the pen down.
+  // Returns its ID.
+  addImagePlane: (name: string, textureAssetId: string, aspect: number, transparent: boolean) => string;
   // The extrusion (depth) or bevel of every shape among `ids`, in one undo step.
   updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
   // Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
@@ -502,7 +529,8 @@ export interface EditorState {
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
-  addMaterialLayer: (entityId: string, layerType: MaterialLayerType) => void;
+  // `depthFar`: where a new Depth layer's ramp ends (its object's reach); 2 when not given.
+  addMaterialLayer: (entityId: string, layerType: MaterialLayerType, depthFar?: number) => void;
   removeMaterialLayer: (entityId: string, layerId: string) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
@@ -526,6 +554,10 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
     name: "Torus",
     color: "#FF7AE0",
   },
+  plane: {
+    name: "Plane",
+    color: "#B39DFF",
+  },
   path: {
     name: "Path",
     color: "#FFC24D",
@@ -533,6 +565,10 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   shape: {
     name: "Shape",
     color: "#9AA4B2",
+  },
+  image: {
+    name: "Image",
+    color: "#ffffff",
   },
   directionalLight: {
     name: "Directional Light",
@@ -558,7 +594,8 @@ const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
   color,
 });
 
-export const createDepthLayer = (): DepthLayer => ({
+// `far` is fitted to the object when the panel can measure it (utils/depthColors.ts, depthReach).
+export const createDepthLayer = (far = 2): DepthLayer => ({
   id: createEntityId(),
   type: "depth",
   enabled: true,
@@ -567,7 +604,7 @@ export const createDepthLayer = (): DepthLayer => ({
   origin: [0, 0, 0],
   direction: [1, 0, 0],
   near: 0,
-  far: 2,
+  far,
   stops: [
     { color: "#ff3b30", position: 0 },
     { color: "#ffcc00", position: 0.5 },
@@ -631,7 +668,10 @@ const createEntity = (type: EntityType): Entity => ({
     ? { color: ENTITY_DEFAULTS[type].color }
     : type === "group"
       ? null // groups are pure transform pivots — no material, no color
-      : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
+      : type === "plane"
+        ? // flat, so shown from both sides, like a shape or an image
+          { materialLayers: [{ ...createColorLayer(ENTITY_DEFAULTS.plane.color, 1), doubleSided: true }, createLightingLayer()] }
+        : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
   // The Add menu's path is a sample curve; the Path pen draws its own (addPath).
   ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
   visible: true,
@@ -663,6 +703,7 @@ const cloneCameraProfile = (profile: CameraProfile): CameraProfile => ({
   ...profile,
   position: cloneVector(profile.position),
   target: cloneVector(profile.target),
+  ...(profile.play ? { play: { ...profile.play } } : null),
 });
 
 const createCameraProfile = (id: string, data: Partial<CameraProfile> = {}): CameraProfile => ({
@@ -855,6 +896,7 @@ export const useEditorStore = create<EditorState>()(
                 ...updates,
                 position: updates.position ? cloneVector(updates.position) : cloneVector(existingProfile.position),
                 target: updates.target ? cloneVector(updates.target) : cloneVector(existingProfile.target),
+                ...(updates.play ? { play: { ...updates.play } } : null),
               };
 
               return {
@@ -1334,6 +1376,24 @@ export const useEditorStore = create<EditorState>()(
               if (target?.type !== "shape") return state;
               return { entities: state.entities.map((entity) => (entity === target ? { ...entity, shape: flattenShape(shape) } : entity)) };
             }),
+          centerOrigin: (id) =>
+            set((state) => {
+              const target = state.entities.find((entity) => entity.id === id);
+              const contours = target?.type === "path" && target.path ? [target.path] : target?.type === "shape" && target.shape ? shapeContours(target.shape) : [];
+              const center = pathsCenter(contours);
+              if (!target || !center) return state;
+              const back: [number, number, number] = [-center[0], -center[1], -center[2]];
+              const shift = (path: PathData) => shiftPoints(path, path.points.map((_, index) => index), back);
+              // Where the centre is in the parent's space: through the object's own size and turn.
+              const offset = new Vector3(...center).multiply(new Vector3(...target.scale)).applyEuler(new Euler(...target.rotation, "XYZ"));
+              const moved: Entity = {
+                ...target,
+                position: [target.position[0] + offset.x, target.position[1] + offset.y, target.position[2] + offset.z],
+                ...(target.path ? { path: shift(target.path) } : null),
+                ...(target.shape ? { shape: { regions: target.shape.regions.map((region) => ({ outline: shift(region.outline), holes: region.holes.map(shift) })) } } : null),
+              };
+              return { entities: state.entities.map((entity) => (entity === target ? moved : entity)) };
+            }),
           addImportedSvg: (name, items) => {
             let rootId = "";
             set((state) => {
@@ -1362,6 +1422,36 @@ export const useEditorStore = create<EditorState>()(
               return { entities: [...state.entities, ...added], selectedEntityIds: [rootId], penTool: null };
             });
             return rootId;
+          },
+          addImagePlane: (name, textureAssetId, aspect, transparent) => {
+            let newId = "";
+            set((state) => {
+              const image: ImageLayer = {
+                id: createEntityId(),
+                type: "image",
+                enabled: true,
+                opacity: 1,
+                textureAssetId,
+                slot: "color",
+                // The picture covers the plane once; clamping keeps its edges from bleeding into each other.
+                wrapS: ClampToEdgeWrapping,
+                wrapT: ClampToEdgeWrapping,
+              };
+              const entity: Entity = {
+                ...createEntity("image"),
+                name,
+                imageAspect: aspect,
+                // White, so the picture shows in its own colours (the Color layer tints it), whatever the lights.
+                materialLayers: [
+                  { ...createColorLayer(ENTITY_DEFAULTS.image.color, 1), doubleSided: true, ...(transparent ? { alphaMode: "BLEND" as const } : null) },
+                  createLightingLayer({ model: "none" }),
+                  image,
+                ],
+              };
+              newId = entity.id;
+              return { entities: [...state.entities, entity], selectedEntityIds: [entity.id], penTool: null };
+            });
+            return newId;
           },
           updateShapeSolids: (ids, updates) =>
             set((state) => {
@@ -1574,7 +1664,7 @@ export const useEditorStore = create<EditorState>()(
             set((state) => ({
               frame: deepMerge(state.frame, updates),
             })),
-          addMaterialLayer: (entityId, layerType) =>
+          addMaterialLayer: (entityId, layerType, depthFar) =>
             set((state) => ({
               entities: state.entities.map((entity) => {
                 if (entity.id !== entityId || !entity.materialLayers) return entity;
@@ -1585,7 +1675,7 @@ export const useEditorStore = create<EditorState>()(
                   layerType === "color"
                     ? createColorLayer(colorLayer?.color ?? "#ffffff")
                     : layerType === "depth"
-                      ? createDepthLayer()
+                      ? createDepthLayer(depthFar !== undefined && depthFar > 0 ? depthFar : undefined)
                       : createLightingLayer();
 
                 return {

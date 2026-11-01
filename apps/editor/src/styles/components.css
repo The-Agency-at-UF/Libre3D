@@ -413,6 +413,12 @@
   overflow: hidden;
 }
 
+/* The published scene's canvas fills the page (PublishedSceneView, viewport/SceneViewer.ts). */
+.viewer-canvas {
+  position: absolute;
+  inset: 0;
+}
+
 .viewer-status {
   color: #e2e8f0;
   font-size: 1.15rem;
@@ -2933,4 +2939,98 @@ input[type="range"]::-moz-range-thumb {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Drag-and-drop overlay: what a file dragged over the editor can be (DropOverlay.tsx). Above the
+   editor, below dialogs. Only the overlay itself takes drag events, so crossing a card doesn't
+   fire enter/leave pairs. */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--backdrop-bg);
+  backdrop-filter: blur(4px);
+}
+
+.drop-overlay * {
+  pointer-events: none;
+}
+
+.drop-overlay-panel {
+  width: min(720px, 100%);
+  padding: 28px 32px 32px;
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  background: var(--bg-main);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.35);
+  font-family: var(--font);
+  text-align: center;
+}
+
+.drop-overlay-title {
+  margin-bottom: 20px;
+  color: var(--text-primary);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.drop-overlay-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 20px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+}
+
+.drop-overlay-card--unavailable {
+  opacity: 0.35;
+}
+
+.drop-overlay-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 8px;
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font-size: 22px;
+}
+
+.drop-overlay-name {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.drop-overlay-formats {
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.drop-overlay-action {
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.drop-overlay-note {
+  margin-top: 16px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }

@@ -9,6 +9,7 @@ import {
   drawRangeFor,
   hasCaps,
   MAX_SEGMENTS,
+  pathsCenter,
   RADIAL_SEGMENTS,
   trimToRings,
   tubeSegmentsFor,
@@ -68,6 +69,28 @@ describe("buildPathCurve", () => {
     expect(curve.getPointAt(0.25).y).toBeCloseTo(0.6, 2); // top of the first arc
     expect(curve.getPointAt(0.75).y).toBeCloseTo(-0.6, 2); // bottom of the second
     expect(curve.getLength()).toBeCloseTo(2 * Math.PI * 0.6, 1);
+  });
+});
+
+describe("pathsCenter", () => {
+  // An arch whose handles reach y = 1 but whose curve tops out at 0.75 (halfway along).
+  const arch: PathData = { points: [point([0, 0, 0], [0, 1, 0]), point([2, 0, 0], [0, -1, 0])], closed: false };
+
+  it("is the middle of the box round the curves, not their handles", () => {
+    const [x, y, z] = pathsCenter([arch])!;
+    expect([x, y, z]).toEqual([1, expect.closeTo(0.375, 6), 0]);
+  });
+
+  it("takes the box round all the paths", () => {
+    const line: PathData = { points: [point([0, -1, 0]), point([4, -1, 0])], closed: false };
+    const [x, y] = pathsCenter([arch, line])!;
+    expect(x).toBeCloseTo(2, 6);
+    expect(y).toBeCloseTo(-0.125, 6);
+  });
+
+  it("is null when nothing draws", () => {
+    expect(pathsCenter([])).toBeNull();
+    expect(pathsCenter([{ points: [point([1, 2, 3])], closed: false }])).toBeNull();
   });
 });
 

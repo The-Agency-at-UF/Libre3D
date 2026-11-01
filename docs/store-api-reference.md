@@ -122,8 +122,8 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, path, directional light, or group). A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
-- **Signature**: `(type: "cube" | "sphere" | "torus" | "path" | "directionalLight" | "group") => string`
+Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, or group). A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), lit like the other primitives, with its Color layer shown from both sides (`doubleSided: true`). A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
+- **Signature**: `(type: "cube" | "sphere" | "torus" | "plane" | "path" | "directionalLight" | "group") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
 - **Example**:
@@ -146,11 +146,19 @@ Adds the shapes and paths of an imported SVG (made by `svgShapesToItems` in `pat
 - **Returns**: ID of the item, or of the group (`""` when `items` is empty)
 - **Auto-selects**: The item or the group becomes selected
 
+#### `addImagePlane(name: string, textureAssetId: string, aspect: number, transparent: boolean) → string`
+Adds an imported picture (`importImageFile` in `utils/importImage.ts`) as an `"image"` entity named `name` at the origin: a flat plane `aspect` (width / height) wide, its longer side 2 units (`utils/imagePlane.ts`), stored as `imageAspect`. Its layers are a white Color layer shown from both sides (`alphaMode: "BLEND"` when `transparent`, the picture having see-through pixels), an unlit Lighting layer (`model: "none"`), and a Base Color Image layer pointing at `textureAssetId` (the file's SHA-256 in the texture store), clamped at the edges. One undo step; refused in view only; puts the pen down.
+- **Returns**: New entity ID
+- **Auto-selects**: The new plane becomes selected
+
 #### `updateShapeSolids(ids: string[], updates: Partial<ShapeSolid>) → void`
 Sets the `extrusion` (depth) or `bevel` of every shape among `ids`, one undo step. Other entity types are skipped; a negative value is ignored.
 
 #### `updateShape(id: string, shape: ShapeData) → void`
 Replaces a shape's outlines (copied in, every Z set to 0), one undo step; the pen tool's edits. Ignored for other entity types.
+
+#### `centerOrigin(id: string) → void`
+Moves a path's or shape's origin to the middle of the box round its curves (`pathsCenter` in `paths/pathGeometry.ts`) without moving it on screen: its points shift by minus the centre, and its position by the centre through its own scale and rotation. Its states keep their transforms, so it's meant for one that has none yet: the pen tool calls it as it finishes drawing a path or shape. Ignored for other entity types and for a path that draws nothing.
 
 #### `convertShapesToPaths(ids: string[]) → number`
 Convert to Path: every shape among `ids` and among their descendants becomes a path along the middle of its strokes (`shapeCenterLines` in `paths/centerLine.ts`), with round caps and the strokes' half-width as radius (at least 0.01), drawn in full. The shape keeps its ID, name, parent, transform and material, so its states and events stay; extra strokes become paths right after it ("Shape 1 (2)", …) with the same place and a copy of the material. One undo step; does nothing in view only or Play, or for a shape with no strokes; ends the pen if it was editing a converted shape.
@@ -365,10 +373,10 @@ Each entity can have multiple material layers (color, lighting, textures) stacke
 
 ### Adding Layers
 
-#### `addMaterialLayer(entityId: string, layerType: MaterialLayerType) → void`
+#### `addMaterialLayer(entityId: string, layerType: MaterialLayerType, depthFar?: number) → void`
 Add a color, lighting, image, or depth layer to an entity (at most one of each; a second does nothing). Only a depth layer can be removed again.
 - **Types**: "color" | "lighting" | "image" | "depth"
-- **Defaults**: New layers created with sensible defaults
+- **Defaults**: New layers created with sensible defaults. A depth layer is radial from the object's origin, near 0; its far is `depthFar` when given (above 0), else 2. The Materials panel passes the object's reach (`depthReach` in `utils/depthColors.ts`, its mesh's farthest vertex from its origin), so the ramp ends on the object rather than past it.
 
 ### Removing Layers
 
@@ -575,8 +583,15 @@ Create a new named camera profile.
   near: number; // near clip plane
   far: number; // far clip plane
   zoom: number; // zoom level (orthographic only)
+  play?: { // how Play moves the camera (viewport/PlayCamera.ts); missing fields are defaults (Orbit)
+    mode: "fixed" | "softOrbit" | "orbit" | "autoRotate";
+    range: number; // Soft Orbit: degrees at the canvas's edge, 1-45
+    smoothness: number; // Soft Orbit and Orbit: 0-1, how slowly it eases
+    speed: number; // Auto-Rotate: degrees a second, 1-90
+  };
 }
 ```
+Play reads the active profile once when it starts and never writes it: it looks through a camera of its own. Profiles aren't in undo history, so changing `play` isn't undoable.
 
 ### Deleting Profiles
 
@@ -590,7 +605,7 @@ Delete a profile by ID.
 #### `updateProfileData(id: string, updates: Partial<CameraProfile>) → void`
 Update an existing profile's data.
 - **Clones vectors**: Position and target are cloned (never hand out references)
-- **Partial updates**: Only provided fields are changed
+- **Partial updates**: Only provided fields are changed; `play` is replaced as a whole, so pass it merged (`PlayCameraPanel` does)
 
 ---
 

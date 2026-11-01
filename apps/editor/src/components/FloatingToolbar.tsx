@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useEditorStore } from "../store/useEditorStore";
 import { TranslateIcon, RotateIcon, ScaleIcon, PenIcon, PathIcon, CheckIcon, PlusIcon } from "./ui/Icons";
-import { prepareModelImport } from "../utils/importModel";
-import { importSvgFile, isSvgFile } from "../utils/importSvg";
+import { importFileIntoScene } from "../utils/importFile";
 
 interface FloatingToolbarProps {
   isShapeDropdownOpen: boolean;
@@ -13,7 +12,7 @@ interface FloatingToolbarProps {
  * BLOCK: FloatingToolbar (React Component)
  * PURPOSE: Renders the toolbar overlays in the center of the viewport canvas, providing buttons
  *          to select transform tools (translate, rotate, scale), toggle transform space (Local/Global),
- *          and add primitives (Cubes, Spheres, Toruses, Lights) via a dropdown menu.
+ *          and add primitives (Cubes, Spheres, Toruses, Planes, Lights) via a dropdown menu.
  */
 export function FloatingToolbar({
   isShapeDropdownOpen,
@@ -28,7 +27,6 @@ export function FloatingToolbar({
   const setEditorState = useEditorStore((state) => state.setEditorState);
   const setPenTool = useEditorStore((state) => state.setPenTool);
   const addEntity = useEditorStore((state) => state.addEntity);
-  const addImportedModelHierarchy = useEditorStore((state) => state.addImportedModelHierarchy);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isPenMenuOpen, setIsPenMenuOpen] = useState(false);
   const penMenuRef = useRef<HTMLDivElement | null>(null);
@@ -46,22 +44,7 @@ export function FloatingToolbar({
   const handleFileSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
-    if (!file) return;
-
-    if (isSvgFile(file)) {
-      await importSvgFile(file).catch((error) => console.error("[Libre3D] Failed to import SVG:", error));
-      return;
-    }
-
-    useEditorStore.getState().adjustPendingImports(1);
-    try {
-      const { assetId, nodes } = await prepareModelImport(file);
-      addImportedModelHierarchy(assetId, nodes);
-    } catch (error) {
-      console.error("[Libre3D] Failed to import model:", error);
-    } finally {
-      useEditorStore.getState().adjustPendingImports(-1);
-    }
+    if (file) await importFileIntoScene(file);
   };
 
   return (
@@ -259,6 +242,28 @@ export function FloatingToolbar({
               onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
               onClick={() => {
+                addEntity("plane");
+                setIsShapeDropdownOpen(false);
+              }}
+            >
+              + Plane
+            </button>
+            <button
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "var(--text-primary)",
+                padding: "6px 10px",
+                borderRadius: "3px",
+                textAlign: "left",
+                fontSize: "11px",
+                cursor: "pointer",
+                fontFamily: "var(--font)",
+              }}
+              type="button"
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-hover)")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              onClick={() => {
                 addEntity("path");
                 setIsShapeDropdownOpen(false);
               }}
@@ -311,11 +316,11 @@ export function FloatingToolbar({
             </button>
           </div>
         )}
-        {/* A model (.glb), or a drawing whose strokes become paths (.svg) */}
+        {/* A model (.glb), a drawing whose strokes become paths (.svg), or a picture on a plane */}
         <input
           ref={fileInputRef}
           type="file"
-          accept=".glb,.svg"
+          accept=".glb,.svg,.png,.jpg,.jpeg"
           style={{ display: "none" }}
           onChange={handleFileSelected}
         />

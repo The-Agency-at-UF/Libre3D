@@ -8,6 +8,7 @@ import { SceneManager } from "../viewport/SceneManager";
 import { createRoomEnvironment } from "../viewport/sceneEnvironment";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
+import { editorSceneSource } from "../viewport/editorSceneSource";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
 import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
@@ -15,8 +16,6 @@ import { useViewportGizmo } from "../viewport/hooks/useViewportGizmo";
 import { useViewportPlay } from "../viewport/hooks/useViewportPlay";
 import { useViewportPenTool } from "../viewport/hooks/useViewportPenTool";
 import { useViewportDepthGizmo } from "../viewport/hooks/useViewportDepthGizmo";
-import { prepareModelImport } from "../utils/importModel";
-import { importSvgFile, isSvgFile } from "../utils/importSvg";
 
 export function ViewportCanvas() {
   const wrapperRef   = useRef<HTMLDivElement | null>(null);
@@ -49,7 +48,7 @@ export function ViewportCanvas() {
     const sceneManager  = new SceneManager(storeState.sceneSettings);
     // Use aspect = 1 initially; ResizeObserver will correct it immediately after mount.
     const cameraManager = new CameraManager(initialProfile, storeState.projectionMode, 1);
-    const objectManager = new ObjectManager(sceneManager.scene, new Map());
+    const objectManager = new ObjectManager(sceneManager.scene, new Map(), editorSceneSource);
 
     return { sceneManager, cameraManager, objectManager };
   }, []);
@@ -543,51 +542,7 @@ export function ViewportCanvas() {
     };
   }, [orbitControlsRef, objectManager, cameraRef]);
 
-  // -- Drag-and-drop import: .svg as paths, anything else as a model (.glb) --
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const handleDragOver = (event: DragEvent) => {
-      event.preventDefault();
-    };
-
-    const handleDrop = (event: DragEvent) => {
-      event.preventDefault();
-      const files = event.dataTransfer?.files;
-      if (!files || files.length === 0) return;
-      // View only: the store would drop the new entities anyway, so don't store the model's bytes.
-      // Play is for looking, so nothing is added while it runs.
-      const store = useEditorStore.getState();
-      if (store.readOnlyReason || store.isPreviewMode) return;
-
-      Array.from(files).forEach((file) => {
-        if (isSvgFile(file)) {
-          importSvgFile(file).catch((error) => console.error("[Libre3D] Failed to import dropped SVG:", error));
-          return;
-        }
-
-        useEditorStore.getState().adjustPendingImports(1);
-        prepareModelImport(file)
-          .then(({ assetId, nodes }) => {
-            useEditorStore.getState().addImportedModelHierarchy(assetId, nodes);
-          })
-          .catch((error) => {
-            console.error("[Libre3D] Failed to import dropped model:", error);
-          })
-          .finally(() => {
-            useEditorStore.getState().adjustPendingImports(-1);
-          });
-      });
-    };
-
-    container.addEventListener("dragover", handleDragOver);
-    container.addEventListener("drop", handleDrop);
-    return () => {
-      container.removeEventListener("dragover", handleDragOver);
-      container.removeEventListener("drop", handleDrop);
-    };
-  }, []);
+  // Files dropped on the editor are imported by DropOverlay (EditorLayout), not here.
 
   const frameScaleLabel = `${Math.round(autoScaleFactor * 100)}%`;
 

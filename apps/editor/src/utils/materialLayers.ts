@@ -193,6 +193,13 @@ export async function deriveMaterialLayers(material: THREE.Material, cache: Text
   return [colorLayerFromMaterial(material), lightingLayerFromMaterial(material, model), ...imageLayers];
 }
 
+// Whether stored image bytes are a JPEG, by their first bytes (FF D8 FF): a
+// stored file has no type to go by.
+export async function isJpeg(blob: Blob): Promise<boolean> {
+  const bytes = new Uint8Array(await blob.slice(0, 3).arrayBuffer());
+  return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+}
+
 // Rebuilds a THREE.Texture from a stored blob for an ImageLayer, restoring the
 // wrap/colorSpace/flip conventions glTF textures use so the reloaded map renders
 // identically to the parsed original.
@@ -208,6 +215,10 @@ export async function buildTextureFromLayer(blob: Blob, layer: ImageLayer): Prom
   texture.flipY = false;
   texture.colorSpace =
     layer.slot === "color" || layer.slot === "emissive" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  // GLTFExporter writes every texture as a PNG unless told otherwise; a JPEG (an
+  // imported photo, utils/importImage.ts) stays one in exports and published
+  // scenes, which keeps them several times smaller.
+  if (await isJpeg(blob)) texture.userData.mimeType = "image/jpeg";
   // Marks this texture as owned by ObjectManager's session cache so the group
   // disposal pass doesn't free it out from under other meshes sharing the id.
   texture.userData.libre3dManaged = true;

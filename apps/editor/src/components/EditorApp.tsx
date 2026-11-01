@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { showAlert } from "./ui/Dialog";
 
 import { EditorLayout } from "./EditorLayout";
@@ -17,6 +17,7 @@ import { ApiAuthError } from "../utils/apiFetch";
 import { signOut } from "../utils/authSession";
 import { navigate } from "../utils/navigation";
 import { createScene, type LockClaim, type OpenedScene } from "../utils/sceneLibrary";
+import { openSceneFileAsNewScene } from "../utils/sceneFileTransfers";
 import type { SaveStatus } from "../utils/sceneAutosave";
 import type { DownloadProgress } from "../utils/assetTransfers";
 
@@ -104,6 +105,8 @@ function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: Edito
   const isViewOnly = sceneLock.editing.mode === "viewing";
   const autosave = useSceneAutosave(scene.sceneId, sceneLock.editing.mode === "editing" ? sceneLock.editing.session : null);
   const { reportLost } = sceneLock;
+  // Kept up to date by the header's rename field, for a downloaded file's name.
+  const [sceneName, setSceneName] = useState(scene.name);
 
   // A save refused because another tab or device took the scene over.
   useEffect(() => {
@@ -151,7 +154,7 @@ function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: Edito
       onBack={() => navigate("/scenes")}
       headerText={
         <>
-          <SceneNameField sceneId={scene.sceneId} initialName={scene.name} />
+          <SceneNameField sceneId={scene.sceneId} initialName={scene.name} onRenamed={setSceneName} />
           <SaveStatusIndicator status={saveStatus} onRetry={autosave.retry} />
         </>
       }
@@ -167,7 +170,10 @@ function EditorWorkspace({ scene, lock, hasRecoveredEdits, accountEmail }: Edito
           />
         ) : null
       }
-      publishing={{ sceneId: scene.sceneId, initialPublishId: scene.publishId ?? null }}
+      publishing={{ sceneId: scene.sceneId, initialPublishId: scene.publishId ?? null, saveFirst: autosave.flush }}
+      sceneName={sceneName}
+      onOpenSceneFile={(file) => void openSceneFileAsNewScene(file)}
+      sceneFileAction="Opens as a new scene"
     />
   );
 }

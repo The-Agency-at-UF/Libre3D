@@ -122,6 +122,21 @@ export const paintDepthColors = (geometry: THREE.BufferGeometry, paint: DepthPai
   if (colors !== existing) geometry.setAttribute("color", colors);
 };
 
+/**
+ * Where a new Depth layer's ramp should end on `geometry`: its farthest vertex from the object's
+ * origin, in hundredths, so the whole ramp lands on the object (its outer ring through the farthest
+ * corner) instead of a fixed distance that runs out past small objects. Null with no vertices.
+ */
+export const depthReach = (geometry: THREE.BufferGeometry): number | null => {
+  const position = geometry.getAttribute("position");
+  if (!position) return null;
+  let farthest = 0;
+  for (let i = 0; i < position.count; i += 1) {
+    farthest = Math.max(farthest, Math.hypot(position.getX(i), position.getY(i), position.getZ(i)));
+  }
+  return farthest > 0 ? Math.max(0.01, Math.round(farthest * 100) / 100) : null;
+};
+
 /** Takes the paint off again, putting back any colour attribute the geometry came with. */
 export const clearDepthColors = (geometry: THREE.BufferGeometry): void => {
   if (!geometry.userData.depthPainted) return;

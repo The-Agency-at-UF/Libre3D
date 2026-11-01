@@ -50,30 +50,28 @@ export function useViewportControls(
     const CENTER_HITBOX_SCALE = 1.6;
     const PLANE_HITBOX_SCALE = 0.5;
 
-    // Sensitivity multiplier for uniform scaling via the center (XYZ) cube.
+    // Uniform scaling via the center (XYZ) cube follows the mouse's horizontal
+    // movement since pointerdown: right grows the object, left shrinks it, and
+    // every CENTER_SCALE_PIXELS_PER_DOUBLING px doubles (or halves) it, so it
+    // never reaches zero or goes negative.
     //
-    // TransformControls computes uniform scale as a *ratio*, not a mouse-delta
-    // velocity: on pointerdown it records `pointStart`, the vector from the
-    // gizmo's world position to where the drag ray hits the drag plane; on
-    // every pointermove it recomputes `pointEnd` the same way and does
-    //   d = pointEnd.length() / pointStart.length()
+    // Stock TransformControls scales by a *ratio of distances* instead: on
+    // pointerdown it records `pointStart`, the vector from the gizmo's world
+    // position to where the drag ray hits the drag plane; on every pointermove
+    // it recomputes `pointEnd` the same way and does
+    //   d = pointEnd.length() / pointStart.length()  (negated if they point apart)
     //   object.scale = scaleAtDragStart * d
     // (see node_modules/three/examples/jsm/controls/TransformControls.js,
     // pointerMove(), the `mode === 'scale'` branch, `axis.search('XYZ')`).
-    // Because `pointStart` is usually short when you grab the center cube
-    // (you tend to click close to the object's on-screen center), a few
-    // pixels of mouse movement can swing `d` -- and therefore the scale --
-    // dramatically. There's no public option on TransformControls for this
-    // ratio, so it can't be configured on the instance directly.
-    //
-    // Instead we intercept the *result*: the 'objectChange' listener below
-    // reads back the ratio TransformControls just applied to the object and
-    // re-applies an eased version of it, `1 + (d - 1) * CENTER_SCALE_SENSITIVITY`,
-    // before the pre-existing 'objectChange' listener (further down) commits
-    // `target.scale` into the entity store. 1 reproduces stock
-    // TransformControls behavior; values below 1 dampen the center cube
-    // (less sensitive); values above 1 amplify it.
-    const CENTER_SCALE_SENSITIVITY = 0.1;
+    // So only the distance from the object's center counts, not the direction
+    // you drag: dragging toward the center shrinks the object, and crossing it
+    // flips `d` negative, turning the object inside out (it reads as upside
+    // down). And since you grab the cube near that center, `pointStart` is
+    // short, so a few pixels swing the scale wildly. There's no public option
+    // for any of this, so the 'objectChange' listener below overwrites the
+    // scale TransformControls just applied, before the store-sync
+    // 'objectChange' listener (further down) reads `target.scale`.
+    const CENTER_SCALE_PIXELS_PER_DOUBLING = 200;
 
     try {
       const gizmo = (transformControls as any)._gizmo;
@@ -113,6 +111,40 @@ export function useViewportControls(
     } catch (e) {
       console.warn("Failed to scale transform controls pickers", e);
     }
+
+    // In scale mode the center cube wins wherever its picker is under the
+    // pointer. Each axis picker is a cone running from the gizmo's center out
+    // to its handle, so when an axis points at the camera (Z, in a front view)
+    // its wide end covers the center cube, and TransformControls takes the
+    // nearest hit: a click on the center cube grabbed Z, scaling along an axis
+    // that barely moves on screen and flipping sign as the drag crossed the
+    // center. This trims the inner ends of the X/Y pickers too; their handles
+    // are grabbed at the far end anyway.
+    const centerScalePicker = (
+      (transformControls as any)._gizmo?.picker?.scale as
+        | THREE.Object3D
+        | undefined
+    )?.children.find((handle) => handle.name === "XYZ");
+    const centerRaycaster = new THREE.Raycaster();
+    const centerPointer = new THREE.Vector2();
+    const pointerHover = transformControls.pointerHover.bind(transformControls);
+    transformControls.pointerHover = (pointer) => {
+      pointerHover(pointer);
+      if (
+        !pointer ||
+        !centerScalePicker?.visible ||
+        transformControls.mode !== "scale" ||
+        transformControls.dragging ||
+        transformControls.axis === null
+      )
+        return;
+      centerRaycaster.setFromCamera(
+        centerPointer.set(pointer.x, pointer.y),
+        transformControls.camera,
+      );
+      if (centerRaycaster.intersectObject(centerScalePicker, false).length > 0)
+        transformControls.axis = "XYZ";
+    };
 
     const helperObj = transformControls.getHelper();
     helperObj.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
@@ -192,14 +224,22 @@ export function useViewportControls(
     let isAltPressed = false;
     let isSpacePressed = false;
     let isMiddlePanning = false;
+    // The pointer's x, now and at the last press, for the center-cube scale (see
+    // CENTER_SCALE_PIXELS_PER_DOUBLING). Both are read in capture phase, so they're
+    // current before TransformControls handles the same event.
+    let pointerX = 0;
+    let pointerDownX = 0;
 
     const updateOrbitControls = () => {
+      // Play looks through a camera of its own (useViewportPlay, PlayCamera), so nothing here may
+      // move, and save, the scene's camera meanwhile.
+      const isPlaying = useEditorStore.getState().isPreviewMode;
       orbitControls.enableRotate = isAltPressed && !isSpacePressed;
       orbitControls.enablePan =
         isAltPressed || isSpacePressed || isMiddlePanning;
-      orbitControls.enabled = !isDragging;
+      orbitControls.enabled = !isDragging && !isPlaying;
 
-      if (isSpacePressed) {
+      if (isSpacePressed && !isPlaying) {
         orbitControls.mouseButtons.LEFT = THREE.MOUSE.PAN;
         if (rendererRef.current)
           rendererRef.current.domElement.style.cursor = "grab";
@@ -251,6 +291,7 @@ export function useViewportControls(
 
     // Capture phase so enablePan is set before OrbitControls' own pointerdown reads it.
     const handlePointerDown = (e: PointerEvent) => {
+      pointerX = pointerDownX = e.clientX;
       if (e.button === 1) {
         isMiddlePanning = true;
         updateOrbitControls();
@@ -259,6 +300,10 @@ export function useViewportControls(
       } else if (isSpacePressed && rendererRef.current) {
         rendererRef.current.domElement.style.cursor = "grabbing";
       }
+    };
+
+    const handlePointerMove = (e: PointerEvent) => {
+      pointerX = e.clientX;
     };
 
     const handlePointerUp = (e: PointerEvent) => {
@@ -276,6 +321,11 @@ export function useViewportControls(
       handlePointerDown,
       true,
     );
+    rendererRef.current.domElement.addEventListener(
+      "pointermove",
+      handlePointerMove,
+      true,
+    );
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
@@ -290,11 +340,11 @@ export function useViewportControls(
       }
     });
 
-    // Damps/amplifies uniform (center-cube) scaling per CENTER_SCALE_SENSITIVITY,
-    // above. Must be registered before the 'objectChange' listener below --
-    // EventDispatcher fires listeners in registration order, and that listener
-    // reads `target.scale` to sync the entity store, so our corrected value has
-    // to land on the object first.
+    // Replaces uniform (center-cube) scaling with the mouse-direction scale
+    // described at CENTER_SCALE_PIXELS_PER_DOUBLING, above. Must be registered
+    // before the 'objectChange' listener below -- EventDispatcher fires listeners
+    // in registration order, and that listener reads `target.scale` to sync the
+    // entity store, so our value has to land on the object first.
     transformControls.addEventListener("objectChange", () => {
       if (
         transformControls.dragging &&
@@ -303,29 +353,16 @@ export function useViewportControls(
       ) {
         const target = transformControls.object;
         // Internal, undocumented field -- the scale TransformControls captured
-        // at pointerdown, before this drag's ratio was applied. Same category of
-        // risk as the `_gizmo` reach-in above: it can move or vanish on a three.js
-        // upgrade, so this whole block is guarded by the try/catch below.
+        // at pointerdown. Same category of risk as the `_gizmo` reach-in above:
+        // it can move or vanish on a three.js upgrade, in which case this skips
+        // and the stock ratio scaling comes back.
         const scaleStart = (transformControls as any)._scaleStart as
           | THREE.Vector3
           | undefined;
         if (target && scaleStart) {
-          try {
-            // All three components were scaled by the same ratio `d` (the XYZ
-            // handle is uniform-only), so any non-zero start component recovers
-            // it; pick the largest-magnitude one for numerical safety.
-            const axisKey = (["x", "y", "z"] as const).reduce((best, k) =>
-              Math.abs(scaleStart[k]) > Math.abs(scaleStart[best]) ? k : best,
-            );
-            const startValue = scaleStart[axisKey];
-            if (startValue !== 0) {
-              const rawRatio = target.scale[axisKey] / startValue;
-              const easedRatio = 1 + (rawRatio - 1) * CENTER_SCALE_SENSITIVITY;
-              target.scale.copy(scaleStart).multiplyScalar(easedRatio);
-            }
-          } catch (e) {
-            console.warn("Failed to apply center-cube scale sensitivity", e);
-          }
+          const factor =
+            2 ** ((pointerX - pointerDownX) / CENTER_SCALE_PIXELS_PER_DOUBLING);
+          target.scale.copy(scaleStart).multiplyScalar(factor);
         }
       }
     });
@@ -401,11 +438,13 @@ export function useViewportControls(
       { fireImmediately: true },
     );
 
+    const unsubPlay = useEditorStore.subscribe((s) => s.isPreviewMode, updateOrbitControls);
+
     const unsubViewportZoom = useEditorStore.subscribe(
       (s) => s.viewportZoom,
       (newZoom) => {
         const liveCamera = cameraRef.current;
-        if (!liveCamera || !orbitControls) return;
+        if (!liveCamera || !orbitControls || useEditorStore.getState().isPreviewMode) return;
 
         const isPerspective = liveCamera instanceof THREE.PerspectiveCamera;
         const isOrthographic = liveCamera instanceof THREE.OrthographicCamera;
@@ -449,6 +488,11 @@ export function useViewportControls(
         handlePointerDown,
         true,
       );
+      rendererRef.current?.domElement.removeEventListener(
+        "pointermove",
+        handlePointerMove,
+        true,
+      );
       window.removeEventListener("pointerup", handlePointerUp);
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
@@ -456,6 +500,7 @@ export function useViewportControls(
       unsubActiveTransformTool();
       unsubTransformSpace();
       unsubShowAxisGuides();
+      unsubPlay();
       unsubViewportZoom();
       scene.remove(transformControls.getHelper());
       transformControls.dispose();

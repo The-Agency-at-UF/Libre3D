@@ -1,6 +1,8 @@
+import * as THREE from "three";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
+import { collectAssetRefs } from "../utils/sceneAssets";
 import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
 import type { PathData, PathPoint } from "../paths/pathGeometry";
 import type { ImportedPath, ImportedSvgItem } from "../paths/svgImport";
@@ -853,6 +855,49 @@ describe("paths", () => {
     expect(useEditorStore.getState().entities.some((e) => e.id === pathId)).toBe(false);
   });
 
+  it("moves a path's or shape's origin to its middle without moving it", async () => {
+    const { useEditorStore } = await loadStore();
+    const corner = (position: [number, number, number]): PathPoint => ({ position, handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "corner" });
+    const drawn: PathData = { points: [corner([1, 1, 0]), corner([3, 2, 0]), corner([3, 1, 0])], closed: false };
+    // The shape is turned a quarter about Y and twice as big, so its centre turns and grows with it.
+    useEditorStore.getState().loadScene({
+      entities: [
+        light,
+        entity("path-1", { type: "path", position: [0, 1, 2], path: drawn }),
+        entity("shape-1", { type: "shape", position: [0, 1, 2], rotation: [0, Math.PI / 2, 0], scale: [2, 2, 2], shape: { regions: [{ outline: { ...drawn, closed: true }, holes: [] }] } }),
+      ],
+    });
+    const find = (id: string) => useEditorStore.getState().entities.find((e) => e.id === id)!;
+    const worldPoints = (id: string) => {
+      const { position, rotation, scale, path, shape } = find(id);
+      const matrix = new THREE.Matrix4().compose(
+        new THREE.Vector3(...position),
+        new THREE.Quaternion().setFromEuler(new THREE.Euler(...rotation, "XYZ")),
+        new THREE.Vector3(...scale),
+      );
+      return (path ?? shape!.regions[0].outline).points.map((point) => new THREE.Vector3(...point.position).applyMatrix4(matrix));
+    };
+    const before = { path: worldPoints("path-1"), shape: worldPoints("shape-1") };
+
+    useEditorStore.getState().centerOrigin("path-1");
+    useEditorStore.getState().centerOrigin("shape-1");
+
+    expect(find("path-1").position).toEqual([2, 2.5, 2]);
+    expect(find("path-1").path!.points.map((point) => point.position)).toEqual([
+      [-1, -0.5, 0],
+      [1, 0.5, 0],
+      [1, -0.5, 0],
+    ]);
+    // The centre (2, 1.5, 0), doubled and turned: Z = -4.
+    find("shape-1").position.forEach((value, i) => expect(value).toBeCloseTo([0, 4, -2][i], 6));
+    worldPoints("path-1").forEach((point, i) => expect(point.distanceTo(before.path[i])).toBeLessThan(1e-9));
+    worldPoints("shape-1").forEach((point, i) => expect(point.distanceTo(before.shape[i])).toBeLessThan(1e-9));
+
+    const entities = useEditorStore.getState().entities;
+    useEditorStore.getState().centerOrigin("directional-light-1");
+    expect(useEditorStore.getState().entities).toBe(entities);
+  });
+
   it("replaces a path's points in one undo step, for every state", async () => {
     const { useEditorStore, pathId, path } = await storeWithPath();
     const before = path().path!;
@@ -1118,6 +1163,128 @@ describe("shapes", () => {
   });
 });
 
+describe("the Play camera setting", () => {
+  it("is saved with the scene's camera, a copy of its own, and isn't undoable", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    const play = { mode: "softOrbit" as const, range: 12 };
+    useEditorStore.getState().updateProfileData("personal", { play });
+    play.range = 40;
+    const content = selectSceneContent(useEditorStore.getState());
+    const saved = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    expect(useEditorStore.getState().cameraProfiles.personal.play).toEqual({ mode: "softOrbit", range: 12 });
+    expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
+
+    useEditorStore.getState().loadScene(null);
+    expect(useEditorStore.getState().cameraProfiles.personal.play).toBeUndefined();
+    useEditorStore.getState().loadScene(saved.ok ? saved.content : null);
+    const reloaded = useEditorStore.getState().cameraProfiles.personal.play;
+    expect(reloaded).toEqual({ mode: "softOrbit", range: 12 });
+    expect(reloaded).not.toBe(saved.ok && saved.content.cameraProfiles!.personal.play);
+  });
+});
+
+describe("planes", () => {
+  it("adds a lit 1×1 plane at the origin, selected, shown from both sides", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+
+    const id = useEditorStore.getState().addEntity("plane");
+    const added = useEditorStore.getState().entities.find((e) => e.id === id)!;
+
+    expect(added).toMatchObject({ type: "plane", name: "Plane", position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] });
+    expect(added.materialLayers).toEqual([
+      expect.objectContaining({ type: "color", color: "#B39DFF", opacity: 1, doubleSided: true }),
+      expect.objectContaining({ type: "lighting", model: "physical" }),
+    ]);
+    expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
+  });
+
+  it("keeps a plane through save and reload", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+    const id = useEditorStore.getState().addEntity("plane");
+    useEditorStore.getState().updateEntityTransform(id, { rotation: [-Math.PI / 2, 0, 0], scale: [4, 4, 1] });
+    useEditorStore.getState().addMaterialLayer(id, "depth");
+    const content = selectSceneContent(useEditorStore.getState());
+    const saved = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().loadScene(saved.ok ? saved.content : null);
+
+    expect(useEditorStore.getState().entities).toEqual(content.entities);
+  });
+});
+
+describe("image planes", () => {
+  const hash = "a".repeat(64);
+  const storeWithLight = async () => {
+    const module = await loadStore();
+    module.useEditorStore.getState().loadScene({ entities: [light] });
+    return module;
+  };
+
+  it("adds a plane named after the file, selected, showing the picture unlit from both sides", async () => {
+    const { useEditorStore } = await storeWithLight();
+
+    const id = useEditorStore.getState().addImagePlane("photo", hash, 1.5, false);
+    const added = useEditorStore.getState().entities.find((e) => e.id === id)!;
+
+    expect(added).toMatchObject({ type: "image", name: "photo", imageAspect: 1.5, position: [0, 0, 0], scale: [1, 1, 1] });
+    expect(added.materialLayers).toEqual([
+      expect.objectContaining({ type: "color", color: "#ffffff", opacity: 1, doubleSided: true }),
+      expect.objectContaining({ type: "lighting", model: "none" }),
+      expect.objectContaining({ type: "image", enabled: true, textureAssetId: hash, slot: "color", wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping }),
+    ]);
+    expect(added.materialLayers![0]).not.toHaveProperty("alphaMode");
+    expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
+    expect(collectAssetRefs(useEditorStore.getState().entities)).toEqual([{ id: hash, kind: "texture" }]);
+  });
+
+  it("blends a picture with see-through pixels", async () => {
+    const { useEditorStore } = await storeWithLight();
+
+    const id = useEditorStore.getState().addImagePlane("logo", hash, 1, true);
+
+    expect(useEditorStore.getState().entities.find((e) => e.id === id)!.materialLayers![0]).toMatchObject({ type: "color", alphaMode: "BLEND" });
+  });
+
+  it("is one undo step and puts the pen down", async () => {
+    const { useEditorStore } = await storeWithLight();
+    useEditorStore.getState().setPenTool({ mode: "draw", pathId: null, selectedPoints: [] });
+    const stepsBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().addImagePlane("photo", hash, 1, false);
+
+    expect(useEditorStore.getState().penTool).toBeNull();
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(stepsBefore + 1);
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().entities.map((e) => e.id)).toEqual(["directional-light-1"]);
+  });
+
+  it("adds nothing in a view-only tab", async () => {
+    const { useEditorStore } = await storeWithLight();
+    const before = useEditorStore.getState().entities;
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().addImagePlane("photo", hash, 1, false);
+
+    expect(useEditorStore.getState().entities).toBe(before);
+  });
+
+  it("keeps a plane through save and reload", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithLight();
+    useEditorStore.getState().addImagePlane("photo", hash, 0.75, true);
+    const content = selectSceneContent(useEditorStore.getState());
+    const saved = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().loadScene(saved.ok ? saved.content : null);
+
+    expect(useEditorStore.getState().entities).toEqual(content.entities);
+  });
+});
+
 describe("pen tool", () => {
   const drawing = { mode: "draw" as const, pathId: null, selectedPoints: [] };
 
@@ -1182,6 +1349,17 @@ describe("depth layers", () => {
     expect(depthOf()).toBeUndefined();
     useEditorStore.temporal.getState().undo();
     expect(depthOf()).toBeDefined();
+  });
+
+  it("ends a new layer's ramp at the object's reach when it's measured, and at 2 otherwise", async () => {
+    const { useEditorStore, cubeId, depthOf } = await storeWithCube();
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth", 0.87);
+    expect(depthOf()).toMatchObject({ near: 0, far: 0.87 });
+
+    useEditorStore.getState().removeMaterialLayer(cubeId, depthOf()!.id);
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth", 0);
+    expect(depthOf()).toMatchObject({ near: 0, far: 2 });
   });
 
   it("gives a duplicate its own copy of the origin and stops", async () => {

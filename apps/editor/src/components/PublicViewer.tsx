@@ -1,118 +1,109 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
-import { normalizePublishedBgColor } from "../utils/publishedSceneStyle";
+import { parseSceneDocument, type StoredSceneContent } from "../utils/sceneDocument";
 
-/*
- * BLOCK: React JSX Custom Element Declaration
- * PURPOSE: Extends the built-in React JSX namespace to support `<model-viewer>` custom web elements.
- *          By default, TypeScript/React does not recognize custom elements, causing compilation errors.
- * INPUT: None (Module declaration level).
- * OUTPUT: Informs the compiler that `<model-viewer>` is a valid JSX element with specific optional properties.
- */
-declare module "react" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "model-viewer": React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement> & {
-        src?: string | null;
-        "camera-controls"?: boolean;
-        "auto-rotate"?: boolean;
-        "tone-mapping"?: string;
-        ar?: boolean;
-        style?: React.CSSProperties;
-      };
-    }
-  }
-}
+// Three.js and the viewer load only once there's a scene to show.
+const PublishedSceneView = lazy(() => import("./PublishedSceneView"));
 
 interface PublicViewerProps {
   sceneId: string;
 }
 
+type ViewerState =
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; content: StoredSceneContent; assets: Record<string, string> };
+
+// The server answers failures with `{ error }` (awsPublishHandler.ts), e.g. a scene published as a
+// GLB before scenes were published whole, whose owner needs to publish it again.
+const readServerError = async (response: Response): Promise<string | null> => {
+  try {
+    const body = (await response.json()) as { error?: unknown };
+    return typeof body.error === "string" && body.error ? body.error : null;
+  } catch {
+    return null;
+  }
+};
+
+const Spinner = () => (
+  <div className="viewer-container viewer-status">
+    <div className="viewer-spinner"></div>
+    <p>Loading scene...</p>
+  </div>
+);
+
 /*
  * BLOCK: PublicViewer (React Component)
- * PURPOSE: A read-only view that fetches a published scene's GLB model URL from the server 
- *          and displays it interactively using the custom `<model-viewer>` component.
- * INPUT: Props object containing a single `sceneId` string (the database ID of the published scene).
- * OUTPUT: Renders a loading spinner, an error message, or the interactive 3D model-viewer canvas.
+ * PURPOSE: The public share page, `/v/:sceneId` (the ID is a publish ID): fetches the published
+ *          scene (its document and download links for its imported assets, `GET /api/scene/:id`),
+ *          reads the document as the editor does (older ones upgrade, a newer one is refused), and
+ *          plays it with PublishedSceneView. Loading and error states while it can't.
  */
 export function PublicViewer({ sceneId }: PublicViewerProps) {
-  // Local state to store the direct cloud URL of the GLB asset
-  const [cloudAssetUrl, setCloudAssetUrl] = useState<string | null>(null);
-  // The scene's background colour, stored with the publish because the GLB can't carry it.
-  // Null for scenes published before it was stored, which keep model-viewer's default.
-  const [bgColor, setBgColor] = useState<string | null>(null);
-  // Local state to manage showing a loading state while fetching from the backend
-  const [isLoading, setIsLoading] = useState(true);
-  // Local state to capture and display any API or network errors
-  const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<ViewerState>({ status: "loading" });
 
   useEffect(() => {
-    // Flag to prevent state updates if the component unmounts during the fetch
+    // Ignore an answer for a scene that was left before it arrived.
     let active = true;
+    setState({ status: "loading" });
 
-    // Fetch the scene document metadata from the backend API
-    fetch(`/api/scene/${sceneId}`)
-      .then((res) => {
-        if (!res.ok) {
-          throw new Error(`Failed to load scene (status ${res.status})`);
-        }
-        return res.json();
-      })
-      .then((data) => {
-        if (active) {
-          // If scene data contains a valid cloud asset URL, update the state
-          if (data && data.cloudAssetUrl) {
-            setCloudAssetUrl(data.cloudAssetUrl);
-            // Re-validated here too: it ends up in a style attribute on a public page.
-            setBgColor(normalizePublishedBgColor(data.bgColor));
-          } else {
-            throw new Error("No asset URL found in scene data");
-          }
-          setIsLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (active) {
-          console.error(err);
-          setError(err instanceof Error ? err.message : "An error occurred");
-          setIsLoading(false);
-        }
-      });
+    void (async () => {
+      let next: ViewerState;
 
-    // Cleanup function: runs on unmount to invalidate pending asynchronous state updates
+      try {
+        const response = await fetch(`/api/scene/${encodeURIComponent(sceneId)}`);
+
+        if (!response.ok) {
+          next = {
+            status: "error",
+            message:
+              response.status === 404
+                ? "This scene doesn't exist, or isn't published any more."
+                : ((await readServerError(response)) ?? "The scene couldn't be loaded."),
+          };
+        } else {
+          const data = (await response.json()) as { document?: unknown; assets?: Record<string, string> };
+          const parsed = parseSceneDocument(data.document);
+          next = parsed.ok
+            ? { status: "ready", content: parsed.content, assets: data.assets ?? {} }
+            : {
+                status: "error",
+                message:
+                  parsed.reason === "newer"
+                    ? "This scene was published with a newer version of Libre3D. Reload the page to see it."
+                    : "This scene couldn't be read.",
+              };
+        }
+      } catch (error) {
+        console.error(error);
+        next = { status: "error", message: "The scene couldn't be loaded. Check your connection and try again." };
+      }
+
+      if (active) setState(next);
+    })();
+
     return () => {
       active = false;
     };
   }, [sceneId]);
 
-  if (isLoading) {
-    return (
-      <div className="viewer-container viewer-status">
-        <div className="viewer-spinner"></div>
-        <p>Loading scene...</p>
-      </div>
-    );
+  if (state.status === "loading") {
+    return <Spinner />;
   }
 
-  if (error || !cloudAssetUrl) {
+  if (state.status === "error") {
     return (
       <div className="viewer-container viewer-status viewer-error">
-        <p>Error: {error || "Failed to load scene"}</p>
+        <p>{state.message}</p>
       </div>
     );
   }
 
   return (
     <div className="viewer-container">
-      <model-viewer
-        src={cloudAssetUrl}
-        camera-controls
-        auto-rotate
-        // Pinned rather than left on "auto" so the published scene keeps the exact
-        // tone curve the editor renders with (see useViewportRenderer).
-        tone-mapping="neutral"
-        style={{ width: "100%", height: "100%", ...(bgColor ? { backgroundColor: bgColor } : {}) }}
-      />
+      <Suspense fallback={<Spinner />}>
+        <PublishedSceneView content={state.content} assets={state.assets} />
+      </Suspense>
     </div>
   );
 }

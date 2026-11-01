@@ -236,7 +236,13 @@ const newDocumentKey = (userId: string, sceneId: string): string =>
 
 const thumbnailKey = (userId: string, sceneId: string): string => `${sceneObjectPrefix(userId, sceneId)}thumb.jpg`;
 
-/** Where a published scene's GLB lives. Outside `users/`: the public viewer reads it by publish ID. */
+/**
+ * Where a published scene's document lives: a copy of the scene's saved document made when it was
+ * published (awsPublishHandler.ts). Outside `users/`: the public viewer reads it by publish ID.
+ */
+export const publishedDocumentKey = (publishId: string): string => `scenes/${publishId}.json`;
+
+/** Where a scene published before scenes were published whole kept its GLB; only ever deleted now. */
 export const publishedGlbKey = (publishId: string): string => `scenes/${publishId}.glb`;
 
 export const rowKey = (userId: string, sceneId: string): Record<string, AttributeValue> => ({
@@ -244,7 +250,8 @@ export const rowKey = (userId: string, sceneId: string): Record<string, Attribut
   sceneId: { S: sceneId },
 });
 
-const assetKey = (userId: string, hash: string): string => `users/${userId}/assets/${hash}`;
+/** An imported asset's object: the owner's, under its content hash (sceneAssets.ts). Published scenes read it too. */
+export const assetKey = (userId: string, hash: string): string => `users/${userId}/assets/${hash}`;
 
 /** The assets the row's document uses, as recorded by the save that wrote it. */
 const readAssetHashes = (item: Record<string, AttributeValue> | undefined): Set<string> => new Set(item?.assetHashes?.SS ?? []);
@@ -277,7 +284,7 @@ const putDocument = async (config: SceneConfig, key: string, serialized: string)
   );
 };
 
-const deleteObjectQuietly = async (config: SceneConfig, key: string): Promise<void> => {
+export const deleteObjectQuietly = async (config: SceneConfig, key: string): Promise<void> => {
   try {
     await config.s3.send(new DeleteObjectCommand({ Bucket: config.bucketName, Key: key }));
   } catch (error) {
@@ -627,7 +634,9 @@ const unpublishScene = async (config: SceneConfig, userId: string, publishId: st
     throw error;
   }
 
-  await config.s3.send(new DeleteObjectCommand({ Bucket: config.bucketName, Key: publishedGlbKey(publishId) }));
+  await config.s3.send(new DeleteObjectCommand({ Bucket: config.bucketName, Key: publishedDocumentKey(publishId) }));
+  // A scene published before scenes were published whole has a GLB instead.
+  await deleteObjectQuietly(config, publishedGlbKey(publishId));
 };
 
 const deleteScene = async (config: SceneConfig, userId: string, sceneId: string): Promise<SceneApiResponse> => {
