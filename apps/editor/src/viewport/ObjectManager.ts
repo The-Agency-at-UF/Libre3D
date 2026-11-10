@@ -5,7 +5,7 @@ import type { SceneSource } from "./sceneSource";
 import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
 import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";
 import { pruneImportNodes, type PrunableNode } from "../utils/pruneImportHierarchy";
-import { takeParsedModel } from "../utils/importModel";
+import { takeParsedModel } from "../utils/parsedModelCache";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
 import { forgetBasePose, rememberBasePose } from "../utils/exportScene";
 import type { Pose } from "../animation/objectStates";
