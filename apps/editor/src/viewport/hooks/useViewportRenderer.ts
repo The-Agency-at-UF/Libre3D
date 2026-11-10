@@ -21,6 +21,7 @@ export function useViewportRenderer(
   onAfterRender?: () => void
 ) {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  // The FPS panel, while the HUD shows it (see the effect below); null otherwise.
   const statsRef    = useRef<Stats | null>(null);
 
   useEffect(() => {
@@ -35,18 +36,11 @@ export function useViewportRenderer(
     // KTX2 decoding in .glb imports (non-component code) needs the live renderer.
     const unexposeRenderer = exposeLiveRenderer(renderer);
 
-    const stats = new Stats();
-    stats.dom.style.position = "absolute";
-    stats.dom.style.top  = "10px";
-    stats.dom.style.left = "10px";
-    container.appendChild(stats.dom);
-    statsRef.current = stats;
-
     let animationFrameId = 0;
 
     const animate = () => {
       animationFrameId = window.requestAnimationFrame(animate);
-      stats.update();
+      statsRef.current?.update();
       if (onRender) onRender();
       // A gallery picture asked for since the last frame (thumbnailCapture.ts) is taken here,
       // before the normal render paints over it.
@@ -69,24 +63,43 @@ export function useViewportRenderer(
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
-      stats.dom.remove();
     };
     // Only scene/container matter for renderer lifecycle; camera is via ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [containerRef, scene]);
 
-  // Handle Stats visibility
+  // The FPS panel is built when the HUD setting asks for it and removed when it stops asking.
+  // Updating it draws on its own canvases every frame, which a hidden panel paid for too.
   useEffect(() => {
-    return useEditorStore.subscribe(
-      (state) => state.hudOverlay,
-      (hudOverlay) => {
-        if (statsRef.current) {
-          statsRef.current.dom.style.display = hudOverlay === "Stats" ? "block" : "none";
+    const removeStats = () => {
+      statsRef.current?.dom.remove();
+      statsRef.current = null;
+    };
+    const unsubscribe = useEditorStore.subscribe(
+      (state) => state.hudOverlay === "Stats",
+      (showStats) => {
+        if (!showStats) {
+          removeStats();
+          return;
         }
+        const canvas = rendererRef.current?.domElement;
+        if (statsRef.current || !canvas) return;
+        const stats = new Stats();
+        stats.dom.style.position = "absolute";
+        stats.dom.style.top  = "10px";
+        stats.dom.style.left = "10px";
+        // Right after the canvas, where it has always been in the container.
+        canvas.after(stats.dom);
+        statsRef.current = stats;
       },
       { fireImmediately: true }
     );
-  }, []);
+    return () => {
+      unsubscribe();
+      removeStats();
+    };
+    // After the effect above, which makes the renderer's canvas for the same container and scene.
+  }, [containerRef, scene]);
 
   return rendererRef;
 }
