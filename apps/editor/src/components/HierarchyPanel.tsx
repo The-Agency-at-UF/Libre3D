@@ -1,5 +1,6 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { memo, useState, useRef, useEffect, useMemo } from "react";
 import { useEditorStore, type Entity } from "../store/useEditorStore";
+import { useStableCallback } from "../hooks/useStableCallback";
 import {
   getChildren,
   getAncestorIds,
@@ -28,6 +29,7 @@ interface HierarchyItemProps {
   depth: number;
   hasChildren: boolean;
   isExpanded: boolean;
+  isSelected: boolean;
   isActive: boolean;
   isRenaming: boolean;
   dropIndicator: "onto" | "top" | "bottom" | null;
@@ -320,6 +322,7 @@ function HierarchyItem({
   depth,
   hasChildren,
   isExpanded,
+  isSelected,
   isActive,
   isRenaming,
   dropIndicator,
@@ -334,12 +337,11 @@ function HierarchyItem({
   onRequestRename,
   onFinishRename,
 }: HierarchyItemProps) {
-  const entity = useEditorStore((state) =>
-    state.entities.find((e) => e.id === entityId)
-  );
+  // Through the index: selectors run on every store write, so a search of `entities` here would
+  // cost every mounted row a pass over the scene each time.
+  const entity = useEditorStore((state) => getEntityIndex(state.entities).byId.get(entityId));
   // True when a locked ancestor locks this row; its own `locked` flag is kept.
   const inheritedLock = useEditorStore((state) => isLockedByAncestor(state.entities, entityId));
-  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const removeEntity = useEditorStore((state) => state.removeEntity);
   const toggleVisibility = useEditorStore((state) => state.toggleVisibility);
   const toggleLock = useEditorStore((state) => state.toggleLock);
@@ -367,7 +369,6 @@ function HierarchyItem({
 
   if (!entity) return null;
 
-  const isSelected = selectedEntityIds.includes(entity.id);
   const isLocked = entity.locked || inheritedLock;
 
   const handleDoubleClick = (e: React.MouseEvent) => {
@@ -511,8 +512,17 @@ function HierarchyItem({
   );
 }
 
+// What the panel renders: a row re-renders when its own entity, inherited lock, or props change,
+// not on every edit to the scene. That depends on the panel passing handlers that keep their
+// identity (`useStableCallback` below) and on `isSelected` coming in as a prop, so that a row
+// doesn't read the whole selection.
+const MemoizedHierarchyItem = memo(HierarchyItem);
+
 export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const entities = useEditorStore((state) => state.entities) ?? [];
+  // Each row gets `isSelected` from this set, so a click re-renders the rows whose answer changed.
+  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
+  const selectedIdSet = useMemo(() => new Set(selectedEntityIds), [selectedEntityIds]);
   const selectEntity = useEditorStore((state) => state.selectEntity);
   const selectEntities = useEditorStore((state) => state.selectEntities);
   const reparentEntities = useEditorStore((state) => state.reparentEntities);
@@ -550,7 +560,9 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const rowPitchRef = useRef(26);
   const [rowWindow, setRowWindow] = useState<{ start: number; end: number } | null>(null);
 
-  const toggleExpand = (id: string) => {
+  // The handlers passed to a row go through useStableCallback: rows are memoized, and a handler
+  // that was a new function on every render would re-render all of them on every edit.
+  const toggleExpand = useStableCallback((id: string) => {
     setCollapsedIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -560,7 +572,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       }
       return next;
     });
-  };
+  });
 
   const setSubtreeCollapsed = (id: string, collapsed: boolean) => {
     setCollapsedIds((prev) => {
@@ -752,11 +764,11 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     }
   };
 
-  const clearDrag = () => {
+  const clearDrag = useStableCallback(() => {
     draggedIdsRef.current = [];
     setDropTarget(null);
     cancelAutoExpand();
-  };
+  });
 
   // Hovering "onto" a collapsed branch expands it after a short dwell so the
   // user can dive into subtrees mid-drag (standard file-tree behavior).
@@ -863,7 +875,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     return { kind: "onto", targetId: row.id };
   };
 
-  const handleRowDragStart = (id: string, event: React.DragEvent) => {
+  const handleRowDragStart = useStableCallback((id: string, event: React.DragEvent) => {
     const state = useEditorStore.getState();
     const entity = state.entities.find((e) => e.id === id);
     if (!entity || isEffectivelyLocked(state.entities, id)) {
@@ -901,9 +913,9 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       event.dataTransfer.setDragImage(ghost, 12, 12);
       setTimeout(() => ghost.remove(), 0); // only needs to exist for the capture
     }
-  };
+  });
 
-  const handleRowDragOver = (id: string, event: React.DragEvent) => {
+  const handleRowDragOver = useStableCallback((id: string, event: React.DragEvent) => {
     event.stopPropagation();
     if (draggedIdsRef.current.length === 0) return; // foreign drag (files, etc.)
 
@@ -925,9 +937,9 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     } else {
       cancelAutoExpand();
     }
-  };
+  });
 
-  const handleRowDrop = (id: string, event: React.DragEvent) => {
+  const handleRowDrop = useStableCallback((id: string, event: React.DragEvent) => {
     event.preventDefault();
     event.stopPropagation();
     const ids = draggedIdsRef.current;
@@ -943,7 +955,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       }
     }
     clearDrag();
-  };
+  });
 
   // Empty space below the rows: move to the end of the scene root.
   const handleContainerDragOver = (event: React.DragEvent) => {
@@ -978,7 +990,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   // Right-clicking an unselected row selects it first (Blender/Spline
   // behavior); right-clicking inside the selection keeps it, so menu actions
   // operate on the whole multi-selection.
-  const handleRowContextMenu = (id: string, event: React.MouseEvent) => {
+  const handleRowContextMenu = useStableCallback((id: string, event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
     if (!useEditorStore.getState().selectedEntityIds.includes(id)) {
@@ -987,9 +999,9 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       setAnchorId(id);
     }
     setContextMenu({ x: event.clientX, y: event.clientY, targetId: id });
-  };
+  });
 
-  const handleRowClick = (id: string, event: React.MouseEvent) => {
+  const handleRowClick = useStableCallback((id: string, event: React.MouseEvent) => {
     if (event.shiftKey && anchorId && selectRange(anchorId, id)) {
       setActiveId(id);
       return;
@@ -1001,7 +1013,14 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     }
     setActiveId(id);
     setAnchorId(id);
-  };
+  });
+
+  const requestRename = useStableCallback((id: string) => {
+    setRenamingId(id);
+    setActiveId(id);
+  });
+
+  const finishRename = useStableCallback(() => setRenamingId(null));
 
   // Outliner-scoped keys — deliberately NOT in the global useHotkeys: they
   // should only fire while the panel (or a row inside it) has focus.
@@ -1104,12 +1123,13 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
           <div style={{ height: rowWindow.start * rowPitchRef.current - 2, flexShrink: 0 }} aria-hidden="true" />
         )}
         {(rowWindow ? flatRows.slice(rowWindow.start, rowWindow.end) : flatRows).map((row) => (
-          <HierarchyItem
+          <MemoizedHierarchyItem
             key={row.id}
             entityId={row.id}
             depth={row.depth}
             hasChildren={row.hasChildren}
             isExpanded={row.isExpanded}
+            isSelected={selectedIdSet.has(row.id)}
             isActive={row.id === activeId}
             isRenaming={row.id === renamingId}
             dropIndicator={
@@ -1127,11 +1147,8 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
             onRowDragOver={handleRowDragOver}
             onRowDrop={handleRowDrop}
             onRowDragEnd={clearDrag}
-            onRequestRename={(id) => {
-              setRenamingId(id);
-              setActiveId(id);
-            }}
-            onFinishRename={() => setRenamingId(null)}
+            onRequestRename={requestRename}
+            onFinishRename={finishRename}
           />
         ))}
         {rowWindow && rowWindow.end < flatRows.length && (
@@ -1146,10 +1163,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
         <HierarchyContextMenu
           menu={contextMenu}
           onClose={() => setContextMenu(null)}
-          onRename={(id) => {
-            setRenamingId(id);
-            setActiveId(id);
-          }}
+          onRename={requestRename}
           onBatchRename={() => setBatchRenameOpen(true)}
         />
       )}
