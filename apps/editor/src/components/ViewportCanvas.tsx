@@ -159,15 +159,6 @@ export function ViewportCanvas() {
 
   const depthAnchorRef = useViewportDepthGizmo(depthFrameRef, cameraRef, rendererRef, scene, objectManager, transformControlsRef);
 
-  // -- Proxy Setup --
-  useEffect(() => {
-    const proxy = selectionProxyRef.current;
-    scene.add(proxy);
-    return () => {
-      scene.remove(proxy);
-    };
-  }, [scene]);
-
   // -- Multi-select Drag Handlers --
   // Only the selection's move roots are driven by the proxy. A selected
   // descendant of another selected entity already follows its parent through
