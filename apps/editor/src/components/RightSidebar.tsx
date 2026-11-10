@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useShallow } from "zustand/shallow";
 import { useEditorStore } from "../store/useEditorStore";
 import { InspectorTopbar } from "./inspector/InspectorTopbar";
 import { StatesPanel } from "./inspector/StatesPanel";
@@ -7,8 +8,8 @@ import { EditEventPanel } from "./inspector/EditEventPanel";
 import { TransformPanel } from "./inspector/TransformPanel";
 import { PathPanel } from "./inspector/PathPanel";
 import { ShapePanel } from "./inspector/ShapePanel";
-import { getDescendantIds } from "../scene/entityIndex";
 import { MaterialsPanel } from "./inspector/MaterialsPanel";
+import { inspectSelection } from "./inspector/inspectedSelection";
 import { ScenePanel } from "./inspector/ScenePanel";
 import { CameraPanel } from "./inspector/CameraPanel";
 import { PlayCameraPanel } from "./inspector/PlayCameraPanel";
@@ -24,26 +25,25 @@ export interface RightSidebarProps {
 
 export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSidebarProps) {
   const viewportZoom = useEditorStore((state) => state.viewportZoom);
-  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
-  const entities = useEditorStore((state) => state.entities) ?? [];
+  const hasSelection = useEditorStore((state) => state.selectedEntityIds.length > 0);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
   const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
   const events = useEditorStore((state) => state.animation.events);
-
-  const selectedEntities = entities.filter((e) => selectedEntityIds.includes(e.id));
-  // The Shape panel acts on selected shapes and on the shapes in selected groups (an SVG import
-  // selects its group), when nothing else is selected.
-  const reachedIds = new Set([...selectedEntityIds, ...selectedEntityIds.flatMap((id) => getDescendantIds(entities, id))]);
-  const reachedShapes = selectedEntities.every((e) => e.type === "shape" || e.type === "group")
-    ? entities.filter((e) => e.type === "shape" && reachedIds.has(e.id))
-    : [];
+  // Two facts about the selection, not the selected entities themselves: an edit to a selected
+  // object then re-renders `SelectionPanels` and leaves the rest of the sidebar alone.
+  const hasSelectedEntities = useEditorStore(
+    (state) => inspectSelection(state.entities, state.selectedEntityIds).selected.length > 0,
+  );
+  const onlySelectedId = useEditorStore((state) => {
+    const { selected } = inspectSelection(state.entities, state.selectedEntityIds);
+    return selected.length === 1 ? selected[0].id : null;
+  });
 
   // The event open in the Edit Event panel. It shows only while its object is the one selected, and
   // closes when that changes or the event is gone (deleted, undone).
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const editingEvent = editingEventId ? events[editingEventId] : undefined;
-  const showEventEditor =
-    !!editingEvent && selectedEntities.length === 1 && selectedEntities[0].id === editingEvent.ownerId;
+  const showEventEditor = !!editingEvent && onlySelectedId === editingEvent.ownerId;
   const closeEventEditor = useCallback(() => setEditingEventId(null), []);
 
   useEffect(() => {
@@ -63,7 +63,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
         setActiveTab={setActiveTab}
         canShare={canShare}
         viewportZoom={viewportZoom}
-        hasSelection={selectedEntityIds.length > 0}
+        hasSelection={hasSelection}
       />
 
       {/* SCROLLABLE BODY. View only: the panels that edit the scene are disabled; the
@@ -78,18 +78,8 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
           <ScenePanel />
         </fieldset>
 
-        {selectedEntities.length > 0 ? (
-          <>
-            {/* Outside the fieldset: a view-only scene can still view states and events (they disable their own edits). */}
-            {selectedEntities.length === 1 && <StatesPanel entity={selectedEntities[0]} />}
-            {selectedEntities.length === 1 && <EventsPanel entity={selectedEntities[0]} onEditEvent={setEditingEventId} />}
-            <fieldset className="inspector-fieldset" disabled={isReadOnly}>
-              <TransformPanel selectedEntities={selectedEntities} />
-              {selectedEntities.every((entity) => entity.type === "path") && <PathPanel entities={selectedEntities} />}
-              {reachedShapes.length > 0 && <ShapePanel shapes={reachedShapes} selectedIds={selectedEntityIds} />}
-              <MaterialsPanel selectedEntities={selectedEntities} />
-            </fieldset>
-          </>
+        {hasSelectedEntities ? (
+          <SelectionPanels isReadOnly={isReadOnly} onEditEvent={setEditingEventId} />
         ) : (
           <>
             <CameraPanel />
@@ -103,5 +93,43 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
 
       {showEventEditor && <EditEventPanel event={editingEvent} onClose={closeEventEditor} />}
     </aside>
+  );
+}
+
+/**
+ * The panels for the selected entities. This component, not `RightSidebar`, reads them from the
+ * store, so it is the only part of the sidebar that re-renders while a selected object is edited.
+ * The shallow comparison keeps it from re-rendering when some other entity changes: the lists are
+ * new arrays then, holding the same objects.
+ */
+function SelectionPanels({
+  isReadOnly,
+  onEditEvent,
+}: {
+  isReadOnly: boolean;
+  onEditEvent: (eventId: string) => void;
+}) {
+  const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
+  const selectedEntities = useEditorStore(
+    useShallow((state) => inspectSelection(state.entities, state.selectedEntityIds).selected),
+  );
+  // The Shape panel acts on selected shapes and on the shapes in selected groups (an SVG import
+  // selects its group), when nothing else is selected.
+  const reachedShapes = useEditorStore(
+    useShallow((state) => inspectSelection(state.entities, state.selectedEntityIds).reachedShapes),
+  );
+
+  return (
+    <>
+      {/* Outside the fieldset: a view-only scene can still view states and events (they disable their own edits). */}
+      {selectedEntities.length === 1 && <StatesPanel entity={selectedEntities[0]} />}
+      {selectedEntities.length === 1 && <EventsPanel entity={selectedEntities[0]} onEditEvent={onEditEvent} />}
+      <fieldset className="inspector-fieldset" disabled={isReadOnly}>
+        <TransformPanel selectedEntities={selectedEntities} />
+        {selectedEntities.every((entity) => entity.type === "path") && <PathPanel entities={selectedEntities} />}
+        {reachedShapes.length > 0 && <ShapePanel shapes={reachedShapes} selectedIds={selectedEntityIds} />}
+        <MaterialsPanel selectedEntities={selectedEntities} />
+      </fieldset>
+    </>
   );
 }
