@@ -9,7 +9,7 @@ import type {
   LightingLayer,
   LightingModel,
   MaterialLayer,
-} from "../store/useEditorStore";
+} from "../scene/types";
 
 // Turns a parsed glTF THREE.Material into the editable layer stack this codebase
 // already uses for primitives (Color + Lighting, plus an Image layer per texture

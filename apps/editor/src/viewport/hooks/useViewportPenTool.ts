@@ -3,7 +3,7 @@ import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { useEditorStore, type Entity, type PenToolState } from "../../store/useEditorStore";
-import { isEffectivelyLocked } from "../../store/entityIndex";
+import { isEffectivelyLocked } from "../../scene/entityIndex";
 import { getEntityWorldMatrix } from "../../utils/entityTransforms";
 import type { PathData, PathPoint } from "../../paths/pathGeometry";
 import {

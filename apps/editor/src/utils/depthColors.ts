@@ -14,7 +14,7 @@
  */
 
 import * as THREE from "three";
-import type { DepthLayer, MaterialLayer } from "../store/useEditorStore";
+import type { DepthLayer, MaterialLayer } from "../scene/types";
 
 export const MAX_DEPTH_STOPS = 10;
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
 import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore";
-import { filterMoveRoots } from "../store/entityIndex";
+import { filterMoveRoots } from "../scene/entityIndex";
 import { getViewedState, resolveState, unwrapRotation, type StateValues } from "../animation/objectStates";
 import { SceneManager } from "../viewport/SceneManager";
 import { createRoomEnvironment } from "../viewport/sceneEnvironment";

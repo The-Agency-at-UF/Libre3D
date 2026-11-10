@@ -1,4 +1,5 @@
-import type { EditorState, Entity, MaterialLayer } from "../store/useEditorStore";
+import type { Entity, MaterialLayer } from "../scene/types";
+import type { Vec3 } from "../scene/vec3";
 
 /**
  * What ObjectManager reads and writes besides the entities each sync hands it. In the editor that's
@@ -17,6 +18,9 @@ export interface SceneSource {
   loadTexture(assetId: string): Promise<Blob | null>;
   /** Editable layers derived from an imported mesh's own material, for a mesh that had none. */
   setMaterialLayers(entityId: string, layers: MaterialLayer[]): void;
-  /** An import's empty wrapper nodes collapsed after the fact (utils/pruneImportHierarchy.ts). */
-  applyHierarchyPrune: EditorState["applyHierarchyPrune"];
+  /**
+   * An import's empty wrapper nodes collapsed after the fact (utils/pruneImportHierarchy.ts): the
+   * entities to remove, and the parent and transform each kept one takes over from them.
+   */
+  applyHierarchyPrune(removedIds: Set<string>, updates: Map<string, { position: Vec3; rotation: Vec3; scale: Vec3; parentId: string | null }>): void;
 }

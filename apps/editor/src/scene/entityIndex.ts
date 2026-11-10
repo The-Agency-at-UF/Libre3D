@@ -1,4 +1,4 @@
-import type { Entity } from "./useEditorStore";
+import type { Entity } from "./types";
 
 interface EntityIndex {
   byId: Map<string, Entity>;

@@ -15,6 +15,7 @@
  */
 
 import * as THREE from "three";
+import { cloneVector } from "../scene/vec3";
 
 export interface PathPoint {
   position: [number, number, number];
@@ -56,8 +57,6 @@ const MIN_LENGTH = 1e-6; // shorter is a point (Bézier sums aren't exactly 0 fo
 const BOUNDS_SAMPLES = 32; // per segment, where pathsCenter measures a curve
 
 export const DEFAULT_STROKE: PathStroke = { radius: 0.12, caps: "round" };
-
-const cloneVector = (vector: [number, number, number]): [number, number, number] => [vector[0], vector[1], vector[2]];
 
 const clonePathPoint = (point: PathPoint): PathPoint => ({
   position: cloneVector(point.position),

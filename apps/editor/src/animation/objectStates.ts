@@ -15,6 +15,7 @@
  * matrix math for states whose object changes parent is in reparentStates.ts.
  */
 
+import { cloneVector } from "../scene/vec3";
 import { createId } from "../utils/createId";
 import type { EntityTRS } from "../utils/entityTransforms";
 import type { SceneEvent } from "./events";
@@ -55,8 +56,6 @@ export type Trim = Pick<StateValues, "trimStart" | "trimEnd">;
 export type Pose = EntityTRS & Trim;
 
 const FULL_TURN = Math.PI * 2;
-
-const cloneVector = (vector: [number, number, number]): [number, number, number] => [vector[0], vector[1], vector[2]];
 
 export const createEmptyAnimation = (): SceneAnimation => ({ states: {}, events: {} });
 

@@ -7,7 +7,7 @@ import { EditEventPanel } from "./inspector/EditEventPanel";
 import { TransformPanel } from "./inspector/TransformPanel";
 import { PathPanel } from "./inspector/PathPanel";
 import { ShapePanel } from "./inspector/ShapePanel";
-import { getDescendantIds } from "../store/entityIndex";
+import { getDescendantIds } from "../scene/entityIndex";
 import { MaterialsPanel } from "./inspector/MaterialsPanel";
 import { ScenePanel } from "./inspector/ScenePanel";
 import { CameraPanel } from "./inspector/CameraPanel";

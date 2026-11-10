@@ -1,15 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Entity, MaterialLayer } from "../store/useEditorStore";
+import { DEFAULT_CAMERA_PROFILE, initialSceneDefaults } from "../scene/defaults";
+import type { Entity, MaterialLayer } from "../scene/types";
 import { stubBrowserGlobals } from "../testing/browserStubs";
 import { createPublishedSceneSource } from "./publishedSceneSource";
-import { VIEWER_DEFAULTS, viewerCamera, viewerSceneSettings } from "./SceneViewer";
-
-// The editor's defaults, from its store, which reads browser storage as it loads.
-const loadEditorDefaults = async () => {
-  vi.resetModules();
-  const { initialSceneDefaults, DEFAULT_CAMERA_PROFILE } = await import("../store/useEditorStore");
-  return { initialSceneDefaults, DEFAULT_CAMERA_PROFILE };
-};
+import { viewerCamera, viewerSceneSettings } from "./SceneViewer";
 
 const entity = (id: string): Entity => ({
   id,
@@ -30,25 +24,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// The defaults are scene/defaults.ts's, the ones the editor's store starts a scene with.
 describe("the viewer's defaults", () => {
-  // The viewer doesn't load the store that defines the editor's defaults, so it keeps its own copy.
-  it("are the editor's, for what a published scene uses", async () => {
-    const { initialSceneDefaults, DEFAULT_CAMERA_PROFILE } = await loadEditorDefaults();
-    expect(VIEWER_DEFAULTS).toEqual({
-      bgColor: initialSceneDefaults.bgColor,
-      fogEnabled: initialSceneDefaults.fogEnabled,
-      lightIntensity: initialSceneDefaults.lights.intensity,
-      environment: initialSceneDefaults.environment,
-      camera: {
-        position: DEFAULT_CAMERA_PROFILE.position,
-        target: DEFAULT_CAMERA_PROFILE.target,
-        fov: DEFAULT_CAMERA_PROFILE.fov,
-        near: DEFAULT_CAMERA_PROFILE.near,
-        far: DEFAULT_CAMERA_PROFILE.far,
-      },
-    });
-  });
-
   it("fill what a scene doesn't hold, under the settings it does, without the editor's grid", () => {
     expect(viewerSceneSettings({ bgColor: "#c7dfff", environment: { intensity: 2 } })).toMatchObject({
       bgColor: "#c7dfff",
@@ -57,18 +34,24 @@ describe("the viewer's defaults", () => {
       environment: { enabled: true, intensity: 2 },
       lights: { intensity: 0.75 },
     });
-    expect(viewerSceneSettings(undefined)).toMatchObject({ bgColor: "#0b1020", showGrid: false });
+    expect(viewerSceneSettings(undefined)).toMatchObject({
+      bgColor: initialSceneDefaults.bgColor,
+      fogEnabled: initialSceneDefaults.fogEnabled,
+      showGrid: false,
+      environment: initialSceneDefaults.environment,
+      lights: { intensity: initialSceneDefaults.lights.intensity },
+    });
   });
 
-  it("start from the scene's active camera with its Play setting, or the default camera", async () => {
-    const { DEFAULT_CAMERA_PROFILE } = await loadEditorDefaults();
+  it("start from the scene's active camera with its Play setting, or the default camera", () => {
     const active = { ...DEFAULT_CAMERA_PROFILE, id: "closeup", name: "Close", position: [1, 2, 3] as [number, number, number], play: { mode: "softOrbit" as const } };
 
     expect(viewerCamera({ entities: [], cameraProfiles: { personal: DEFAULT_CAMERA_PROFILE, closeup: active }, activeProfileId: "closeup" })).toMatchObject({
       position: [1, 2, 3],
       play: { mode: "softOrbit" },
     });
-    expect(viewerCamera({ entities: [] })).toMatchObject(VIEWER_DEFAULTS.camera);
+    const { position, target, fov, near, far } = DEFAULT_CAMERA_PROFILE;
+    expect(viewerCamera({ entities: [] })).toEqual({ position, target, fov, near, far });
   });
 });
 

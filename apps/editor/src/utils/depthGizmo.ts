@@ -9,7 +9,7 @@
  */
 
 import * as THREE from "three";
-import type { DepthLayer } from "../store/useEditorStore";
+import type { DepthLayer } from "../scene/types";
 
 type Vector = [number, number, number];
 
