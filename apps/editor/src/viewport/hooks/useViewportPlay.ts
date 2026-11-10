@@ -4,6 +4,7 @@ import { resolveState } from "../../animation/objectStates";
 import { SceneRuntime } from "../../animation/sceneRuntime";
 import { previewTiming, type TransitionAction } from "../../animation/transitions";
 import { selectViewedObjectState, useEditorStore, type EditorState } from "../../store/useEditorStore";
+import { getEntityIndex } from "../../scene/entityIndex";
 import type { ObjectManager } from "../ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
 import { pickEntityAt } from "../pickEntity";
@@ -93,8 +94,9 @@ export function useViewportPlay(
     const endSession = () => {
       if (!session) return;
       const store = useEditorStore.getState();
+      const { byId } = getEntityIndex(store.entities);
       session.runtime.poses().forEach((_pose, entityId) => {
-        const entity = store.entities.find((candidate) => candidate.id === entityId);
+        const entity = byId.get(entityId);
         if (entity) objectManager.applyPose(entityId, resolveState(entity, selectViewedObjectState(store, entityId)));
       });
       if (session.view) {
