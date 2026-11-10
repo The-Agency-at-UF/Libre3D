@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { PathMesh } from "../paths/PathMesh";
+import { showBasePoses } from "../viewport/basePoses";
+import { hideEditorOnlyObjects } from "../viewport/editorOnly";
 
 type GLTFExporterResult = ArrayBuffer | Blob | string | Record<string, unknown>;
 
@@ -39,92 +41,6 @@ export const createDownload = (content: BlobPart, fileName: string, mimeType: st
   anchor.click();
   anchor.remove();
   window.URL.revokeObjectURL(objectUrl);
-};
-
-// The live scene the exporter reads is the *editor's* scene, so it also holds
-// viewport furniture the user never asked to publish: the grid, directional-light
-// helpers, selection outlines, the multi-select proxy and the transform gizmo.
-// Left in, they end up as line/mesh nodes in every exported and published GLB.
-// The light helper is the worst of them — three sets matrixAutoUpdate = false on
-// it and drives it by matrix, so with `trs: true` the exporter reads its untouched
-// position/quaternion/scale and writes the helper to the origin with no rotation,
-// which is why it looked like the light moved between the editor and preview.
-//
-// Objects opt out by tagging themselves `userData.editorOnly` at creation. The
-// export already runs with `onlyVisible: true`, so hiding them for the duration of
-// the parse is enough to keep them out without touching the scene graph. The gallery
-// thumbnail (viewport/thumbnailCapture.ts) hides them the same way for its render, and
-// so does every Play frame (viewport/hooks/useViewportRenderer.ts).
-export const hideEditorOnlyObjects = (scene: THREE.Scene): (() => void) => {
-  const hidden: THREE.Object3D[] = [];
-
-  scene.traverse((object) => {
-    if (object.userData?.editorOnly && object.visible) {
-      object.visible = false;
-      hidden.push(object);
-    }
-  });
-
-  return () => {
-    for (const object of hidden) {
-      object.visible = true;
-    }
-  };
-};
-
-// The editor shows the selected object in the state being viewed by moving its Three object
-// (ObjectManager.applyPose), so clicks, the selection outline, and the gizmo all follow it. Exports
-// and the gallery thumbnail read that same scene and show every object in Base: each posed object's
-// Base transform (and a path's Base trim) is kept here and put back for them. A WeakMap rather than
-// userData, which the exporter writes into the file.
-interface BasePose {
-  position: THREE.Vector3;
-  quaternion: THREE.Quaternion;
-  scale: THREE.Vector3;
-  trim?: [number, number];
-}
-
-const basePoses = new WeakMap<THREE.Object3D, BasePose>();
-
-/** Call before posing an object that's still in Base. */
-export const rememberBasePose = (object: THREE.Object3D): void => {
-  if (basePoses.has(object)) return;
-  basePoses.set(object, {
-    position: object.position.clone(),
-    quaternion: object.quaternion.clone(),
-    scale: object.scale.clone(),
-    ...(object instanceof PathMesh ? { trim: object.getTrim() } : null),
-  });
-};
-
-/** Call when an object is put back in Base. */
-export const forgetBasePose = (object: THREE.Object3D): void => {
-  basePoses.delete(object);
-};
-
-/** Puts every posed object in Base; returns what puts them back. */
-export const showBasePoses = (scene: THREE.Scene): (() => void) => {
-  const restores: (() => void)[] = [];
-
-  scene.traverse((object) => {
-    const base = basePoses.get(object);
-    if (!base) return;
-
-    const posed = { position: object.position.clone(), quaternion: object.quaternion.clone(), scale: object.scale.clone() };
-    object.position.copy(base.position);
-    object.quaternion.copy(base.quaternion);
-    object.scale.copy(base.scale);
-    const path = object instanceof PathMesh && base.trim ? { mesh: object, posedTrim: object.getTrim() } : null;
-    path?.mesh.setTrim(...base.trim!);
-    restores.push(() => {
-      object.position.copy(posed.position);
-      object.quaternion.copy(posed.quaternion);
-      object.scale.copy(posed.scale);
-      path?.mesh.setTrim(...path.posedTrim);
-    });
-  });
-
-  return () => restores.forEach((restore) => restore());
 };
 
 // A path is trimmed by its tube's draw range (paths/PathMesh.ts), which GLTFExporter ignores (three

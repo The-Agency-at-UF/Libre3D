@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
 import Stats from "three/examples/jsm/libs/stats.module.js";
 import { hasPendingThumbnail, renderPendingThumbnail } from "../thumbnailCapture";
-import { hideEditorOnlyObjects } from "../../utils/exportScene";
+import { hideEditorOnlyObjects } from "../editorOnly";
 import { createSceneRenderer, exposeLiveRenderer } from "../rendererSettings";
 
 export function useViewportRenderer(

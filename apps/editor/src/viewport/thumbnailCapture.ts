@@ -13,7 +13,8 @@
 import type * as THREE from "three";
 
 import { useEditorStore } from "../store/useEditorStore";
-import { hideEditorOnlyObjects, showBasePoses } from "../utils/exportScene";
+import { showBasePoses } from "./basePoses";
+import { hideEditorOnlyObjects } from "./editorOnly";
 
 // The gallery card's 16:9 thumbnail at about twice its displayed size.
 const THUMBNAIL_WIDTH = 480;
