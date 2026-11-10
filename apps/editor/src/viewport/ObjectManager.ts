@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { Entity, MaterialLayer, ColorLayer, LightingLayer, ImageLayer, ImageSlot } from "../scene/types";
-import { isEffectivelyLocked } from "../scene/entityIndex";
+import { getEntityIndex, isEffectivelyLocked } from "../scene/entityIndex";
 import type { SceneSource } from "./sceneSource";
 import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
 import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";
@@ -260,10 +260,10 @@ export class ObjectManager {
   private assignLoadedTextureToMeshes(textureAssetId: string): void {
     const texture = this.textureCache.get(textureAssetId);
     if (!texture) return;
-    const entities = this.source.getEntities();
+    const { byId } = getEntityIndex(this.source.getEntities());
     for (const [entityId, obj] of this.meshMap) {
       if (!(obj instanceof THREE.Mesh)) continue;
-      const layers = entities.find((entity) => entity.id === entityId)?.materialLayers;
+      const layers = byId.get(entityId)?.materialLayers;
       if (!layers) continue;
       const material = obj.material as THREE.Material;
       let changed = false;
@@ -305,10 +305,10 @@ export class ObjectManager {
   private async backfillMaterialLayers(
     resolved: Array<{ entityId: string; object: THREE.Object3D }>,
   ): Promise<void> {
-    const entities = this.source.getEntities();
+    const { byId } = getEntityIndex(this.source.getEntities());
     const pending = resolved.filter(({ entityId, object }) => {
       if (!(object instanceof THREE.Mesh)) return false;
-      return !entities.find((entity) => entity.id === entityId)?.materialLayers;
+      return !byId.get(entityId)?.materialLayers;
     });
     if (pending.length === 0) return;
 
@@ -994,8 +994,11 @@ export class ObjectManager {
   private async reattachMissingImportNodes(rootEntityId: string, missingIds: string[]): Promise<void> {
     this.hydratingRootIds.add(rootEntityId);
     try {
+      // The entities as they are now, before the model loads: the rest of this pass reads this
+      // snapshot (and its index), as it did when it searched the array.
       const entities = this.source.getEntities();
-      const rootEntity = entities.find((entity) => entity.id === rootEntityId);
+      const { byId } = getEntityIndex(entities);
+      const rootEntity = byId.get(rootEntityId);
       const rootObj = this.meshMap.get(rootEntityId);
       if (!rootEntity?.assetId || !rootObj) return;
 
@@ -1033,9 +1036,18 @@ export class ObjectManager {
       // registered in meshMap) before any of its missing children are processed,
       // so a whole missing subtree — not just a single leaf — resolves correctly.
       const pending = missingIds
-        .map((id) => entities.find((entity) => entity.id === id))
+        .map((id) => byId.get(id))
         .filter((entity): entity is Entity => !!entity?.nodePath)
         .sort((a, b) => a.nodePath!.length - b.nodePath!.length);
+
+      // This import's entities by node path (the first one, where two share a path), to find each
+      // missing node's parent without searching every entity per node.
+      const entityIdByNodePath = new Map<string, string>();
+      for (const candidate of entities) {
+        if (candidate.rootEntityId !== rootEntityId) continue;
+        const pathKey = nodePathKey(candidate.nodePath ?? []);
+        if (!entityIdByNodePath.has(pathKey)) entityIdByNodePath.set(pathKey, candidate.id);
+      }
 
       const resolvedObjects: Array<{ entityId: string; object: THREE.Object3D }> = [];
 
@@ -1048,14 +1060,7 @@ export class ObjectManager {
         // empty parent path means it's a direct child of gltf.scene, i.e. the
         // root itself.
         const parentPath = entity.nodePath!.slice(0, -1);
-        const parentEntityId =
-          parentPath.length === 0
-            ? rootEntityId
-            : entities.find(
-              (candidate) =>
-                candidate.rootEntityId === rootEntityId &&
-                nodePathKey(candidate.nodePath ?? []) === nodePathKey(parentPath),
-            )?.id;
+        const parentEntityId = parentPath.length === 0 ? rootEntityId : entityIdByNodePath.get(nodePathKey(parentPath));
         const parentObj = parentEntityId ? this.meshMap.get(parentEntityId) : undefined;
         if (!parentObj) continue;
 
@@ -1076,7 +1081,7 @@ export class ObjectManager {
       }
 
       for (const { entityId, object } of resolvedObjects) {
-        const entity = entities.find((candidate) => candidate.id === entityId)!;
+        const entity = byId.get(entityId)!;
         this.syncEntityToSceneObject(object, entity, false);
         if (object instanceof THREE.Mesh) {
           const material = Array.isArray(object.material) ? object.material[0] : object.material;
