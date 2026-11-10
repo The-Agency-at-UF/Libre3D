@@ -1830,3 +1830,10 @@ if (!useEditorStore.persist.hasHydrated()) {
   void useEditorStore.persist.rehydrate();
   useEditorStore.temporal.getState().clear();
 }
+
+// Dev server only. A hot update of this module, or of anything it imports, would hand the open
+// editor a new store holding the starter scene while a cloud scene is still open, and autosave
+// would save that over the scene. Reloading the page instead reopens the scene from the cloud.
+if (import.meta.hot) {
+  import.meta.hot.accept(() => window.location.reload());
+}
