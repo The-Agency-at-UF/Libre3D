@@ -86,9 +86,10 @@ export function EditorLayout({
   const [publishId, setPublishId] = useState<string | null>(publishing?.initialPublishId ?? null);
   const setEditorState = useEditorStore((state) => state.setEditorState);
   const duplicateEntity = useEditorStore((state) => state.duplicateEntity);
-  const sceneSettings = useEditorStore((state) => state.sceneSettings);
+  // Only this flag, not all of `sceneSettings`: a background colour drag would otherwise re-render
+  // the whole editor shell on every step.
+  const showAxisGuides = useEditorStore((state) => state.sceneSettings.showAxisGuides === true);
   const updateSceneSettings = useEditorStore((state) => state.updateSceneSettings);
-  const showAxisGuides = sceneSettings.showAxisGuides === true;
   const handleToggleAxisGuides = () => updateSceneSettings({ showAxisGuides: !showAxisGuides });
 
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
