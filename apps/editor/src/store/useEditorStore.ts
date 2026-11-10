@@ -3,7 +3,7 @@ import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand"
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
 import { shallow } from "zustand/shallow";
-import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "../scene/entityIndex";
+import { getDescendantIds, getChildren, getEntityIndex, filterMoveRoots, canReparentEntities } from "../scene/entityIndex";
 import type { SceneContent, StoredSceneContent } from "../utils/sceneDocument";
 import {
   getEntityWorldMatrix,
@@ -480,12 +480,13 @@ export const useEditorStore = create<EditorState>()(
           },
           duplicateEntity: (ids) => {
             set((state) => {
+              const { byId } = getEntityIndex(state.entities);
               const requestedRootIds = new Set(ids);
               const cloneOrder: string[] = [];
               const seen = new Set<string>();
 
               ids.forEach((id) => {
-                if (!state.entities.some((e) => e.id === id)) return;
+                if (!byId.has(id)) return;
                 if (!seen.has(id)) {
                   seen.add(id);
                   cloneOrder.push(id);
@@ -510,7 +511,7 @@ export const useEditorStore = create<EditorState>()(
               );
 
               const newEntities: Entity[] = cloneOrder.map((id) => {
-                const original = state.entities.find((e) => e.id === id)!;
+                const original = byId.get(id)!;
                 const isRequestedRoot = requestedRootIds.has(id);
                 const newParentId = original.parentId ? idMap.get(original.parentId) ?? original.parentId : original.parentId;
                 const newRootEntityId = original.rootEntityId ? idMap.get(original.rootEntityId) ?? original.rootEntityId : original.rootEntityId;
@@ -581,11 +582,12 @@ export const useEditorStore = create<EditorState>()(
                 return state;
               }
 
+              const { byId } = getEntityIndex(state.entities);
               const parentWorld = newParentId ? getEntityWorldMatrix(state.entities, newParentId) : null;
               const solvedById = new Map<string, EntityTRS>();
               const parentChanges: ParentChange[] = [];
               for (const id of moveRoots) {
-                const entity = state.entities.find((e) => e.id === id)!;
+                const entity = byId.get(id)!;
                 // Same-parent moves are pure sibling reorders — keep the stored
                 // TRS bit-identical instead of a solve/decompose round-trip.
                 if ((entity.parentId ?? null) === (newParentId ?? null)) continue;
@@ -596,7 +598,7 @@ export const useEditorStore = create<EditorState>()(
               const movingSet = new Set(moveRoots);
               const remaining = state.entities.filter((entity) => !movingSet.has(entity.id));
               const moved: Entity[] = moveRoots.map((id) => {
-                const original = state.entities.find((e) => e.id === id)!;
+                const original = byId.get(id)!;
                 const solved = solvedById.get(id);
                 return {
                   ...original,
@@ -633,9 +635,8 @@ export const useEditorStore = create<EditorState>()(
               const moveRoots = filterMoveRoots(state.entities, ids);
               if (moveRoots.length === 0) return state;
 
-              const parentIds = new Set(
-                moveRoots.map((id) => state.entities.find((e) => e.id === id)?.parentId ?? null),
-              );
+              const { byId } = getEntityIndex(state.entities);
+              const parentIds = new Set(moveRoots.map((id) => byId.get(id)?.parentId ?? null));
               const groupParentId = parentIds.size === 1 ? [...parentIds][0] : null;
               // The members end up under the new group, whose own parent is
               // groupParentId — legality (cycles, imported-model boundary) is
