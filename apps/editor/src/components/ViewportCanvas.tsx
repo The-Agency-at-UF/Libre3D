@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
 import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore";
-import { filterMoveRoots } from "../scene/entityIndex";
+import { filterMoveRoots, getEntityIndex } from "../scene/entityIndex";
 import { getViewedState, resolveState, unwrapRotation, type StateValues } from "../animation/objectStates";
 import { SceneManager } from "../viewport/SceneManager";
 import { createRoomEnvironment } from "../viewport/sceneEnvironment";
@@ -209,11 +209,11 @@ export function ViewportCanvas() {
         proxy.updateMatrixWorld(true);
         const proxyMat = proxy.matrixWorld;
         const store = useEditorStore.getState();
-        const { entities } = store;
+        const { byId } = getEntityIndex(store.entities);
         getDragRootIds().forEach(id => {
           const localMat = initialOffsetsRef.current.get(id);
           const obj = objectManager.getObject(id);
-          const entity = entities.find(e => e.id === id);
+          const entity = byId.get(id);
           if (localMat && obj && entity) {
             const newWorldMat = proxyMat.clone().multiply(localMat);
             // entity.position/rotation/scale are LOCAL to the object's parent —
@@ -319,13 +319,18 @@ export function ViewportCanvas() {
 
     objectManager.syncMeshes(entities, transformTarget, isDragging);
 
+    // This effect runs on every edit, and the loops below visit every object: an entity is looked up
+    // in the index and the selection in a set, not by searching the arrays once per object.
+    const { byId } = getEntityIndex(entities);
+    const selectedIdSet = new Set(selectedEntityIds);
+
     // Objects shown in one of their states (syncMeshes just put everything in Base). Not the one the
     // gizmo is dragging: the drag already put it there, and writes into the state. Play shows every
     // object in Base; Stop runs this again, which puts each one back in the state picked for it.
     if (!isPreviewMode) {
       Object.keys(viewedStates).forEach((entityId) => {
         const objectState = getViewedState(viewedStates, objectStates, entityId);
-        const entity = objectState && entities.find((e) => e.id === entityId);
+        const entity = objectState && byId.get(entityId);
         const isDraggedObject = isDragging && transformTarget === objectManager.getObject(entityId);
         if (entity && !isDraggedObject) objectManager.applyPose(entityId, resolveState(entity, objectState));
       });
@@ -393,8 +398,8 @@ export function ViewportCanvas() {
 
     // Helper visibility
     objectManager.getMeshes().forEach((obj, id) => {
-      const entity     = entities.find(e => e.id === id);
-      const isSelected = selectedEntityIds.includes(id);
+      const entity     = byId.get(id);
+      const isSelected = selectedIdSet.has(id);
       if (obj.userData.selectionOutline) {
         (obj.userData.selectionOutline as THREE.LineSegments).visible = isSelected && (entity?.visible ?? true);
       }
