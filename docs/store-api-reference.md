@@ -627,10 +627,9 @@ pos[1] += 5; // CORRUPTS STORE
 updateEntityTransform(id, { position: pos });
 ```
 
-Helper function in store:
+The helper, in `scene/vec3.ts`:
 ```typescript
-// Available for internal use
-cloneVector(v: [number, number, number]): [number, number, number]
+cloneVector(v: Vec3): Vec3 // Vec3 = [number, number, number]
 ```
 
 ### Deep Merge Pattern
@@ -651,7 +650,7 @@ updateSceneSettings({ bgColor: "#ff0000" });
 set({ sceneSettings: { bgColor: "#ff0000" } });
 ```
 
-**Deep merge pseudocode**:
+**Deep merge pseudocode** (`scene/deepMerge.ts`):
 ```typescript
 deepMerge(oldSettings, newSettings) {
   for each key in newSettings:

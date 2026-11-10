@@ -176,7 +176,9 @@ These live in [`src/viewport/hooks/`](../apps/editor/src/viewport/hooks/) and ho
 
 ## 5. The store
 
-One Zustand store, [`useEditorStore.ts`](../apps/editor/src/store/useEditorStore.ts), wrapped in three middlewares:
+One Zustand store, [`useEditorStore.ts`](../apps/editor/src/store/useEditorStore.ts). What a scene is made of sits beside it in [`src/scene/`](../apps/editor/src/scene): the types (`types.ts`), the defaults (`defaults.ts`), and the pure helpers the actions call to build, copy, and index entities. Those files never import the store, so the share-link viewer uses them too.
+
+The store is wrapped in three middlewares:
 
 ```typescript
 subscribeWithSelector(   // .subscribe() with a selector
