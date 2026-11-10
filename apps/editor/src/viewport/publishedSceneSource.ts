@@ -1,4 +1,4 @@
-import type { Entity } from "../store/useEditorStore";
+import type { Entity } from "../scene/types";
 import type { SceneSource } from "./sceneSource";
 
 /**

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { type EditorState } from "../store/useEditorStore";
+import type { CameraProfile } from "../scene/types";
 
 export class CameraManager {
   public perspectiveCamera: THREE.PerspectiveCamera;
@@ -8,7 +8,7 @@ export class CameraManager {
   private orthoSize: number = 5;
 
   constructor(
-    initialProfile: EditorState["cameraProfiles"][string],
+    initialProfile: CameraProfile,
     initialMode: "perspective" | "orthographic",
     aspect: number
   ) {
@@ -46,7 +46,7 @@ export class CameraManager {
     this.activeCamera = mode === "perspective" ? this.perspectiveCamera : this.orthographicCamera;
   }
 
-  public syncWithProfile(profile: EditorState["cameraProfiles"][string], orbitControlsTarget: THREE.Vector3) {
+  public syncWithProfile(profile: CameraProfile, orbitControlsTarget: THREE.Vector3) {
     const [px, py, pz] = profile.position;
 
     this.perspectiveCamera.position.set(px, py, pz);

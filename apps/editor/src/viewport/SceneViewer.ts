@@ -14,13 +14,14 @@
  * for each frame, as in Play. Nothing here loads the editor's store: the published scene is the
  * only state, and nothing is ever saved.
  *
- * Settings and the camera fall back to the editor's defaults when a scene doesn't hold them
- * (SceneViewer.test.ts keeps the two equal; the store that defines them isn't loaded here).
+ * Settings and the camera fall back to the defaults a new scene starts with when a scene doesn't
+ * hold them (scene/defaults.ts, the same values the editor's store uses).
  */
 
 import * as THREE from "three";
 import { SceneRuntime } from "../animation/sceneRuntime";
-import type { CameraProfile, SceneSettingsConfig } from "../store/useEditorStore";
+import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialSceneDefaults } from "../scene/defaults";
+import type { CameraProfile, SceneSettingsConfig } from "../scene/types";
 import { hideEditorOnlyObjects } from "../utils/exportScene";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
@@ -31,34 +32,28 @@ import { createRoomEnvironment } from "./sceneEnvironment";
 import { SceneManager } from "./SceneManager";
 import type { SceneSource } from "./sceneSource";
 
-// The parts of the editor's defaults (initialSceneDefaults, DEFAULT_CAMERA_PROFILE) a published scene uses.
-export const VIEWER_DEFAULTS = {
-  bgColor: "#0b1020",
-  fogEnabled: false,
-  lightIntensity: 0.75,
-  environment: { enabled: true, intensity: 1 },
-  camera: { position: [0, 5, 10] as [number, number, number], target: [0, 0, 0] as [number, number, number], fov: 45, near: 0.1, far: 1000 },
-};
-
 /** The scene settings SceneManager draws with, the stored ones over the defaults. No grid: it's the editor's. */
 export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"]): SceneSettingsConfig =>
   // SceneManager reads only these; the rest of the settings are the editor's.
   ({
-    bgColor: stored?.bgColor ?? VIEWER_DEFAULTS.bgColor,
-    fogEnabled: stored?.fogEnabled ?? VIEWER_DEFAULTS.fogEnabled,
+    bgColor: stored?.bgColor ?? initialSceneDefaults.bgColor,
+    fogEnabled: stored?.fogEnabled ?? initialSceneDefaults.fogEnabled,
     showGrid: false,
     environment: {
-      enabled: stored?.environment?.enabled ?? VIEWER_DEFAULTS.environment.enabled,
-      intensity: stored?.environment?.intensity ?? VIEWER_DEFAULTS.environment.intensity,
+      enabled: stored?.environment?.enabled ?? initialSceneDefaults.environment.enabled,
+      intensity: stored?.environment?.intensity ?? initialSceneDefaults.environment.intensity,
     },
-    lights: { intensity: stored?.lights?.intensity ?? VIEWER_DEFAULTS.lightIntensity },
+    lights: { intensity: stored?.lights?.intensity ?? initialSceneDefaults.lights.intensity },
   }) as SceneSettingsConfig;
 
-/** The camera a published scene starts from: its active profile, over the defaults. */
+/** The camera a published scene starts from: its active profile, over the default camera's values. */
 export const viewerCamera = (content: StoredSceneContent): Pick<CameraProfile, "position" | "target" | "fov" | "near" | "far" | "play"> => {
   const profiles = content.cameraProfiles ?? {};
-  const profile = profiles[content.activeProfileId ?? "personal"] ?? profiles.personal;
-  return { ...VIEWER_DEFAULTS.camera, ...profile };
+  const profile = profiles[content.activeProfileId ?? DEFAULT_CAMERA_PROFILE_ID] ?? profiles[DEFAULT_CAMERA_PROFILE_ID];
+  const { position, target, fov, near, far } = DEFAULT_CAMERA_PROFILE;
+  // A profile read from a document may be missing (or missing values): the defaults stay under it.
+  const defaults = { position, target, fov, near, far };
+  return { ...defaults, ...profile };
 };
 
 export class SceneViewer {

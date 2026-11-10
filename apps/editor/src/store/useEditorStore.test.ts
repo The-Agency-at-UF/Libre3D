@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { initialFrameDefaults, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
+import { createDepthLayer } from "../scene/entityFactories";
 import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
 import { collectAssetRefs } from "../utils/sceneAssets";
 import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
@@ -154,7 +156,7 @@ describe("loadScene", () => {
   });
 
   it("deep-merges saved settings over the current defaults, so settings added since keep their defaults", async () => {
-    const { initialSceneDefaults, initialPostProcessingDefaults, initialFrameDefaults, useEditorStore } = await loadStore();
+    const { useEditorStore } = await loadStore();
 
     useEditorStore.getState().loadScene({
       entities: [light],
@@ -1329,7 +1331,7 @@ describe("pen tool", () => {
 
 describe("depth layers", () => {
   const storeWithCube = async () => {
-    const { useEditorStore, createDepthLayer } = await loadStore();
+    const { useEditorStore } = await loadStore();
     useEditorStore.getState().loadScene({ entities: [light] });
     const cubeId = useEditorStore.getState().addEntity("cube");
     const cube = () => useEditorStore.getState().entities.find((e) => e.id === cubeId)!;

@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import type { Entity, MaterialLayer, ColorLayer, LightingLayer, ImageLayer, ImageSlot } from "../store/useEditorStore";
-import { isEffectivelyLocked } from "../store/entityIndex";
+import type { Entity, MaterialLayer, ColorLayer, LightingLayer, ImageLayer, ImageSlot } from "../scene/types";
+import { isEffectivelyLocked } from "../scene/entityIndex";
 import type { SceneSource } from "./sceneSource";
 import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
 import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";

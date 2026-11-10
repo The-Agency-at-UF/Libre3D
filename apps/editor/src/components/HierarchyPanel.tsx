@@ -9,7 +9,7 @@ import {
   canReparentEntities,
   isEffectivelyLocked,
   isLockedByAncestor,
-} from "../store/entityIndex";
+} from "../scene/entityIndex";
 
 import { EyeIcon, LockIcon } from "./ui/Icons";
 

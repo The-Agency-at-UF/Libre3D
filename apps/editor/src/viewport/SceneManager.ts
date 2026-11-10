@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { type EditorState } from "../store/useEditorStore";
+import type { SceneSettingsConfig } from "../scene/types";
 import { getSafeColor } from "../utils/sceneColor";
 import { InfiniteGrid } from "./InfiniteGrid";
 
@@ -13,7 +13,7 @@ export class SceneManager {
   private environmentEnabled: boolean;
   public grid: InfiniteGrid;
 
-  constructor(initialSettings: EditorState["sceneSettings"]) {
+  constructor(initialSettings: SceneSettingsConfig) {
     this.scene = new THREE.Scene();
 
     const initialBgColor = new THREE.Color(getSafeColor(initialSettings.bgColor));

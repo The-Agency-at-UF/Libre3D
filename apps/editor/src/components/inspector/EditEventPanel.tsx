@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useEditorStore, type Entity } from "../../store/useEditorStore";
-import { getChildren } from "../../store/entityIndex";
+import { getChildren } from "../../scene/entityIndex";
 import {
   createTransition,
   EVENT_TRIGGERS,

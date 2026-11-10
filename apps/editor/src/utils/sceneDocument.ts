@@ -37,7 +37,7 @@ import type {
   FrameSettingsConfig,
   PostProcessingConfig,
   SceneSettingsConfig,
-} from "../store/useEditorStore";
+} from "../scene/types";
 
 export const SCENE_DOCUMENT_FORMAT = "libre3d.scene";
 export const CURRENT_SCENE_SCHEMA_VERSION = 4;

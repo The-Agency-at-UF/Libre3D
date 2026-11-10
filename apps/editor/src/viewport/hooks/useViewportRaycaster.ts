@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
-import { getSelectionRootId } from "../../store/entityIndex";
+import { getSelectionRootId } from "../../scene/entityIndex";
 import { pickEntityAt } from "../pickEntity";
 import { editPath } from "./useViewportPenTool";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";

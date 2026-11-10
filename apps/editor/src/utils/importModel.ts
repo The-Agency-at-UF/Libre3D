@@ -6,7 +6,7 @@ import { walkGltfScene, nodePathKey, collectSkinnedBones } from "./gltfHierarchy
 import { pruneImportNodes, type PrunableNode } from "./pruneImportHierarchy";
 import { createConfiguredGltfLoader } from "./createGltfLoader";
 import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
-import type { ImportNodeSpec } from "../store/useEditorStore";
+import type { ImportNodeSpec } from "../scene/types";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 // Hands the freshly parsed glTF off to the very first hydrate of the same

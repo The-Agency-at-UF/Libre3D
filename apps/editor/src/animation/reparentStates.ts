@@ -8,7 +8,7 @@
  */
 
 import type * as THREE from "three";
-import type { Entity } from "../store/useEditorStore";
+import type { Entity } from "../scene/types";
 import { composeLocalMatrix, solveLocalFromWorld } from "../utils/entityTransforms";
 import { resolveState, unwrapRotation, type ObjectState } from "./objectStates";
 

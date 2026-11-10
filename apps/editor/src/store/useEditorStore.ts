@@ -3,8 +3,7 @@ import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand"
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
 import { shallow } from "zustand/shallow";
-import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
-import { createId } from "../utils/createId";
+import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "../scene/entityIndex";
 import type { SceneContent, StoredSceneContent } from "../utils/sceneDocument";
 import {
   getEntityWorldMatrix,
@@ -37,138 +36,75 @@ import {
   type SceneEvent,
 } from "../animation/events";
 import type { TransitionAction } from "../animation/transitions";
-import { clonePath, createSamplePath, DEFAULT_STROKE, pathsCenter, type PathData, type PathStroke } from "../paths/pathGeometry";
+import { clonePath, DEFAULT_STROKE, pathsCenter, type PathData, type PathStroke } from "../paths/pathGeometry";
 import { shiftPoints } from "../paths/pathEditing";
 import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
 import { cloneShape, flattenShape, shapeContours, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
 import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
-export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
+import { deepMerge } from "../scene/deepMerge";
+import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialFrameDefaults, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
+import {
+  cloneCameraProfile,
+  cloneEntity,
+  cloneMaterialLayer,
+  createCameraProfile,
+  createColorLayer,
+  createDepthLayer,
+  createEntity,
+  createEntityId,
+  createLightingLayer,
+  createStartingEntities,
+  ENTITY_DEFAULTS,
+  initialEntities,
+} from "../scene/entityFactories";
+import type {
+  CameraProfile,
+  ColorLayer,
+  DeepPartial,
+  Entity,
+  EntityType,
+  FrameSettingsConfig,
+  ImageLayer,
+  ImportNodeSpec,
+  MaterialLayer,
+  MaterialLayerType,
+  PostProcessingConfig,
+  SceneSettingsConfig,
+} from "../scene/types";
+import { cloneVector } from "../scene/vec3";
+
+// A scene's own types live in scene/types.ts, so the share-link viewer can use them without this
+// store. Re-exported for the editor's components, which import them from here.
+export type {
+  CameraProfile,
+  ColorLayer,
+  DeepPartial,
+  DepthLayer,
+  DepthStop,
+  Entity,
+  EntityType,
+  FrameMode,
+  FrameSettingsConfig,
+  FrameSizePreset,
+  ImageLayer,
+  ImageSlot,
+  ImportNodeSpec,
+  LightingLayer,
+  LightingModel,
+  MaterialLayer,
+  MaterialLayerType,
+  PlayCameraMode,
+  PlayCameraSettings,
+  PostProcessingConfig,
+  SceneSettingsConfig,
+} from "../scene/types";
 
 /**
  * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
  * lock (useSceneLock.ts). A viewer of a shared scene would be another reason, later.
  */
 export type ReadOnlyReason = "openElsewhere";
-
-export type MaterialLayerType = "color" | "lighting" | "image" | "depth";
-export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
-
-// Which glTF texture channel an ImageLayer feeds. "metallicRoughness" is a
-// single packed map (green = roughness, blue = metalness) that Three assigns to
-// both material.roughnessMap and material.metalnessMap — one layer covers both,
-// never split into two.
-export type ImageSlot = "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
-
-export interface ColorLayer {
-  id: string;
-  type: "color";
-  enabled: boolean;
-  opacity: number; // 0-1
-  color: string;
-  // glTF alpha-blending mode, captured from the source material at derivation
-  // time so imported meshes preserve texture-alpha-driven transparency (BLEND)
-  // and cutout masking (MASK) instead of only reacting to the scalar opacity
-  // above. Undefined for layers on primitives (cube/sphere/torus/plane), which have
-  // no glTF material to inherit this from -- treated as "OPAQUE".
-  alphaMode?: "OPAQUE" | "MASK" | "BLEND";
-  alphaCutoff?: number; // only meaningful when alphaMode === "MASK"
-  // glTF doubleSided, captured the same way -- an imported mesh authored as
-  // double-sided (thin geometry like hair/foliage/fabric) must stay that way
-  // even if its material ever needs a full rebuild (see createMaterialFromLayers).
-  doubleSided?: boolean;
-}
-
-export interface LightingLayer {
-  id: string;
-  type: "lighting";
-  enabled: boolean;
-  opacity: number;
-  model: LightingModel;
-  roughness: number; // only meaningful when model === "physical"
-  metalness: number; // only meaningful when model === "physical"
-  // A clear lacquer over the material (glTF's KHR_materials_clearcoat), physical only. Above 0 it
-  // takes a MeshPhysicalMaterial. Undefined on layers from before it (an imported mesh's then keeps
-  // the clearcoat its glTF material came with).
-  clearcoat?: number;
-  clearcoatRoughness?: number;
-  shininess: number; // only meaningful when model === "phong"
-  emissive: string;
-  emissiveIntensity: number; // ignored when model === "none"
-}
-
-// A texture map layer, derived from an imported glTF material's maps. The pixel
-// data is never stored here (materialLayers is persisted to localStorage) — it
-// lives in the OPFS texture asset store, referenced by textureAssetId. wrapS/wrapT
-// are the THREE wrap constants copied straight off the source texture.
-export interface ImageLayer {
-  id: string;
-  type: "image";
-  enabled: boolean;
-  opacity: number;
-  textureAssetId: string;
-  slot: ImageSlot;
-  wrapS: number;
-  wrapT: number;
-}
-
-// Colours the object by distance (like Spline's Depth layer, Vector origin, Local): each vertex's
-// distance from `origin` in the object's own space, straight out ("radial") or along `direction`
-// ("linear"), is placed on the ramp between `near` (its first stop) and `far` (its last). It's
-// painted as vertex colours (utils/depthColors.ts), so it exports and publishes; over the Color
-// layer's colour by `opacity`. At most one per object.
-export interface DepthStop {
-  color: string;
-  position: number; // 0-1 along the ramp
-}
-
-export interface DepthLayer {
-  id: string;
-  type: "depth";
-  enabled: boolean;
-  opacity: number;
-  gradientType: "radial" | "linear";
-  origin: [number, number, number];
-  direction: [number, number, number]; // only meaningful when gradientType === "linear"
-  near: number;
-  far: number;
-  stops: DepthStop[]; // 2-10
-  smooth: boolean; // eased blends between stops
-}
-
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer;
-
-export interface Entity {
-  id: string;
-  type: EntityType;
-  name: string;
-  position: [number, number, number];
-  rotation: [number, number, number];
-  scale: [number, number, number];
-  color?: string;
-  materialLayers?: MaterialLayer[];
-  assetId?: string;
-  sourceFileName?: string;
-  visible: boolean;
-  locked: boolean;
-  parentId?: string | null;
-  nodePath?: number[];
-  rootEntityId?: string;
-  // Paths (type "path", see paths/pathGeometry.ts): the curve, its tube, and how much of it shows
-  // in Base (0–1 of its length; states can set their own).
-  path?: PathData;
-  stroke?: PathStroke;
-  trimStart?: number;
-  trimEnd?: number;
-  // Shapes (type "shape", see paths/shapeGeometry.ts): a filled outline with holes, flat in its own
-  // XY plane unless it has an extrusion (its depth) or a bevel.
-  shape?: ShapeData;
-  extrusion?: number;
-  bevel?: number;
-  // Images (type "image", see utils/imagePlane.ts): a flat plane as wide for its height as the picture
-  // (width / height), which its Image layer shows.
-  imageAspect?: number;
-}
 
 /**
  * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new shapes or paths ("draw") or editing
@@ -187,209 +123,7 @@ export interface PenToolState {
   draws?: "shape" | "path";
 }
 
-export interface ImportNodeSpec {
-  tempId: string;
-  parentTempId: string | null;
-  name: string;
-  nodePath: number[];
-  position: [number, number, number];
-  rotation: [number, number, number];
-  scale: [number, number, number];
-}
-
-// How the camera moves in Play (viewport/PlayCamera.ts): it stays put, turns towards the pointer,
-// turns by dragging, or turns by itself.
-export type PlayCameraMode = "fixed" | "softOrbit" | "orbit" | "autoRotate";
-
-export interface PlayCameraSettings {
-  mode: PlayCameraMode;
-  range: number; // softOrbit: degrees at the canvas's edge
-  smoothness: number; // softOrbit and orbit: 0-1, how slowly it eases
-  speed: number; // autoRotate: degrees a second
-}
-
-export interface CameraProfile {
-  id: string;
-  name: string;
-  position: [number, number, number];
-  target: [number, number, number];
-  fov: number;
-  near: number;
-  far: number;
-  zoom: number;
-  // Missing (cameras from before it) or partly missing fields are defaults: resolvePlayCamera.
-  play?: Partial<PlayCameraSettings>;
-}
-
 type EntityTransformUpdates = Partial<Pick<Entity, "position" | "rotation" | "scale" | "color">> & {
-};
-
-export type DeepPartial<T> = T extends object ? {
-  [P in keyof T]?: DeepPartial<T[P]>;
-} : T;
-
-export interface PostProcessingConfig {
-  enabled: boolean;
-  toneMap: string;
-  exposure: number;
-  bloom: {
-    enabled: boolean;
-    intensity: number;
-    threshold: number;
-    radius: number;
-  };
-  ssao: {
-    enabled: boolean;
-    intensity: number;
-  };
-  dof: {
-    enabled: boolean;
-    focusDistance: number;
-    bokeh: number;
-  };
-  chromaticAberration: {
-    enabled: boolean;
-    intensity: number;
-  };
-  motionBlur: {
-    enabled: boolean;
-    intensity: number;
-  };
-  filmGrain: {
-    enabled: boolean;
-    intensity: number;
-  };
-  vignette: {
-    enabled: boolean;
-    intensity: number;
-  };
-  outline: {
-    enabled: boolean;
-    color: string;
-  };
-  colorGrading: {
-    enabled: boolean;
-    brightness: number;
-    contrast: number;
-    saturation: number;
-  };
-}
-
-export interface SceneSettingsConfig {
-  bgColor: string;
-  bgAlpha: string;
-  showGrid: boolean;
-  wireframe: boolean;
-  fogEnabled: boolean;
-  showAxisGuides?: boolean;
-  // Image-based light from a generated room (viewport/sceneEnvironment.ts): soft fill and reflections
-  // for Physical materials. Replaces the ambient light while on. Older scenes open with it off
-  // (scene document v4), new ones with it on.
-  environment: {
-    enabled: boolean;
-    intensity: number;
-  };
-  lights: {
-    intensity: number;
-    color: string;
-    ambientEnabled: boolean;
-    directionalEnabled: boolean;
-    shadow: string;
-  };
-  physics: {
-    enabled: boolean;
-    gravityY: number;
-    collisionType: string;
-  };
-}
-
-export type FrameMode = "responsive" | "fixed";
-export type FrameSizePreset = "responsive" | "1920x1080" | "1080x1080" | "custom";
-
-export interface FrameSettingsConfig {
-  mode: FrameMode;
-  preset: FrameSizePreset;
-  width: number;
-  height: number;
-}
-
-export const initialPostProcessingDefaults: PostProcessingConfig = {
-  enabled: true,
-  toneMap: "ACES Filmic",
-  exposure: 0.00,
-  bloom: {
-    enabled: true,
-    intensity: 40,
-    threshold: 0.85,
-    radius: 0.4,
-  },
-  ssao: {
-    enabled: false,
-    intensity: 25,
-  },
-  dof: {
-    enabled: false,
-    focusDistance: 10.0,
-    bokeh: 0.30,
-  },
-  chromaticAberration: {
-    enabled: false,
-    intensity: 0,
-  },
-  motionBlur: {
-    enabled: false,
-    intensity: 0,
-  },
-  filmGrain: {
-    enabled: false,
-    intensity: 0,
-  },
-  vignette: {
-    enabled: true,
-    intensity: 15,
-  },
-  outline: {
-    enabled: false,
-    color: "5865F2",
-  },
-  colorGrading: {
-    enabled: false,
-    brightness: 0.00,
-    contrast: 0.00,
-    saturation: 0.00,
-  },
-};
-
-export const initialSceneDefaults: SceneSettingsConfig = {
-  bgColor: "#0b1020",
-  bgAlpha: "100%",
-  showGrid: true,
-  wireframe: false,
-  fogEnabled: false,
-  showAxisGuides: false,
-  environment: {
-    enabled: true,
-    intensity: 1,
-  },
-  lights: {
-    intensity: 0.75,
-    color: "#ffffff",
-    ambientEnabled: true,
-    directionalEnabled: true,
-    shadow: "Soft",
-  },
-  physics: {
-    enabled: false,
-    gravityY: -9.8,
-    collisionType: "Mesh",
-  },
-};
-
-export const initialFrameDefaults: FrameSettingsConfig = {
-  mode: "responsive",
-  preset: "responsive",
-  width: 1920,
-  height: 1080,
 };
 
 export interface EditorState {
@@ -541,196 +275,7 @@ export interface EditorState {
   setEditorState:(updates: Partial<Omit<EditorState, "entities" | "animation" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "setPreviewingAction" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
 
-const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
-  cube: {
-    name: "Cube",
-    color: "#4f8cff",
-  },
-  sphere: {
-    name: "Sphere",
-    color: "#3DFFA0",
-  },
-  torus: {
-    name: "Torus",
-    color: "#FF7AE0",
-  },
-  plane: {
-    name: "Plane",
-    color: "#B39DFF",
-  },
-  path: {
-    name: "Path",
-    color: "#FFC24D",
-  },
-  shape: {
-    name: "Shape",
-    color: "#9AA4B2",
-  },
-  image: {
-    name: "Image",
-    color: "#ffffff",
-  },
-  directionalLight: {
-    name: "Directional Light",
-    color: "#ffffff",
-  },
-  importedModel: {
-    name: "Imported Model",
-    color: "#ffffff",
-  },
-  group: {
-    name: "Group",
-    color: "#ffffff",
-  },
-};
-
 const MANDATORY_LAYER_TYPES: MaterialLayerType[] = ["color", "lighting"];
-
-const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
-  id: createEntityId(),
-  type: "color",
-  enabled: true,
-  opacity,
-  color,
-});
-
-// `far` is fitted to the object when the panel can measure it (utils/depthColors.ts, depthReach).
-export const createDepthLayer = (far = 2): DepthLayer => ({
-  id: createEntityId(),
-  type: "depth",
-  enabled: true,
-  opacity: 1,
-  gradientType: "radial",
-  origin: [0, 0, 0],
-  direction: [1, 0, 0],
-  near: 0,
-  far,
-  stops: [
-    { color: "#ff3b30", position: 0 },
-    { color: "#ffcc00", position: 0.5 },
-    { color: "#af52de", position: 1 },
-  ],
-  smooth: false,
-});
-
-// A copy that shares nothing with `layer` (a Depth layer holds arrays).
-export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer =>
-  layer.type === "depth"
-    ? { ...layer, origin: cloneVector(layer.origin), direction: cloneVector(layer.direction), stops: layer.stops.map((stop) => ({ ...stop })) }
-    : { ...layer };
-
-const createLightingLayer = (overrides: Partial<LightingLayer> = {}): LightingLayer => ({
-  id: createEntityId(),
-  type: "lighting",
-  enabled: true,
-  opacity: 1,
-  model: "physical",
-  roughness: 0.45,
-  metalness: 0.08,
-  clearcoat: 0,
-  clearcoatRoughness: 0,
-  shininess: 30,
-  emissive: "#000000",
-  emissiveIntensity: 1,
-  ...overrides,
-});
-
-const createDefaultMaterialLayers = (color: string): MaterialLayer[] => [
-  createColorLayer(color, 1),
-  createLightingLayer(),
-];
-
-const ZERO_VECTOR: [number, number, number] = [0, 0, 0];
-const UNIT_VECTOR: [number, number, number] = [1, 1, 1];
-const DEFAULT_CAMERA_PROFILE_ID = "personal";
-
-export const DEFAULT_CAMERA_PROFILE: CameraProfile = {
-  id: "personal",
-  name: "Personal Camera",
-  position: [0, 5, 10],
-  target: [0, 0, 0],
-  fov: 45,
-  near: 0.1,
-  far: 1000,
-  zoom: 1,
-};
-
-const createEntityId = (): string => createId("entity");
-
-const createEntity = (type: EntityType): Entity => ({
-  id: createEntityId(),
-  type,
-  name: ENTITY_DEFAULTS[type].name,
-  position: (type === "directionalLight" ? [5, 8, 4] : [...ZERO_VECTOR]) as [number, number, number],
-  rotation: [...ZERO_VECTOR] as [number, number, number],
-  scale: [...UNIT_VECTOR] as [number, number, number],
-  ...(type === "directionalLight"
-    ? { color: ENTITY_DEFAULTS[type].color }
-    : type === "group"
-      ? null // groups are pure transform pivots — no material, no color
-      : type === "plane"
-        ? // flat, so shown from both sides, like a shape or an image
-          { materialLayers: [{ ...createColorLayer(ENTITY_DEFAULTS.plane.color, 1), doubleSided: true }, createLightingLayer()] }
-        : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
-  // The Add menu's path is a sample curve; the Path pen draws its own (addPath).
-  ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
-  visible: true,
-  locked: false,
-});
-
-const initialEntities: Entity[] = [
-  createEntity("cube"),
-  {
-    id: "directional-light-1",
-    type: "directionalLight",
-    name: "Directional Light",
-    position: [5, 8, 4],
-    rotation: [0, 0, 0],
-    scale: [1, 1, 1],
-    color: "#ffffff",
-    visible: true,
-    locked: false,
-  },
-];
-
-const cloneVector = (vector: [number, number, number]): [number, number, number] => [
-  vector[0],
-  vector[1],
-  vector[2],
-];
-
-const cloneCameraProfile = (profile: CameraProfile): CameraProfile => ({
-  ...profile,
-  position: cloneVector(profile.position),
-  target: cloneVector(profile.target),
-  ...(profile.play ? { play: { ...profile.play } } : null),
-});
-
-const createCameraProfile = (id: string, data: Partial<CameraProfile> = {}): CameraProfile => ({
-  ...cloneCameraProfile(DEFAULT_CAMERA_PROFILE),
-  ...data,
-  id,
-  name: data.name ?? DEFAULT_CAMERA_PROFILE.name,
-  position: cloneVector(data.position ?? DEFAULT_CAMERA_PROFILE.position),
-  target: cloneVector(data.target ?? DEFAULT_CAMERA_PROFILE.target),
-  fov: data.fov ?? DEFAULT_CAMERA_PROFILE.fov,
-  near: data.near ?? DEFAULT_CAMERA_PROFILE.near,
-  far: data.far ?? DEFAULT_CAMERA_PROFILE.far,
-  zoom: data.zoom ?? DEFAULT_CAMERA_PROFILE.zoom,
-});
-
-const cloneEntity = (entity: Entity): Entity => ({
-  ...entity,
-  position: cloneVector(entity.position),
-  rotation: cloneVector(entity.rotation),
-  scale: cloneVector(entity.scale),
-  visible: entity.visible ?? true,
-  locked: entity.locked ?? false,
-  ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map(cloneMaterialLayer) } : null),
-  ...(entity.path ? { path: clonePath(entity.path) } : null),
-  ...(entity.stroke ? { stroke: { ...entity.stroke } } : null),
-  ...(entity.shape ? { shape: cloneShape(entity.shape) } : null),
-});
 
 /** The parts of the state that are saved as the scene (see utils/sceneDocument.ts). */
 export const selectSceneContent = (state: EditorState): SceneContent => ({
@@ -778,27 +323,6 @@ const updatingState = (
 // Where an object's parent is in the world, from the stored tree (null = the scene).
 const getParentWorld = (entities: Entity[], parentId: string | null | undefined) =>
   parentId ? getEntityWorldMatrix(entities, parentId) : null;
-
-// What a new scene starts with: a fresh cube (new ID) and the default light.
-const createStartingEntities = (): Entity[] => [
-  createEntity("cube"),
-  ...initialEntities.filter((entity) => entity.type === "directionalLight").map(cloneEntity),
-];
-
-function deepMerge(target: any, source: any): any {
-  const result = { ...target };
-  for (const key in source) {
-    if (Object.prototype.hasOwnProperty.call(source, key)) {
-      const sourceVal = source[key];
-      if (sourceVal !== null && typeof sourceVal === "object" && !Array.isArray(sourceVal)) {
-        result[key] = deepMerge(target[key] || {}, sourceVal);
-      } else {
-        result[key] = sourceVal;
-      }
-    }
-  }
-  return result;
-}
 
 // What read-only mode protects: the scene's content, less its cameras. Moving the view (and picking
 // a camera) is how you look at a scene you can't edit, and nothing is saved while read-only; the
@@ -1829,4 +1353,11 @@ export const useEditorStore = create<EditorState>()(
 if (!useEditorStore.persist.hasHydrated()) {
   void useEditorStore.persist.rehydrate();
   useEditorStore.temporal.getState().clear();
+}
+
+// Dev server only. A hot update of this module, or of anything it imports, would hand the open
+// editor a new store holding the starter scene while a cloud scene is still open, and autosave
+// would save that over the scene. Reloading the page instead reopens the scene from the cloud.
+if (import.meta.hot) {
+  import.meta.hot.accept(() => window.location.reload());
 }
