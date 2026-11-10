@@ -92,10 +92,10 @@ describe("what the share-link viewer imports", () => {
     expect(offenders((module) => module.startsWith("store/") || module === "zustand" || module === "zundo")).toEqual([]);
   });
 
-  // Known today: ObjectManager imports the parsed-model cache from utils/importModel.ts, which shows
-  // the file picker's error dialogs, and both it and the viewer import helpers that share a file
-  // with the GLB exporter. Remove `.fails` when those helpers have their own modules.
-  it.fails("never reaches React, the editor's UI, or the importer and exporter", () => {
+  // What the viewer shares with the importer and the exporter has its own modules: the parsed-model
+  // cache (utils/parsedModelCache.ts), hiding editor-only objects (editorOnly.ts), and base poses
+  // (basePoses.ts). The importer shows dialogs, and the exporter is the editor's.
+  it("never reaches React, the editor's UI, or the importer and exporter", () => {
     const editorOnly = ["utils/importModel.ts", "utils/exportScene.ts"];
 
     expect(

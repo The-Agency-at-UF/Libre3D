@@ -7,7 +7,7 @@ import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHi
 import { pruneImportNodes, type PrunableNode } from "../utils/pruneImportHierarchy";
 import { takeParsedModel } from "../utils/parsedModelCache";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
-import { forgetBasePose, rememberBasePose } from "../utils/exportScene";
+import { forgetBasePose, rememberBasePose } from "./basePoses";
 import type { Pose } from "../animation/objectStates";
 import { PathMesh } from "../paths/PathMesh";
 import { DEFAULT_STROKE, type PathData } from "../paths/pathGeometry";

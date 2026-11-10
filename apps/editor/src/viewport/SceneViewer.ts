@@ -22,7 +22,7 @@ import * as THREE from "three";
 import { SceneRuntime } from "../animation/sceneRuntime";
 import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialSceneDefaults } from "../scene/defaults";
 import type { CameraProfile, SceneSettingsConfig } from "../scene/types";
-import { hideEditorOnlyObjects } from "../utils/exportScene";
+import { hideEditorOnlyObjects } from "./editorOnly";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
