@@ -3,8 +3,6 @@ import { useEditorStore } from "../../store/useEditorStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
   getChildren,
-  getAncestorIds,
-  getDescendantIds,
   getEntityIndex,
   filterMoveRoots,
   canReparentEntities,
@@ -13,7 +11,8 @@ import {
 import { BatchRenameDialog } from "./BatchRenameDialog";
 import { HierarchyContextMenu } from "./HierarchyContextMenu";
 import { MemoizedHierarchyItem } from "./HierarchyItem";
-import { ROW_INDENT_BASE_REM, ROW_INDENT_STEP_REM, type ContextMenuState, type DropTarget, type FlatRow } from "./hierarchyTypes";
+import { ROW_INDENT_BASE_REM, ROW_INDENT_STEP_REM, type ContextMenuState, type DropTarget } from "./hierarchyTypes";
+import { useHierarchyRows } from "./useHierarchyRows";
 
 // Above this many visible rows the tree windows its rendering: only rows in
 // (and near) the scroll viewport mount, with spacer divs standing in for the
@@ -29,18 +28,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const selectEntity = useEditorStore((state) => state.selectEntity);
   const selectEntities = useEditorStore((state) => state.selectEntities);
   const reparentEntities = useEditorStore((state) => state.reparentEntities);
-  // Nodes populate fully closed: a node is expanded only if the user opened it.
-  // collapsedIds seeds with every entity present at mount, and the effect below
-  // adds any that appear later (e.g. a freshly imported model's whole subtree),
-  // so importing a 500-node model shows one collapsed root row instead of
-  // flooding the panel. Still non-persisted — resets to fully closed on reload.
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set(entities.map((entity) => entity.id)));
-  // Ids we've already assigned the collapsed default to, so the user manually
-  // expanding a node isn't undone when unrelated entities are later added.
-  const seededCollapseIdsRef = useRef<Set<string>>(undefined as unknown as Set<string>);
-  if (seededCollapseIdsRef.current === undefined) {
-    seededCollapseIdsRef.current = new Set(entities.map((entity) => entity.id));
-  }
+  const { flatRows, trimmedQuery, collapsedIds, toggleExpand, setSubtreeCollapsed, expandRow } = useHierarchyRows(entities, searchQuery);
   // Keyboard cursor + range anchor. `activeId` follows every click and arrow
   // move; `anchorId` only follows non-shift clicks, so successive Shift+Clicks
   // extend from the same origin (standard file-browser / Blender behavior).
@@ -62,103 +50,6 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const scrollParentRef = useRef<HTMLElement | null>(null);
   const rowPitchRef = useRef(26);
   const [rowWindow, setRowWindow] = useState<{ start: number; end: number } | null>(null);
-
-  // The handlers passed to a row go through useStableCallback: rows are memoized, and a handler
-  // that was a new function on every render would re-render all of them on every edit.
-  const toggleExpand = useStableCallback((id: string) => {
-    setCollapsedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  });
-
-  const setSubtreeCollapsed = (id: string, collapsed: boolean) => {
-    setCollapsedIds((prev) => {
-      const next = new Set(prev);
-      const targets = [id, ...getDescendantIds(entities, id)];
-      targets.forEach((targetId) => {
-        if (collapsed) {
-          next.add(targetId);
-        } else {
-          next.delete(targetId);
-        }
-      });
-      return next;
-    });
-  };
-
-  // Default every newly-appearing entity to collapsed. Runs after mount too,
-  // but the mount-time seed already covers the initial entities, so on mount
-  // there are no fresh ids and this is a no-op (no expanded-then-collapsed
-  // flash for a persisted import).
-  useEffect(() => {
-    const seeded = seededCollapseIdsRef.current;
-    const freshIds: string[] = [];
-    for (const entity of entities) {
-      if (!seeded.has(entity.id)) {
-        seeded.add(entity.id);
-        freshIds.push(entity.id);
-      }
-    }
-    if (freshIds.length === 0) return;
-    setCollapsedIds((prev) => {
-      const next = new Set(prev);
-      freshIds.forEach((id) => next.add(id));
-      return next;
-    });
-  }, [entities]);
-
-  const trimmedQuery = searchQuery.trim().toLowerCase();
-
-  // null means "no filter, show everything". When searching, a node is visible
-  // if it matches directly or is an ancestor of a match — otherwise a matching
-  // leaf deep in the tree would render with no parent rows above it.
-  const visibleIds = useMemo(() => {
-    if (!trimmedQuery) return null;
-
-    const visible = new Set<string>();
-    entities.forEach((entity) => {
-      if (entity.name.toLowerCase().includes(trimmedQuery) || entity.type.toLowerCase().includes(trimmedQuery)) {
-        visible.add(entity.id);
-        getAncestorIds(entities, entity.id).forEach((ancestorId) => visible.add(ancestorId));
-      }
-    });
-    return visible;
-  }, [entities, trimmedQuery]);
-
-  const flatRows = useMemo(() => {
-    const rows: FlatRow[] = [];
-
-    // Single-child "pass-through" nodes (near-universal in imported glTF —
-    // wrapper groups that exist only to carry a name/compensation transform,
-    // e.g. RootNode > Object_4 > _rootJoint) render at the same indent as
-    // their parent instead of each claiming their own level. Indent only
-    // advances at an actual branch point (a node with 2+ children) or a leaf.
-    // This is purely a rendering choice — it doesn't touch entity data, so
-    // selection/rename/delete/nodePath hydration are unaffected.
-    const walk = (parentId: string | null, depth: number) => {
-      const siblings = getChildren(entities, parentId);
-      const childDepth = siblings.length === 1 ? depth : depth + 1;
-
-      for (const child of siblings) {
-        if (visibleIds && !visibleIds.has(child.id)) continue;
-
-        const hasChildren = getChildren(entities, child.id).length > 0;
-        const isExpanded = trimmedQuery.length > 0 || !collapsedIds.has(child.id);
-
-        rows.push({ id: child.id, depth: childDepth, hasChildren, isExpanded });
-        if (hasChildren && isExpanded) walk(child.id, childDepth);
-      }
-    };
-
-    walk(null, 0);
-    return rows;
-  }, [entities, visibleIds, collapsedIds, trimmedQuery]);
 
   // Window the mounted rows to the scroll viewport once the tree is large.
   useEffect(() => {
@@ -261,11 +152,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       id,
       timer: window.setTimeout(() => {
         dragExpandTimer.current = null;
-        setCollapsedIds((prev) => {
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
+        expandRow(id);
       }, 650),
     };
   };
@@ -469,6 +356,9 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     clearDrag();
   };
 
+  // The handlers passed to a row go through useStableCallback: rows are memoized, and a handler
+  // that was a new function on every render would re-render all of them on every edit.
+  //
   // Right-clicking an unselected row selects it first (Blender/Spline
   // behavior); right-clicking inside the selection keeps it, so menu actions
   // operate on the whole multi-selection.
