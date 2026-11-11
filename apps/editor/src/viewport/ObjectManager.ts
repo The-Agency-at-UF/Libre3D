@@ -15,7 +15,7 @@ import { ShapeMesh } from "../paths/ShapeMesh";
 import type { ShapeData, ShapeSolid } from "../paths/shapeGeometry";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { depthPaintOf, syncDepthColors } from "../utils/depthColors";
-import { createImagePlaneGeometry } from "../utils/imagePlane";
+import { createPrimitiveGeometry } from "./entityGeometry";
 
 type LayeredMaterial =
   | THREE.MeshBasicMaterial
@@ -102,24 +102,6 @@ export class ObjectManager {
     this.scene = scene;
     this.meshMap = meshMap;
     this.source = source;
-  }
-
-  private createGeometry(entity: Entity): THREE.BufferGeometry {
-    switch (entity.type) {
-      case "sphere":
-        return new THREE.SphereGeometry(0.5, 32, 16);
-      case "torus":
-        return new THREE.TorusGeometry(0.55, 0.2, 16, 48);
-      case "plane":
-        // In its own XY plane, facing +Z (the default camera), like an image. Subdivided only so a
-        // Depth layer, painted per vertex, blends smoothly across it.
-        return new THREE.PlaneGeometry(1, 1, 32, 32);
-      case "image":
-        return createImagePlaneGeometry(entity.imageAspect);
-      case "cube":
-      default:
-        return new THREE.BoxGeometry(1, 1, 1);
-    }
   }
 
   // Derives the actual transparent/alphaTest/depthWrite a material needs from
@@ -570,7 +552,7 @@ export class ObjectManager {
 
       return mesh;
     } else {
-      const geometry = this.createGeometry(entity);
+      const geometry = createPrimitiveGeometry(entity);
       geometry.computeBoundingBox();
       const mesh = new THREE.Mesh(geometry, this.createMaterialFromLayers(entity.materialLayers));
       mesh.position.set(...entity.position);
