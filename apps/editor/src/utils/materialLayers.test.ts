@@ -5,7 +5,7 @@ import type { LightingLayer } from "../store/useEditorStore";
 import { createTextureDedupCache, deriveMaterialLayers, isJpeg } from "./materialLayers";
 
 const lightingOf = async (material: THREE.Material) =>
-  (await deriveMaterialLayers(material, createTextureDedupCache())).find(
+  (await deriveMaterialLayers(material, createTextureDedupCache(), async () => {})).find(
     (layer): layer is LightingLayer => layer.type === "lighting",
   );
 

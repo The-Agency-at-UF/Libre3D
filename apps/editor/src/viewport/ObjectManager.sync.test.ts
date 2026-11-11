@@ -27,6 +27,7 @@ const createScene = (initial: Entity[]) => {
     isWireframe: () => wireframe,
     loadModel: async () => null,
     loadTexture,
+    saveTexture: async () => {},
     setMaterialLayers: () => {},
     applyHierarchyPrune: () => {},
   };

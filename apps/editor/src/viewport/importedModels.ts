@@ -216,7 +216,7 @@ export class ImportedModels {
       const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
       if (!material) continue;
       try {
-        const layers = await deriveMaterialLayers(material, cache);
+        const layers = await deriveMaterialLayers(material, cache, this.host.source.saveTexture);
         // Written through the source at the time: this runs async, after the
         // hydrate's initial set(), and the editor's setEntityMaterialLayers
         // no-ops if the entity was removed meanwhile.

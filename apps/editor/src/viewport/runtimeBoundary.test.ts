@@ -106,10 +106,10 @@ describe("what the share-link viewer imports", () => {
     ).toEqual([]);
   });
 
-  // Known today: deriving an imported mesh's material layers saves its textures to this browser's
-  // asset storage, and the viewer runs the same code. Remove `.fails` when storage goes through
-  // the SceneSource.
-  it.fails("never reaches this browser's asset storage", () => {
+  // Deriving an imported mesh's material layers takes the textures out of its material. Where they
+  // are kept is the SceneSource's `saveTexture`: the editor's writes to this browser's storage, the
+  // viewer's keeps them in memory, so a visitor's browser is never written to.
+  it("never reaches this browser's asset storage", () => {
     const storage = ["utils/createAssetStore.ts", "utils/modelAssetStore.ts", "utils/textureAssetStore.ts"];
 
     expect(offenders((module) => storage.includes(module))).toEqual([]);

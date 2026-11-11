@@ -79,4 +79,16 @@ describe("a published scene's source", () => {
     expect(source.getEntities().map((each) => each.materialLayers)).toEqual([undefined, layers]);
     expect(source.isWireframe()).toBe(false);
   });
+
+  it("keeps a texture derived from an imported model in memory, and loads it back without a download", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const source = createPublishedSceneSource([entity("cube-1")], {});
+    const texture = new Blob([new Uint8Array([1, 2, 3])]);
+
+    await source.saveTexture("derived", texture);
+
+    expect(await source.loadTexture("derived")).toBe(texture);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

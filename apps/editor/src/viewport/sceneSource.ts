@@ -17,6 +17,11 @@ export interface SceneSource {
   /** An imported model's bytes by content hash (sceneAssets.ts); null when it can't be had. */
   loadModel(assetId: string): Promise<ArrayBuffer | null>;
   loadTexture(assetId: string): Promise<Blob | null>;
+  /**
+   * Keeps a texture taken out of an imported model's own material, under its content hash, so
+   * `loadTexture` can return it. The editor writes it to this browser's storage; the viewer must not.
+   */
+  saveTexture(assetId: string, blob: Blob): Promise<void>;
   /** Editable layers derived from an imported mesh's own material, for a mesh that had none. */
   setMaterialLayers(entityId: string, layers: MaterialLayer[]): void;
   /**
