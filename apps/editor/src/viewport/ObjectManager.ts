@@ -3,7 +3,7 @@ import type { Entity, MaterialLayer, ColorLayer, LightingLayer, ImageLayer, Imag
 import { getEntityIndex, isEffectivelyLocked } from "../scene/entityIndex";
 import type { SceneSource } from "./sceneSource";
 import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
-import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";
+import { indexNodesByPath, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";
 import { pruneImportNodes, type PrunableNode } from "../utils/pruneImportHierarchy";
 import { takeParsedModel } from "../utils/parsedModelCache";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
@@ -46,6 +46,14 @@ const materialClassForLayer = (lightingLayer: LightingLayer | undefined) => {
       return THREE.MeshBasicMaterial;
   }
 };
+
+// Puts an object where an entity, or a pose, says: its position, rotation, and scale in its
+// parent's space.
+function applyTransform(object: THREE.Object3D, transform: Pick<Entity, "position" | "rotation" | "scale">): void {
+  object.position.set(...transform.position);
+  object.rotation.set(...transform.rotation);
+  object.scale.set(...transform.scale);
+}
 
 // Points a directional light at the world origin by rotation, which is what both
 // three's renderer (via the child target) and the glTF exporter read.
@@ -343,10 +351,7 @@ export class ObjectManager {
     if (!rootEntity) return;
 
     const boneSet = collectSkinnedBones(gltf.scene);
-    const nodeByPath = new Map<string, THREE.Object3D>();
-    walkGltfScene(gltf.scene, (object, nodePath) => {
-      nodeByPath.set(nodePathKey(nodePath), object);
-    });
+    const nodeByPath = indexNodesByPath(gltf.scene);
 
     const nodeEntities = entities.filter(
       (entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId,
@@ -442,9 +447,7 @@ export class ObjectManager {
   private createSceneObject(entity: Entity): THREE.Object3D {
     if (entity.type === "importedModel") {
       const group = new THREE.Group();
-      group.position.set(...entity.position);
-      group.rotation.set(...entity.rotation);
-      group.scale.set(...entity.scale);
+      applyTransform(group, entity);
       group.userData.assetId = entity.assetId;
 
       if (entity.assetId) {
@@ -459,15 +462,11 @@ export class ObjectManager {
       // outline. It's selectable from the hierarchy and via its children, and
       // the transform gizmo attaches to it like any other object.
       const group = new THREE.Group();
-      group.position.set(...entity.position);
-      group.rotation.set(...entity.rotation);
-      group.scale.set(...entity.scale);
+      applyTransform(group, entity);
       return group;
     } else if (entity.type === "directionalLight") {
       const light = new THREE.DirectionalLight(new THREE.Color(entity.color ?? "#ffffff"), 2.2);
-      light.position.set(...entity.position);
-      light.rotation.set(...entity.rotation);
-      light.scale.set(...entity.scale);
+      applyTransform(light, entity);
 
       // Target setup. glTF encodes a directional light's direction as the node's
       // own rotation (it shines down -Z) and has no concept of a separate target
@@ -495,9 +494,7 @@ export class ObjectManager {
       // The tube and its caps (paths/PathMesh.ts). The outline is the whole path's box, also while
       // it's trimmed: it doesn't jump while the trim is dragged, and it shows where a hidden path is.
       const mesh = new PathMesh(pathOf(entity), strokeOf(entity), this.createMaterialFromLayers(entity.materialLayers));
-      mesh.position.set(...entity.position);
-      mesh.rotation.set(...entity.rotation);
-      mesh.scale.set(...entity.scale);
+      applyTransform(mesh, entity);
       mesh.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
 
       attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
@@ -506,9 +503,7 @@ export class ObjectManager {
     } else if (entity.type === "shape") {
       // A filled outline (paths/ShapeMesh.ts), flat or extruded.
       const mesh = new ShapeMesh(shapeOf(entity), solidOf(entity), this.createMaterialFromLayers(entity.materialLayers));
-      mesh.position.set(...entity.position);
-      mesh.rotation.set(...entity.rotation);
-      mesh.scale.set(...entity.scale);
+      applyTransform(mesh, entity);
 
       attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
 
@@ -517,9 +512,7 @@ export class ObjectManager {
       const geometry = createPrimitiveGeometry(entity);
       geometry.computeBoundingBox();
       const mesh = new THREE.Mesh(geometry, this.createMaterialFromLayers(entity.materialLayers));
-      mesh.position.set(...entity.position);
-      mesh.rotation.set(...entity.rotation);
-      mesh.scale.set(...entity.scale);
+      applyTransform(mesh, entity);
 
       attachSelectionOutline(mesh, geometry.boundingBox!);
 
@@ -596,10 +589,7 @@ export class ObjectManager {
     // by prepareModelImport can be resolved back to the actual parsed
     // Object3D without re-parsing. walkGltfScene is the shared definition of
     // that path convention — extraction and hydration must use the same one.
-    const nodeByPath = new Map<string, THREE.Object3D>();
-    walkGltfScene(gltf.scene, (object, nodePath) => {
-      nodeByPath.set(nodePathKey(nodePath), object);
-    });
+    const nodeByPath = indexNodesByPath(gltf.scene);
 
     const nodeEntities = this.source.getEntities().filter((entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId);
 
@@ -741,9 +731,7 @@ export class ObjectManager {
     }
 
     if (!isBeingDragged) {
-      obj.position.set(...entity.position);
-      obj.rotation.set(...entity.rotation);
-      obj.scale.set(...entity.scale);
+      applyTransform(obj, entity);
       if (obj instanceof PathMesh) obj.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
       forgetBasePose(obj);
       // Re-aim after a move so the baked rotation keeps tracking the origin.
@@ -1002,10 +990,7 @@ export class ObjectManager {
         return;
       }
 
-      const nodeByPath = new Map<string, THREE.Object3D>();
-      walkGltfScene(gltf.scene, (object, nodePath) => {
-        nodeByPath.set(nodePathKey(nodePath), object);
-      });
+      const nodeByPath = indexNodesByPath(gltf.scene);
 
       // Shallow-to-deep order guarantees a missing parent is spliced in (and
       // registered in meshMap) before any of its missing children are processed,
@@ -1146,9 +1131,7 @@ export class ObjectManager {
 
       parentObj.add(obj);
       obj.userData.parentEntityId = desiredParentId;
-      obj.position.set(...entity.position);
-      obj.rotation.set(...entity.rotation);
-      obj.scale.set(...entity.scale);
+      applyTransform(obj, entity);
     }
   }
 
@@ -1164,9 +1147,7 @@ export class ObjectManager {
     // No longer where its entity says: the next sync puts it back, though its entity is the same.
     this.unsettledObjects.add(obj);
     rememberBasePose(obj);
-    obj.position.set(...pose.position);
-    obj.rotation.set(...pose.rotation);
-    obj.scale.set(...pose.scale);
+    applyTransform(obj, pose);
     if (obj instanceof THREE.DirectionalLight) aimDirectionalLight(obj);
     if (obj instanceof PathMesh && (pose.trimStart !== undefined || pose.trimEnd !== undefined)) {
       obj.setTrim(pose.trimStart ?? 0, pose.trimEnd ?? 1);
