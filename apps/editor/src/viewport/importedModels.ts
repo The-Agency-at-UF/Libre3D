@@ -40,6 +40,8 @@ export interface ImportedModelHost {
   source: SceneSource;
   /** The renderer the scene is drawn with, for decoding a model's KTX2 textures; null before there is one. */
   getRenderer(): THREE.WebGLRenderer | null;
+  /** Whether models get a selection outline, and a failed one its red box (the editor's; not the viewer's). */
+  editorHelpers: boolean;
   /** Applies an entity to its object: transform, visibility, lock, material. */
   syncEntity(object: THREE.Object3D, entity: Entity): void;
   /** Moves every object under the parent its entity names. */
@@ -61,10 +63,13 @@ export class ImportedModels {
   }
 
   // Recolors/rebuilds the group's outline as a red box so a failed import stays visible,
-  // selectable, and obviously broken instead of silently vanishing from the scene.
+  // selectable, and obviously broken instead of silently vanishing from the scene. The box is the
+  // editor's, like every outline: a published scene shows nothing for a model it can't load.
   public showImportedModelError(group: THREE.Group): void {
-    const errorBox = new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
-    replaceSelectionOutline(group, errorBox, { color: 0xff3b30 });
+    if (this.host.editorHelpers) {
+      const errorBox = new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
+      replaceSelectionOutline(group, errorBox, { color: 0xff3b30 });
+    }
     group.userData.loadError = true;
   }
 
@@ -180,7 +185,7 @@ export class ImportedModels {
     // reparenting needed once every node object is tagged and registered.
     group.add(gltf.scene);
 
-    attachSelectionOutline(group, boundingBox);
+    if (this.host.editorHelpers) attachSelectionOutline(group, boundingBox);
 
     // Now that the nodes exist, apply any store-level hierarchy that
     // diverges from the file structure, and attach any entities that were

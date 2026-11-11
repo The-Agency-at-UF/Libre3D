@@ -3,6 +3,7 @@ import { DEFAULT_CAMERA_PROFILE, initialSceneDefaults } from "../scene/defaults"
 import type { Entity, MaterialLayer } from "../scene/types";
 import { stubBrowserGlobals } from "../testing/browserStubs";
 import { createPublishedSceneSource } from "./publishedSceneSource";
+import { SceneManager } from "./SceneManager";
 import { viewerCamera, viewerSceneSettings } from "./SceneViewer";
 
 const entity = (id: string): Entity => ({
@@ -52,6 +53,23 @@ describe("the viewer's defaults", () => {
     });
     const { position, target, fov, near, far } = DEFAULT_CAMERA_PROFILE;
     expect(viewerCamera({ entities: [] })).toEqual({ position, target, fov, near, far });
+  });
+});
+
+describe("the viewer's scene", () => {
+  it("is built without the editor's grid, which the editor's scene has", () => {
+    const settings = viewerSceneSettings(undefined);
+    const editorOnly = (manager: SceneManager) => manager.scene.children.filter((child) => child.userData.editorOnly);
+
+    const viewer = new SceneManager(settings, { editorHelpers: false });
+    const editor = new SceneManager(settings);
+
+    expect(viewer.grid).toBeNull();
+    expect(editorOnly(viewer)).toEqual([]);
+    expect(editorOnly(editor)).toEqual([editor.grid]);
+    viewer.updateGridVisibility(true); // nothing to show, and nothing thrown
+    viewer.dispose();
+    editor.dispose();
   });
 });
 

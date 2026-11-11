@@ -11,9 +11,11 @@ export class SceneManager {
   // scene settings want it shown.
   private environmentMap: THREE.Texture | null = null;
   private environmentEnabled: boolean;
-  public grid: InfiniteGrid;
+  // The editor's grid. Null when the scene is built without the editor's helpers (the share-link viewer).
+  public grid: InfiniteGrid | null = null;
 
-  constructor(initialSettings: SceneSettingsConfig) {
+  /** `editorHelpers: false` builds the scene without the editor's grid, for the share-link viewer. */
+  constructor(initialSettings: SceneSettingsConfig, { editorHelpers = true }: { editorHelpers?: boolean } = {}) {
     this.scene = new THREE.Scene();
 
     const initialBgColor = new THREE.Color(getSafeColor(initialSettings.bgColor));
@@ -31,9 +33,11 @@ export class SceneManager {
     this.applyLighting();
 
     // Shader-drawn infinite XZ grid (X axis red, Z axis blue) — see InfiniteGrid.
-    this.grid = new InfiniteGrid();
-    this.grid.visible = initialSettings.showGrid !== false;
-    this.scene.add(this.grid);
+    if (editorHelpers) {
+      this.grid = new InfiniteGrid();
+      this.grid.visible = initialSettings.showGrid !== false;
+      this.scene.add(this.grid);
+    }
   }
 
   public updateBackground(color: string) {
@@ -86,12 +90,14 @@ export class SceneManager {
   }
 
   public updateGridVisibility(visible: boolean) {
-    this.grid.visible = visible;
+    if (this.grid) this.grid.visible = visible;
   }
 
   public dispose() {
     this.scene.remove(this.ambientLight);
-    this.scene.remove(this.grid);
-    this.grid.dispose();
+    if (this.grid) {
+      this.scene.remove(this.grid);
+      this.grid.dispose();
+    }
   }
 }

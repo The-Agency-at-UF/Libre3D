@@ -5,7 +5,8 @@
  *
  * INPUT: The entities on each sync (`syncMeshes`), a SceneSource for everything else about the
  * scene (the entities when an imported model lands, the wireframe setting, imported assets), and
- * the renderer the scene is drawn with.
+ * the renderer the scene is drawn with. `editorHelpers: false` leaves out what only the editor
+ * shows (selection outlines, light helpers): the share-link viewer's setting.
  * OUTPUT: One object per entity in the scene, under its parent's object, with its transform,
  * visibility, lock, and material; `getObject` and `getMeshes` for the code that picks, drags, and
  * poses them.
@@ -64,6 +65,12 @@ export interface ObjectManagerOptions {
    * textures need one). A function, because the editor builds its renderer after its managers.
    */
   getRenderer: () => THREE.WebGLRenderer | null;
+  /**
+   * Whether to build the editor's own objects: each object's selection outline, each light's
+   * helper, the red box of a model that failed to load. True unless given; the share-link viewer
+   * passes false, so a published scene holds nothing it would have to hide.
+   */
+  editorHelpers?: boolean;
 }
 
 export class ObjectManager {
@@ -93,8 +100,12 @@ export class ObjectManager {
   // brings back a node that was deleted and restored (importedModels.ts).
   private readonly importedModels: ImportedModels;
 
-  constructor(scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>, source: SceneSource, { getRenderer }: ObjectManagerOptions) {
+  // Whether objects get the editor's outlines and helpers (ObjectManagerOptions.editorHelpers).
+  private readonly editorHelpers: boolean;
+
+  constructor(scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>, source: SceneSource, { getRenderer, editorHelpers = true }: ObjectManagerOptions) {
     this.scene = scene;
+    this.editorHelpers = editorHelpers;
     this.meshMap = meshMap;
     this.source = source;
     this.materials = new EntityMaterials(meshMap, source);
@@ -103,6 +114,7 @@ export class ObjectManager {
       meshMap,
       source,
       getRenderer,
+      editorHelpers,
       syncEntity: (object, entity) => {
         this.syncEntityToSceneObject(object, entity, false);
       },
@@ -150,11 +162,13 @@ export class ObjectManager {
       light.userData.target = light.target;
 
       // Helper setup
-      const helper = new THREE.DirectionalLightHelper(light, 1.0, 0xfde047);
-      helper.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
-      helper.userData.entityId = entity.id;
-      this.scene.add(helper);
-      light.userData.helper = helper;
+      if (this.editorHelpers) {
+        const helper = new THREE.DirectionalLightHelper(light, 1.0, 0xfde047);
+        helper.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
+        helper.userData.entityId = entity.id;
+        this.scene.add(helper);
+        light.userData.helper = helper;
+      }
 
       return light;
     } else if (entity.type === "path") {
@@ -164,7 +178,7 @@ export class ObjectManager {
       applyTransform(mesh, entity);
       mesh.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
 
-      attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
+      if (this.editorHelpers) attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
 
       return mesh;
     } else if (entity.type === "shape") {
@@ -172,7 +186,7 @@ export class ObjectManager {
       const mesh = new ShapeMesh(shapeOf(entity), solidOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers));
       applyTransform(mesh, entity);
 
-      attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
+      if (this.editorHelpers) attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
 
       return mesh;
     } else {
@@ -181,7 +195,7 @@ export class ObjectManager {
       const mesh = new THREE.Mesh(geometry, this.materials.createMaterialFromLayers(entity.materialLayers));
       applyTransform(mesh, entity);
 
-      attachSelectionOutline(mesh, geometry.boundingBox!);
+      if (this.editorHelpers) attachSelectionOutline(mesh, geometry.boundingBox!);
 
       return mesh;
     }
@@ -191,13 +205,13 @@ export class ObjectManager {
   // outline is sized from the geometry's bounds when it's made, so it's made again too.
   private rebuildPath(mesh: PathMesh, entity: Entity): void {
     mesh.rebuild(pathOf(entity), strokeOf(entity));
-    replaceSelectionOutline(mesh, mesh.geometry.boundingBox!, { keepVisibility: true });
+    if (this.editorHelpers) replaceSelectionOutline(mesh, mesh.geometry.boundingBox!, { keepVisibility: true });
   }
 
   // A shape's geometry is rebuilt when its outline, extrusion or bevel changes, and its outline with it.
   private rebuildShape(mesh: ShapeMesh, entity: Entity): void {
     mesh.rebuild(shapeOf(entity), solidOf(entity));
-    replaceSelectionOutline(mesh, mesh.geometry.boundingBox!, { keepVisibility: true });
+    if (this.editorHelpers) replaceSelectionOutline(mesh, mesh.geometry.boundingBox!, { keepVisibility: true });
   }
 
   public disposeSceneObject(obj: THREE.Object3D): void {
