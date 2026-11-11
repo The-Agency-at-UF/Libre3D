@@ -3,7 +3,7 @@
  * otherwise read the same bytes back from storage and parse them a second time.
  *
  * INPUT: A parsed glTF under its asset ID, from the importer (importModel.ts).
- * OUTPUT: That glTF, once, to whoever draws the asset first (ObjectManager's hydrate).
+ * OUTPUT: That glTF, once, to whoever draws the asset first (ImportedModels' hydrate).
  *
  * Apart from the importer so the viewport can read the cache without loading the importer's file
  * checks and dialogs. The share-link viewer builds objects with the same ObjectManager; nothing is
@@ -13,7 +13,7 @@
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 // Hands the freshly parsed glTF off to the very first hydrate of the same
-// asset (ObjectManager.hydrateImportedModel), which would otherwise re-fetch
+// asset (ImportedModels.hydrateImportedModel), which would otherwise re-fetch
 // the identical buffer from storage and parse it a second time. Entries are
 // one-shot: takeParsedModel deletes on read, so a reload — where nothing was
 // parsed this session — falls through to the buffer as before.

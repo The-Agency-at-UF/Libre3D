@@ -4,6 +4,7 @@ import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middl
 import { temporal } from "zundo";
 import { shallow } from "zustand/shallow";
 import { getDescendantIds, getChildren, getEntityIndex, filterMoveRoots, canReparentEntities } from "../scene/entityIndex";
+import { colorLayerOf } from "../scene/layers";
 import type { SceneContent, StoredSceneContent } from "../utils/sceneDocument";
 import {
   getEntityWorldMatrix,
@@ -1195,7 +1196,7 @@ export const useEditorStore = create<EditorState>()(
                 if (entity.id !== entityId || !entity.materialLayers) return entity;
                 if (entity.materialLayers.some((layer) => layer.type === layerType)) return entity;
 
-                const colorLayer = entity.materialLayers.find((layer): layer is ColorLayer => layer.type === "color");
+                const colorLayer = colorLayerOf(entity.materialLayers);
                 const newLayer: MaterialLayer =
                   layerType === "color"
                     ? createColorLayer(colorLayer?.color ?? "#ffffff")
@@ -1248,7 +1249,7 @@ export const useEditorStore = create<EditorState>()(
               }),
             })),
           // Replaces an entity's whole layer stack. Used by hydrate-time backfill
-          // (ObjectManager) to write the layers derived from an imported mesh's
+          // (viewport/importedModels.ts) to write the layers derived from an imported mesh's
           // parsed glTF material — the one place layers can be built, since it
           // needs parsed texture/material data unavailable at migrate() time.
           setEntityMaterialLayers: (entityId, layers) =>

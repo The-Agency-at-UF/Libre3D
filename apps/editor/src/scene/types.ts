@@ -37,7 +37,8 @@ export interface ColorLayer {
   alphaCutoff?: number; // only meaningful when alphaMode === "MASK"
   // glTF doubleSided, captured the same way -- an imported mesh authored as
   // double-sided (thin geometry like hair/foliage/fabric) must stay that way
-  // even if its material ever needs a full rebuild (see createMaterialFromLayers).
+  // even if its material ever needs a full rebuild (see createMaterialFromLayers in
+  // viewport/entityMaterials.ts).
   doubleSided?: boolean;
 }
 

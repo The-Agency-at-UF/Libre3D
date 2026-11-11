@@ -1,50 +1,44 @@
+/**
+ * PURPOSE: Keeps the Three.js scene's objects in step with the scene's entities. It is the
+ * reconciler: it owns the map of objects by entity id and decides which to build, update, and
+ * remove.
+ *
+ * INPUT: The entities on each sync (`syncMeshes`), and a SceneSource for everything else: the
+ * entities when an imported model lands, the wireframe setting, imported assets.
+ * OUTPUT: One object per entity in the scene, under its parent's object, with its transform,
+ * visibility, lock, and material; `getObject` and `getMeshes` for the code that picks, drags, and
+ * poses them.
+ *
+ * Used by the editor's viewport and by the share-link viewer, so it never imports the store.
+ *
+ * Not here: what a mesh's material looks like (entityMaterials.ts), a primitive's geometry
+ * (entityGeometry.ts), an imported model's contents (importedModels.ts), selection outlines
+ * (selectionOutline.ts), paths and shapes (paths/PathMesh.ts, paths/ShapeMesh.ts). This file builds
+ * the object for each entity type from those pieces and keeps it current.
+ */
+
 import * as THREE from "three";
-import type { Entity, MaterialLayer, ColorLayer, LightingLayer, ImageLayer, ImageSlot } from "../scene/types";
+import type { Entity } from "../scene/types";
 import { getEntityIndex, isEffectivelyLocked } from "../scene/entityIndex";
 import type { SceneSource } from "./sceneSource";
-import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
-import { walkGltfScene, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";
-import { pruneImportNodes, type PrunableNode } from "../utils/pruneImportHierarchy";
-import { takeParsedModel } from "../utils/parsedModelCache";
-import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
 import { forgetBasePose, rememberBasePose } from "./basePoses";
 import type { Pose } from "../animation/objectStates";
 import { PathMesh } from "../paths/PathMesh";
 import { DEFAULT_STROKE, type PathData } from "../paths/pathGeometry";
 import { ShapeMesh } from "../paths/ShapeMesh";
 import type { ShapeData, ShapeSolid } from "../paths/shapeGeometry";
-import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { depthPaintOf, syncDepthColors } from "../utils/depthColors";
-import { createImagePlaneGeometry } from "../utils/imagePlane";
+import { createPrimitiveGeometry } from "./entityGeometry";
+import { EntityMaterials } from "./entityMaterials";
+import { ImportedModels } from "./importedModels";
+import { attachSelectionOutline, disposeSelectionOutline, replaceSelectionOutline } from "./selectionOutline";
 
-type LayeredMaterial =
-  | THREE.MeshBasicMaterial
-  | THREE.MeshLambertMaterial
-  | THREE.MeshPhongMaterial
-  | THREE.MeshStandardMaterial
-  | THREE.MeshPhysicalMaterial
-  | THREE.MeshToonMaterial;
-
-// Physical builds the cheaper MeshStandardMaterial unless the layer asks for a clearcoat.
-const wantsClearcoat = (lightingLayer: LightingLayer | undefined): boolean =>
-  (lightingLayer?.model ?? "physical") === "physical" && (lightingLayer?.clearcoat ?? 0) > 0;
-
-const materialClassForLayer = (lightingLayer: LightingLayer | undefined) => {
-  if (wantsClearcoat(lightingLayer)) return THREE.MeshPhysicalMaterial;
-  switch (lightingLayer?.model ?? "physical") {
-    case "lambert":
-      return THREE.MeshLambertMaterial;
-    case "phong":
-      return THREE.MeshPhongMaterial;
-    case "toon":
-      return THREE.MeshToonMaterial;
-    case "physical":
-      return THREE.MeshStandardMaterial;
-    case "none":
-    default:
-      return THREE.MeshBasicMaterial;
-  }
-};
+// Puts an object where an entity, or a pose, says: its position, rotation, and scale in its
+// parent's space.
+function applyTransform(object: THREE.Object3D, transform: Pick<Entity, "position" | "rotation" | "scale">): void {
+  object.position.set(...transform.position);
+  object.rotation.set(...transform.rotation);
+  object.scale.set(...transform.scale);
+}
 
 // Points a directional light at the world origin by rotation, which is what both
 // three's renderer (via the child target) and the glTF exporter read.
@@ -67,19 +61,6 @@ export class ObjectManager {
   private scene: THREE.Scene;
   private meshMap: Map<string, THREE.Object3D>;
 
-  // Session cache of textures rebuilt from the texture store (downloaded first
-  // if this browser doesn't have the image), keyed by ImageLayer.textureAssetId. Loaded lazily (and once) the first time an empty
-  // material slot actually needs one — a rebuild after a lighting-model change,
-  // or an Image layer re-enabled — never re-decoded per sync. loadingTextures
-  // guards against firing a second load for an id already in flight.
-  private textureCache = new Map<string, THREE.Texture>();
-  private loadingTextures = new Set<string>();
-
-  // Root entity ids currently mid-hydrateImportedModel. Guards the forced
-  // re-hydrate below from tearing down a root whose async parse hasn't
-  // resolved yet.
-  private hydratingRootIds = new Set<string>();
-
   // What lets syncMeshes skip an object: the entity it last applied to it. Store actions never
   // change an entity in place (they replace what they change), so the same entity object means
   // none of the object's own values changed. Kept by object, so one that is built again starts
@@ -89,8 +70,6 @@ export class ObjectManager {
   // sync has moved them since (a pose, see applyPose), or the last sync left them unfinished (the
   // gizmo holds them, or a texture they need hasn't loaded).
   private unsettledObjects = new WeakSet<THREE.Object3D>();
-  // Set by applyImageLayers when an Image layer's texture isn't there yet; read by syncMeshes.
-  private textureWasMissing = false;
   // The entities of the last sync by id, to tell when a lock or a parent changed anywhere.
   private lastSyncedById: Map<string, Entity> | null = null;
 
@@ -98,411 +77,40 @@ export class ObjectManager {
   // derives for imported models goes: the editor's store, or a published scene (sceneSource.ts).
   private readonly source: SceneSource;
 
+  // Builds and updates the objects' materials from their entities' layers (entityMaterials.ts).
+  private readonly materials: EntityMaterials;
+
+  // Fills in imported models: loads and parses a model, ties its nodes to their entities, and
+  // brings back a node that was deleted and restored (importedModels.ts).
+  private readonly importedModels: ImportedModels;
+
   constructor(scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>, source: SceneSource) {
     this.scene = scene;
     this.meshMap = meshMap;
     this.source = source;
-  }
-
-  private createGeometry(entity: Entity): THREE.BufferGeometry {
-    switch (entity.type) {
-      case "sphere":
-        return new THREE.SphereGeometry(0.5, 32, 16);
-      case "torus":
-        return new THREE.TorusGeometry(0.55, 0.2, 16, 48);
-      case "plane":
-        // In its own XY plane, facing +Z (the default camera), like an image. Subdivided only so a
-        // Depth layer, painted per vertex, blends smoothly across it.
-        return new THREE.PlaneGeometry(1, 1, 32, 32);
-      case "image":
-        return createImagePlaneGeometry(entity.imageAspect);
-      case "cube":
-      default:
-        return new THREE.BoxGeometry(1, 1, 1);
-    }
-  }
-
-  // Derives the actual transparent/alphaTest/depthWrite a material needs from
-  // the layer's captured alphaMode -- not scalar opacity alone. BLEND keeps
-  // transparent:true so per-pixel texture alpha still blends, but only disables
-  // depthWrite when the material is actually translucent (opacity < 1) -- the
-  // standard depthWrite:false convention lets multiple see-through objects sort
-  // against each other, but on a fully-opaque BLEND mesh (a solid model whose
-  // exporter, e.g. Blender, flags it BLEND spuriously) it destroys the mesh's
-  // OWN depth sorting, so a large double-sided mesh renders with chunks missing.
-  // Writing depth when opacity is 1 restores that self-occlusion without losing
-  // edge alpha. MASK is a binary cutout via alphaTest, not blending, though a
-  // manually-reduced opacity on top of it still enables blending. OPAQUE (and
-  // legacy layers with no alphaMode recorded -- primitives, or layers derived
-  // before this shipped) fall back to the original opacity-only heuristic.
-  private computeAlphaBlendState(
-    colorLayer: ColorLayer | undefined,
-    opacity: number,
-  ): { transparent: boolean; alphaTest: number; depthWrite: boolean } {
-    const alphaMode = colorLayer?.alphaMode ?? "OPAQUE";
-    if (alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: opacity >= 1 };
-    if (alphaMode === "MASK") return { transparent: opacity < 1, alphaTest: colorLayer?.alphaCutoff ?? 0.5, depthWrite: true };
-    return { transparent: opacity < 1, alphaTest: 0, depthWrite: true };
-  }
-
-  private createMaterialFromLayers(layers: MaterialLayer[] | undefined): LayeredMaterial {
-    const colorLayer = layers?.find((layer): layer is ColorLayer => layer.type === "color");
-    const lightingLayer = layers?.find((layer): layer is LightingLayer => layer.type === "lighting");
-    const model = lightingLayer?.model ?? "physical";
-    const MaterialClass = materialClassForLayer(lightingLayer);
-    const opacity = colorLayer?.opacity ?? 1;
-    const alphaState = this.computeAlphaBlendState(colorLayer, opacity);
-
-    const material = new MaterialClass({
-      color: colorLayer?.color ?? "#ffffff",
-      opacity,
-      transparent: alphaState.transparent,
-      alphaTest: alphaState.alphaTest,
-      depthWrite: alphaState.depthWrite,
-      side: colorLayer?.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
-      wireframe: this.source.isWireframe(),
-    });
-
-    this.applyLightingProperties(material, lightingLayer, model);
-    this.applyImageLayers(material, layers);
-
-    return material;
-  }
-
-  // A Depth layer (utils/depthColors.ts) is the mesh's vertex colours, which already hold the Color
-  // layer's colour under it, so the material's colour is white while it's on. Whether the material
-  // used vertex colours before (an imported model's own) comes back when the layer goes.
-  private applyDepthLayer(mesh: THREE.Mesh, entity: Entity): void {
-    const paint = depthPaintOf(entity.materialLayers);
-    const key = paint ? JSON.stringify(paint) : null;
-    if (mesh instanceof PathMesh) {
-      mesh.setDepthPaint(paint, key);
-    } else {
-      // An imported mesh's geometry can be shared with other copies of the model: paint its own.
-      if (paint && entity.type === "importedModel" && !mesh.geometry.userData.depthOwned) {
-        mesh.geometry = mesh.geometry.clone();
-        mesh.geometry.userData.depthOwned = true;
-      }
-      syncDepthColors(mesh.geometry, paint, key);
-    }
-
-    const material = mesh.material as LayeredMaterial;
-    if (paint) {
-      material.userData.vertexColorsBeforeDepth ??= material.vertexColors;
-      material.color.set("#ffffff");
-    }
-    const vertexColors: boolean = paint ? true : (material.userData.vertexColorsBeforeDepth ?? material.vertexColors);
-    if (!paint) delete material.userData.vertexColorsBeforeDepth;
-    if (material.vertexColors !== vertexColors) {
-      material.vertexColors = vertexColors;
-      material.needsUpdate = true;
-    }
-  }
-
-  // The material property (or properties) each ImageLayer slot feeds. The glTF
-  // metallic-roughness map is one packed texture Three assigns to both
-  // roughnessMap and metalnessMap, so that slot returns two properties.
-  private static readonly SLOT_PROPS: Record<ImageSlot, Array<keyof THREE.MeshStandardMaterial>> = {
-    color: ["map"],
-    normal: ["normalMap"],
-    metallicRoughness: ["roughnessMap", "metalnessMap"],
-    emissive: ["emissiveMap"],
-    ao: ["aoMap"],
-  };
-
-  // True when the material actually has this slot's property (materials differ —
-  // MeshPhongMaterial has no roughnessMap) and it's currently unset. Used to skip
-  // loading/assigning a texture when the slot is already filled (e.g. the parsed
-  // glTF material still carries its original map on the common reload path), which
-  // both avoids needless work and leaves the untouched parsed textures in place.
-  private slotNeedsTexture(material: THREE.Material, slot: ImageSlot): boolean {
-    const mat = material as unknown as Record<string, unknown>;
-    return ObjectManager.SLOT_PROPS[slot].some((prop) => prop in material && !mat[prop as string]);
-  }
-
-  // Assigns the texture to every empty property of the slot the material has,
-  // never overwriting a map that's already present. Returns whether anything changed.
-  private assignTextureToSlot(material: THREE.Material, slot: ImageSlot, texture: THREE.Texture): boolean {
-    const mat = material as unknown as Record<string, unknown>;
-    let changed = false;
-    for (const prop of ObjectManager.SLOT_PROPS[slot]) {
-      if (prop in material && !mat[prop as string]) {
-        mat[prop as string] = texture;
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
-  private clearTextureSlot(material: THREE.Material, slot: ImageSlot): boolean {
-    const mat = material as unknown as Record<string, unknown>;
-    let changed = false;
-    for (const prop of ObjectManager.SLOT_PROPS[slot]) {
-      if (prop in material && mat[prop as string]) {
-        mat[prop as string] = null;
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
-  // Returns the cached texture for a layer, or null while kicking off a one-shot
-  // async load. When the load lands, assignLoadedTextureToMeshes fills the slot on
-  // every mesh using that id; the continuous RAF loop renders it the next frame.
-  private getTextureForLayer(layer: ImageLayer): THREE.Texture | null {
-    const cached = this.textureCache.get(layer.textureAssetId);
-    if (cached) return cached;
-
-    const id = layer.textureAssetId;
-    if (!this.loadingTextures.has(id)) {
-      this.loadingTextures.add(id);
-      this.source.loadTexture(id)
-        .then(async (blob) => {
-          if (!blob) return;
-          const texture = await buildTextureFromLayer(blob, layer);
-          this.textureCache.set(id, texture);
-          this.assignLoadedTextureToMeshes(id);
-        })
-        .catch((error) => console.error(`[Libre3D] Failed to load texture asset "${id}":`, error))
-        .finally(() => this.loadingTextures.delete(id));
-    }
-    return null;
-  }
-
-  // After a texture finishes loading, fill it into any mesh whose entity has an
-  // enabled Image layer pointing at this id and an empty slot for it.
-  private assignLoadedTextureToMeshes(textureAssetId: string): void {
-    const texture = this.textureCache.get(textureAssetId);
-    if (!texture) return;
-    const { byId } = getEntityIndex(this.source.getEntities());
-    for (const [entityId, obj] of this.meshMap) {
-      if (!(obj instanceof THREE.Mesh)) continue;
-      const layers = byId.get(entityId)?.materialLayers;
-      if (!layers) continue;
-      const material = obj.material as THREE.Material;
-      let changed = false;
-      for (const layer of layers) {
-        if (layer.type === "image" && layer.enabled && layer.textureAssetId === textureAssetId) {
-          if (this.assignTextureToSlot(material, layer.slot, texture)) changed = true;
-        }
-      }
-      if (changed) material.needsUpdate = true;
-    }
-  }
-
-  // Reconciles a material's texture slots with the entity's Image layers: fills
-  // empty slots for enabled layers (loading the texture on demand) and clears
-  // slots for disabled ones. Deliberately does NOT replace a map that's already
-  // present, so imported meshes keep their untouched parsed glTF textures on the
-  // common path and only the rebuild/re-enable cases pull from the OPFS store.
-  private applyImageLayers(material: THREE.Material, layers: MaterialLayer[] | undefined): void {
-    if (!layers) return;
-    let changed = false;
-    for (const layer of layers) {
-      if (layer.type !== "image") continue;
-      if (layer.enabled) {
-        if (!this.slotNeedsTexture(material, layer.slot)) continue;
-        const texture = this.getTextureForLayer(layer);
-        // Still loading, or it couldn't be had: the object is tried again on the next sync.
-        if (!texture) this.textureWasMissing = true;
-        if (texture && this.assignTextureToSlot(material, layer.slot, texture)) changed = true;
-      } else if (this.clearTextureSlot(material, layer.slot)) {
-        changed = true;
-      }
-    }
-    if (changed) material.needsUpdate = true;
-  }
-
-  // Derives editable Color/Lighting/Image layers from the parsed glTF material of
-  // any resolved import mesh that has none yet, and writes them back to the store.
-  // This is where both fresh imports (nodes created without materialLayers) and
-  // pre-upgrade imports (materialLayers: undefined in old persisted state) get a
-  // real layer stack — it can't happen at migrate() time, which has no parsed glTF.
-  private async backfillMaterialLayers(
-    resolved: Array<{ entityId: string; object: THREE.Object3D }>,
-  ): Promise<void> {
-    const { byId } = getEntityIndex(this.source.getEntities());
-    const pending = resolved.filter(({ entityId, object }) => {
-      if (!(object instanceof THREE.Mesh)) return false;
-      return !byId.get(entityId)?.materialLayers;
-    });
-    if (pending.length === 0) return;
-
-    // One cache across the whole import so images reused between meshes (a shared
-    // packed metallic-roughness map, say) are extracted and stored exactly once.
-    const cache = createTextureDedupCache();
-    for (const { entityId, object } of pending) {
-      const mesh = object as THREE.Mesh;
-      const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-      if (!material) continue;
-      try {
-        const layers = await deriveMaterialLayers(material, cache);
-        // Written through the source at the time: this runs async, after the
-        // hydrate's initial set(), and the editor's setEntityMaterialLayers
-        // no-ops if the entity was removed meanwhile.
-        this.source.setMaterialLayers(entityId, layers);
-      } catch (error) {
-        console.error(`[Libre3D] Failed to derive material layers for imported node "${entityId}":`, error);
-      }
-    }
-  }
-
-  // Retroactively collapses/drops any prunable node still present on an import
-  // created before this shipped. Reuses the exact pruneImportNodes algorithm
-  // extraction runs on new imports, fed from entities already in the store
-  // instead of a fresh ImportNodeSpec[] -- hasMesh/isProtected are derived from
-  // the same parsed gltf every hydrate already has in hand, no extra parse
-  // needed. A no-op (removedIds empty) for any import already pruned, whether
-  // at extraction time or a previous hydrate's backfill.
-  private backfillPruneHierarchy(gltf: GLTF, rootEntityId: string): void {
-    const entities = this.source.getEntities();
-    const rootEntity = entities.find((entity) => entity.id === rootEntityId);
-    if (!rootEntity) return;
-
-    const boneSet = collectSkinnedBones(gltf.scene);
-    const nodeByPath = new Map<string, THREE.Object3D>();
-    walkGltfScene(gltf.scene, (object, nodePath) => {
-      nodeByPath.set(nodePathKey(nodePath), object);
-    });
-
-    const nodeEntities = entities.filter(
-      (entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId,
-    );
-
-    const prunable: PrunableNode[] = [
-      {
-        id: rootEntityId,
-        parentId: null,
-        hasMesh: false,
-        isProtected: true,
-        position: rootEntity.position,
-        rotation: rootEntity.rotation,
-        scale: rootEntity.scale,
+    this.materials = new EntityMaterials(meshMap, source);
+    this.importedModels = new ImportedModels({
+      scene,
+      meshMap,
+      source,
+      syncEntity: (object, entity) => {
+        this.syncEntityToSceneObject(object, entity, false);
       },
-      ...nodeEntities.map((entity) => {
-        const object = entity.nodePath ? nodeByPath.get(nodePathKey(entity.nodePath)) : undefined;
-        return {
-          id: entity.id,
-          parentId: entity.parentId ?? rootEntityId,
-          hasMesh: object instanceof THREE.Mesh,
-          // A node whose object can't be found (shouldn't happen) is protected
-          // defensively rather than risking an incorrect prune.
-          isProtected: object ? boneSet.has(object) : true,
-          position: entity.position,
-          rotation: entity.rotation,
-          scale: entity.scale,
-        };
-      }),
-    ];
-
-    const { keptById, removedIds } = pruneImportNodes(prunable);
-    if (removedIds.size === 0) return;
-
-    const updates = new Map<
-      string,
-      { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number]; parentId: string | null }
-    >();
-    for (const [id, node] of keptById) {
-      if (id === rootEntityId) continue;
-      updates.set(id, { position: node.position, rotation: node.rotation, scale: node.scale, parentId: node.parentId });
-    }
-
-    this.source.applyHierarchyPrune(removedIds, updates);
-  }
-
-  // Resets every parsed Object3D that has no surviving store entity (i.e. was
-  // pruned) to an identity local transform. Its transform was already baked
-  // into its kept child by pruneImportNodes, so the physical node must now
-  // contribute nothing; see the call site in attachHydratedModel for why.
-  private neutralizePrunedObjects(
-    nodeByPath: Map<string, THREE.Object3D>,
-    nodeEntities: Entity[],
-  ): void {
-    const keptPaths = new Set(
-      nodeEntities
-        .filter((entity) => entity.nodePath)
-        .map((entity) => nodePathKey(entity.nodePath!)),
-    );
-    for (const [pathKey, object] of nodeByPath) {
-      if (keptPaths.has(pathKey)) continue;
-      object.position.set(0, 0, 0);
-      object.quaternion.identity();
-      object.scale.set(1, 1, 1);
-    }
-  }
-
-  private applyLightingProperties(
-    material: LayeredMaterial,
-    lightingLayer: LightingLayer | undefined,
-    model: LightingLayer["model"]
-  ): void {
-    if (model === "physical" && material instanceof THREE.MeshStandardMaterial) {
-      material.roughness = lightingLayer?.roughness ?? 0.45;
-      material.metalness = lightingLayer?.metalness ?? 0.08;
-    }
-    // Left alone when the layer has no value, so an imported glTF clearcoat survives layers made
-    // before clearcoat was one. Turning it back to 0 keeps the physical material: three compiles it
-    // without the coat, and swapping materials mid-drag would recompile anyway.
-    if (model === "physical" && material instanceof THREE.MeshPhysicalMaterial && lightingLayer?.clearcoat !== undefined) {
-      material.clearcoat = lightingLayer.clearcoat;
-      material.clearcoatRoughness = lightingLayer.clearcoatRoughness ?? 0;
-    }
-    if (model === "phong" && material instanceof THREE.MeshPhongMaterial) {
-      material.shininess = lightingLayer?.shininess ?? 30;
-    }
-    if (model !== "none" && "emissive" in material) {
-      (material as THREE.MeshStandardMaterial).emissive.set(lightingLayer?.emissive ?? "#000000");
-      (material as THREE.MeshStandardMaterial).emissiveIntensity = lightingLayer?.emissiveIntensity ?? 1;
-    }
-  }
-
-  // A thin wireframe box parented directly to the mesh, sized from the mesh's own
-  // geometry bounding box. Parenting it (rather than recomputing a world-space AABB
-  // every frame, e.g. THREE.BoxHelper) means it inherits the mesh's full transform for
-  // free — it stays a tight, correctly oriented box even when the object is rotated,
-  // matching Spline's selection indicator instead of a looser world-axis-aligned box.
-  private createSelectionOutline(boundingBox: THREE.Box3, color = 0xffffff): THREE.LineSegments {
-    // An empty box (a path with nothing to draw) has a size of -Infinity; outline a point instead.
-    const box = boundingBox.isEmpty() ? new THREE.Box3(new THREE.Vector3(), new THREE.Vector3()) : boundingBox;
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const center = new THREE.Vector3();
-    box.getCenter(center);
-
-    const boxGeometry = new THREE.BoxGeometry(size.x, size.y, size.z);
-    boxGeometry.translate(center.x, center.y, center.z);
-    const edges = new THREE.EdgesGeometry(boxGeometry);
-    boxGeometry.dispose();
-
-    const material = new THREE.LineBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.9,
-      depthTest: false, // always render on top, same convention TransformControls uses
+      applyParenting: (entities) => this.applyParenting(entities),
+      disposeObject: (object) => this.disposeSceneObject(object),
     });
-
-    const outline = new THREE.LineSegments(edges, material);
-    outline.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
-    outline.visible = false;
-    outline.renderOrder = 999;
-    outline.raycast = () => { }; // never an independent click/box-select target —
-    // Raycaster doesn't check .visible, so this guards
-    // against it being hit while hidden (see gizmo picker fix)
-    return outline;
   }
 
   private createSceneObject(entity: Entity): THREE.Object3D {
     if (entity.type === "importedModel") {
       const group = new THREE.Group();
-      group.position.set(...entity.position);
-      group.rotation.set(...entity.rotation);
-      group.scale.set(...entity.scale);
+      applyTransform(group, entity);
       group.userData.assetId = entity.assetId;
 
       if (entity.assetId) {
-        this.hydrateImportedModel(group, entity.assetId, entity.id);
+        this.importedModels.hydrateImportedModel(group, entity.assetId, entity.id);
       } else {
-        this.showImportedModelError(group);
+        this.importedModels.showImportedModelError(group);
       }
 
       return group;
@@ -511,15 +119,11 @@ export class ObjectManager {
       // outline. It's selectable from the hierarchy and via its children, and
       // the transform gizmo attaches to it like any other object.
       const group = new THREE.Group();
-      group.position.set(...entity.position);
-      group.rotation.set(...entity.rotation);
-      group.scale.set(...entity.scale);
+      applyTransform(group, entity);
       return group;
     } else if (entity.type === "directionalLight") {
       const light = new THREE.DirectionalLight(new THREE.Color(entity.color ?? "#ffffff"), 2.2);
-      light.position.set(...entity.position);
-      light.rotation.set(...entity.rotation);
-      light.scale.set(...entity.scale);
+      applyTransform(light, entity);
 
       // Target setup. glTF encodes a directional light's direction as the node's
       // own rotation (it shines down -Z) and has no concept of a separate target
@@ -546,218 +150,44 @@ export class ObjectManager {
     } else if (entity.type === "path") {
       // The tube and its caps (paths/PathMesh.ts). The outline is the whole path's box, also while
       // it's trimmed: it doesn't jump while the trim is dragged, and it shows where a hidden path is.
-      const mesh = new PathMesh(pathOf(entity), strokeOf(entity), this.createMaterialFromLayers(entity.materialLayers));
-      mesh.position.set(...entity.position);
-      mesh.rotation.set(...entity.rotation);
-      mesh.scale.set(...entity.scale);
+      const mesh = new PathMesh(pathOf(entity), strokeOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers));
+      applyTransform(mesh, entity);
       mesh.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
 
-      const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
-      mesh.add(outline);
-      mesh.userData.selectionOutline = outline;
+      attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
 
       return mesh;
     } else if (entity.type === "shape") {
       // A filled outline (paths/ShapeMesh.ts), flat or extruded.
-      const mesh = new ShapeMesh(shapeOf(entity), solidOf(entity), this.createMaterialFromLayers(entity.materialLayers));
-      mesh.position.set(...entity.position);
-      mesh.rotation.set(...entity.rotation);
-      mesh.scale.set(...entity.scale);
+      const mesh = new ShapeMesh(shapeOf(entity), solidOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers));
+      applyTransform(mesh, entity);
 
-      const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
-      mesh.add(outline);
-      mesh.userData.selectionOutline = outline;
+      attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
 
       return mesh;
     } else {
-      const geometry = this.createGeometry(entity);
+      const geometry = createPrimitiveGeometry(entity);
       geometry.computeBoundingBox();
-      const mesh = new THREE.Mesh(geometry, this.createMaterialFromLayers(entity.materialLayers));
-      mesh.position.set(...entity.position);
-      mesh.rotation.set(...entity.rotation);
-      mesh.scale.set(...entity.scale);
+      const mesh = new THREE.Mesh(geometry, this.materials.createMaterialFromLayers(entity.materialLayers));
+      applyTransform(mesh, entity);
 
-      const outline = this.createSelectionOutline(geometry.boundingBox!);
-      mesh.add(outline);
-      mesh.userData.selectionOutline = outline;
+      attachSelectionOutline(mesh, geometry.boundingBox!);
 
       return mesh;
     }
-  }
-
-  // Recolors/rebuilds the group's outline as a red box so a failed import stays visible,
-  // selectable, and obviously broken instead of silently vanishing from the scene.
-  private showImportedModelError(group: THREE.Group): void {
-    const existingOutline = group.userData.selectionOutline as THREE.LineSegments | undefined;
-    if (existingOutline) {
-      group.remove(existingOutline);
-      existingOutline.geometry.dispose();
-      (existingOutline.material as THREE.Material).dispose();
-    }
-
-    const errorBox = new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
-    const outline = this.createSelectionOutline(errorBox, 0xff3b30);
-    group.add(outline);
-    group.userData.selectionOutline = outline;
-    group.userData.loadError = true;
-  }
-
-  private async hydrateImportedModel(group: THREE.Group, assetId: string, rootEntityId: string): Promise<void> {
-    this.hydratingRootIds.add(rootEntityId);
-    try {
-      // A fresh import parsed this exact buffer moments ago and left the result
-      // behind for us (see importModel.ts) — claim it instead of reading the
-      // same bytes back out of storage and parsing them again. On reload
-      // there is no cached parse, so we take the buffer path below, which is
-      // the only path that ever runs for persisted models.
-      const cachedGltf = takeParsedModel(assetId);
-      if (cachedGltf) {
-        this.attachHydratedModel(group, cachedGltf, rootEntityId);
-        return;
-      }
-
-      const buffer = await this.source.loadModel(assetId);
-      if (!buffer) {
-        console.error(`[Libre3D] Imported model asset "${assetId}" was found neither in this browser nor in the cloud.`);
-        this.showImportedModelError(group);
-        this.hydratingRootIds.delete(rootEntityId);
-        return;
-      }
-
-      const loader = await createConfiguredGltfLoader();
-
-      loader.parse(
-        buffer,
-        "",
-        (gltf) => {
-          this.attachHydratedModel(group, gltf, rootEntityId);
-        },
-        (error) => {
-          console.error(`[Libre3D] Failed to parse imported model asset "${assetId}":`, error);
-          this.showImportedModelError(group);
-          this.hydratingRootIds.delete(rootEntityId);
-        },
-      );
-    } catch (error) {
-      console.error(`[Libre3D] Failed to load imported model asset "${assetId}":`, error);
-      this.showImportedModelError(group);
-      this.hydratingRootIds.delete(rootEntityId);
-    }
-  }
-
-  // Everything hydration does once a parsed glTF is in hand, regardless of
-  // whether it came from the import-time cache or a parse of the stored buffer.
-  private attachHydratedModel(group: THREE.Group, gltf: GLTF, rootEntityId: string): void {
-    // Bounding box MUST be computed before the scene is parented to `group` —
-    // once parented, world and local space diverge and the box would reflect
-    // wherever `group` happens to already be positioned in the scene.
-    const boundingBox = new THREE.Box3().setFromObject(gltf.scene);
-
-    // Retroactively prune any already-persisted import created before this
-    // shipped -- a no-op for anything extracted after (already pruned at
-    // extraction time), real work only for pre-upgrade imports, mirroring how
-    // backfillMaterialLayers below backfills materialLayers.
-    this.backfillPruneHierarchy(gltf, rootEntityId);
-
-    // Map every glTF node to its nodePath so the flat node entities created
-    // by prepareModelImport can be resolved back to the actual parsed
-    // Object3D without re-parsing. walkGltfScene is the shared definition of
-    // that path convention — extraction and hydration must use the same one.
-    const nodeByPath = new Map<string, THREE.Object3D>();
-    walkGltfScene(gltf.scene, (object, nodePath) => {
-      nodeByPath.set(nodePathKey(nodePath), object);
-    });
-
-    const nodeEntities = this.source.getEntities().filter((entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId);
-
-    const resolvedObjects: Array<{ entityId: string; object: THREE.Object3D }> = [];
-    for (const entity of nodeEntities) {
-      if (!entity.nodePath) continue;
-      const object = nodeByPath.get(nodePathKey(entity.nodePath));
-      if (!object) continue;
-      object.userData.entityId = entity.id;
-      object.userData.entityType = "importedModel";
-      this.meshMap.set(entity.id, object);
-      resolvedObjects.push({ entityId: entity.id, object });
-    }
-
-    // Neutralize the transforms of pruned wrapper/leaf objects. Pruning removed
-    // their *store* entities and baked each wrapper's transform into its
-    // surviving child, but the actual Object3Ds are still physically nested in
-    // gltf.scene between kept nodes. Left as-is they'd re-apply their original
-    // transform on top of the already-baked child transform (a double-apply,
-    // e.g. a child of a scale-2 wrapper rendering at scale 4). Zeroing them to
-    // identity makes them inert pass-throughs so the baked child transform is
-    // the only one that counts. Bones and meshes are never pruned, so this only
-    // ever touches genuine empties.
-    this.neutralizePrunedObjects(nodeByPath, nodeEntities);
-
-    // Record each node's *structural* (file-order) parent entity as its
-    // tracked parent — in a second pass, so every object already carries
-    // its entityId regardless of entity array order. applyParenting then
-    // reattaches exactly the nodes whose store parentId diverges from the
-    // file structure (i.e. nodes the user reparented in a past session).
-    // Direct children of gltf.scene structurally belong to the root group.
-    for (const { object } of resolvedObjects) {
-      object.userData.parentEntityId = object.parent?.userData?.entityId ?? rootEntityId;
-    }
-
-    // The parsed objects carry the *file's* transforms, but the store is
-    // the source of truth — the user may have moved/hidden nodes in a
-    // past session (gizmo edits update the store, and syncMeshes skipped
-    // these entities while hydration was pending, never to re-run
-    // unprompted). Re-apply the stored local TRS and flags to every
-    // registered node so a reload doesn't silently revert edits.
-    for (const entity of nodeEntities) {
-      const object = this.meshMap.get(entity.id);
-      if (object) this.syncEntityToSceneObject(object, entity, false);
-    }
-
-    // gltf.scene's internal node nesting is already correct — no manual
-    // reparenting needed once every node object is tagged and registered.
-    group.add(gltf.scene);
-
-    const outline = this.createSelectionOutline(boundingBox);
-    group.add(outline);
-    group.userData.selectionOutline = outline;
-
-    // Now that the nodes exist, apply any store-level hierarchy that
-    // diverges from the file structure, and attach any entities that were
-    // waiting for one of these nodes as their parent.
-    this.applyParenting(this.source.getEntities());
-
-    // Fire-and-forget: derive editable material layers for any resolved mesh
-    // that doesn't have them yet (fresh imports and pre-upgrade imports alike).
-    // Writing them back re-triggers a sync, which reconciles the material — the
-    // parsed glTF material and its textures stay untouched on that pass.
-    void this.backfillMaterialLayers(resolvedObjects);
-    this.hydratingRootIds.delete(rootEntityId);
   }
 
   // A path's tube is rebuilt when its path, radius or caps change (never for a trim). The selection
   // outline is sized from the geometry's bounds when it's made, so it's made again too.
   private rebuildPath(mesh: PathMesh, entity: Entity): void {
     mesh.rebuild(pathOf(entity), strokeOf(entity));
-    this.replaceSelectionOutline(mesh);
+    replaceSelectionOutline(mesh, mesh.geometry.boundingBox!, { keepVisibility: true });
   }
 
   // A shape's geometry is rebuilt when its outline, extrusion or bevel changes, and its outline with it.
   private rebuildShape(mesh: ShapeMesh, entity: Entity): void {
     mesh.rebuild(shapeOf(entity), solidOf(entity));
-    this.replaceSelectionOutline(mesh);
-  }
-
-  private replaceSelectionOutline(mesh: THREE.Mesh): void {
-    const oldOutline = mesh.userData.selectionOutline as THREE.LineSegments | undefined;
-    const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
-    if (oldOutline) {
-      outline.visible = oldOutline.visible;
-      mesh.remove(oldOutline);
-      oldOutline.geometry.dispose();
-      (oldOutline.material as THREE.Material).dispose();
-    }
-    mesh.add(outline);
-    mesh.userData.selectionOutline = outline;
+    replaceSelectionOutline(mesh, mesh.geometry.boundingBox!, { keepVisibility: true });
   }
 
   public disposeSceneObject(obj: THREE.Object3D): void {
@@ -770,11 +200,7 @@ export class ObjectManager {
       } else {
         material.dispose();
       }
-      const outline = obj.userData.selectionOutline as THREE.LineSegments | undefined;
-      if (outline) {
-        outline.geometry.dispose();
-        (outline.material as THREE.Material).dispose();
-      }
+      disposeSelectionOutline(obj);
     } else if (obj instanceof THREE.DirectionalLight) {
       if (obj.userData.helper) {
         this.scene.remove(obj.userData.helper);
@@ -783,11 +209,7 @@ export class ObjectManager {
       // The target is a child of the light now, so it goes with it — nothing to
       // detach from the scene.
     } else if (obj instanceof THREE.Group) {
-      const outline = obj.userData.selectionOutline as THREE.LineSegments | undefined;
-      if (outline) {
-        outline.geometry.dispose();
-        (outline.material as THREE.Material).dispose();
-      }
+      disposeSelectionOutline(obj);
 
       const textureSlots = [
         "map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap",
@@ -816,13 +238,14 @@ export class ObjectManager {
   }
 
   // `entities` resolves inherited locks (a locked ancestor locks this object
-  // too); callers outside syncMeshes read it fresh from the source.
+  // too); callers outside syncMeshes read it fresh from the source. Returns whether a texture the
+  // object needs isn't there yet (see EntityMaterials.syncMaterial).
   private syncEntityToSceneObject(
     obj: THREE.Object3D,
     entity: Entity,
     isBeingDragged: boolean,
     entities: Entity[] = this.source.getEntities(),
-  ): void {
+  ): boolean {
     if (obj instanceof PathMesh && (obj.path !== pathOf(entity) || obj.stroke !== strokeOf(entity))) {
       this.rebuildPath(obj, entity);
     }
@@ -831,9 +254,7 @@ export class ObjectManager {
     }
 
     if (!isBeingDragged) {
-      obj.position.set(...entity.position);
-      obj.rotation.set(...entity.rotation);
-      obj.scale.set(...entity.scale);
+      applyTransform(obj, entity);
       if (obj instanceof PathMesh) obj.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
       forgetBasePose(obj);
       // Re-aim after a move so the baked rotation keeps tracking the origin.
@@ -845,58 +266,12 @@ export class ObjectManager {
     obj.userData.locked = isEffectivelyLocked(entities, entity.id);
 
     // Imported meshes are THREE.Mesh instances too, and now carry derived
-    // materialLayers (see backfillMaterialLayers) — so this drives their material
+    // materialLayers (see ImportedModels.backfillMaterialLayers) — so this drives their material
     // the same as a primitive. Meshes still awaiting their backfill (materialLayers
     // undefined) skip this and keep their parsed glTF material untouched.
+    let textureMissing = false;
     if (obj instanceof THREE.Mesh && entity.materialLayers) {
-      const colorLayer = entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
-      const lightingLayer = entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
-      const model = lightingLayer?.model ?? "physical";
-      const MaterialClass = materialClassForLayer(lightingLayer);
-
-      // A parsed glTF PBR material is often MeshPhysicalMaterial (a subclass of
-      // MeshStandardMaterial). Treat that as already matching "physical" so we take
-      // the in-place branch and keep its textures/advanced features, rather than
-      // rebuilding it into a plain textureless MeshStandardMaterial on first sync.
-      // A clearcoat needs the physical one, so a standard material is rebuilt when one is added.
-      const materialMatches =
-        model === "physical"
-          ? obj.material instanceof (wantsClearcoat(lightingLayer) ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial)
-          : obj.material.constructor === MaterialClass;
-
-      if (!materialMatches) {
-        const oldMaterial = obj.material as THREE.Material;
-        obj.material = this.createMaterialFromLayers(entity.materialLayers);
-        if (obj instanceof PathMesh) obj.shareMaterialWithCaps();
-        oldMaterial.dispose();
-      } else {
-        const material = obj.material as LayeredMaterial;
-        material.color.set(colorLayer?.color ?? "#ffffff");
-        const opacity = colorLayer?.opacity ?? 1;
-        const alphaState = this.computeAlphaBlendState(colorLayer, opacity);
-        const newSide = colorLayer?.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
-        // Only transparent/alphaTest/side changes force a shader recompile; color,
-        // opacity, roughness, etc. do not. This runs for the gizmo's object on every
-        // frame of a drag (and ran for every entity on every store change before
-        // syncMeshes skipped the unchanged ones), so unconditionally setting
-        // needsUpdate recompiled every imported child mesh's shader each frame, which
-        // is what made dragging a hydrated model jitter. Set it only when a
-        // program-affecting value actually changed.
-        const needsRecompile =
-          material.transparent !== alphaState.transparent ||
-          material.alphaTest !== alphaState.alphaTest ||
-          material.side !== newSide;
-        material.opacity = opacity;
-        material.transparent = alphaState.transparent;
-        material.alphaTest = alphaState.alphaTest;
-        material.depthWrite = alphaState.depthWrite;
-        material.side = newSide;
-        material.wireframe = this.source.isWireframe();
-        if (needsRecompile) material.needsUpdate = true;
-        this.applyLightingProperties(material, lightingLayer, model);
-        this.applyImageLayers(material, entity.materialLayers);
-      }
-      this.applyDepthLayer(obj, entity);
+      textureMissing = this.materials.syncMaterial(obj, entity);
     } else if (obj instanceof THREE.DirectionalLight) {
       obj.color.set(entity.color ?? "#ffffff");
       if (obj.userData.helper) {
@@ -904,6 +279,7 @@ export class ObjectManager {
         obj.userData.helper.update();
       }
     }
+    return textureMissing;
   }
 
   /**
@@ -929,33 +305,7 @@ export class ObjectManager {
     const { byId } = getEntityIndex(entities);
     let locksMayHaveChanged = this.lastSyncedById !== null && this.lastSyncedById.size !== byId.size;
 
-    // An imported-model *node* (non-root: no assetId) only gets its Object3D back
-    // via its root's hydrateImportedModel -> attachHydratedModel pass, which only
-    // runs when the root's own Object3D is (re)created. If a node was deleted and
-    // disposed on its own (root untouched -- e.g. undo restoring just that node)
-    // there's otherwise no path back into the scene for it. Group any such
-    // missing nodes by root and patch each root's subtree in place (see
-    // reattachMissingImportNodes) rather than tearing the whole import down --
-    // this only rebuilds the node(s) that actually need it, leaves every
-    // surviving sibling untouched, and gives the reattached node a brief fade-in
-    // instead of a hard pop back into place. Skip roots already mid-patch
-    // (hydratingRootIds) so overlapping delete/undo cycles can't race.
-    const missingByRoot = new Map<string, string[]>();
-    for (const entity of entities) {
-      if (entity.type !== "importedModel" || entity.assetId || !entity.rootEntityId) continue;
-      if (
-        !this.meshMap.has(entity.id) &&
-        this.meshMap.has(entity.rootEntityId) &&
-        !this.hydratingRootIds.has(entity.rootEntityId)
-      ) {
-        const list = missingByRoot.get(entity.rootEntityId) ?? [];
-        list.push(entity.id);
-        missingByRoot.set(entity.rootEntityId, list);
-      }
-    }
-    for (const [rootId, missingIds] of missingByRoot) {
-      void this.reattachMissingImportNodes(rootId, missingIds);
-    }
+    this.importedModels.restoreMissingNodes(entities);
 
     for (const entity of entities) {
       const before = this.lastSyncedById?.get(entity.id);
@@ -976,12 +326,12 @@ export class ObjectManager {
       if (!existingObj) {
         // Imported model nodes (no assetId, but nodePath set) are resolved from
         // the root's async hydrate — don't spawn a generic placeholder for them,
-        // just wait until hydrateImportedModel populates meshMap.
+        // just wait until ImportedModels.hydrateImportedModel puts them in meshMap.
         const isPendingImportNode = entity.type === "importedModel" && !entity.assetId;
         if (isPendingImportNode) continue;
 
         const obj = this.createSceneObject(entity);
-        if (obj instanceof THREE.Mesh && entity.materialLayers) this.applyDepthLayer(obj, entity);
+        if (obj instanceof THREE.Mesh && entity.materialLayers) this.materials.applyDepthLayer(obj, entity);
         obj.userData.entityId = entity.id;
         obj.userData.entityType = entity.type;
         obj.userData.locked = isEffectivelyLocked(entities, entity.id);
@@ -1008,10 +358,9 @@ export class ObjectManager {
       }
 
       const skipSync = !!isBeingDragged;
-      this.textureWasMissing = false;
-      this.syncEntityToSceneObject(existingObj, entity, skipSync, entities);
+      const textureMissing = this.syncEntityToSceneObject(existingObj, entity, skipSync, entities);
       this.syncedEntities.set(existingObj, entity);
-      if (isTransformTarget || this.textureWasMissing) this.unsettledObjects.add(existingObj);
+      if (isTransformTarget || textureMissing) this.unsettledObjects.add(existingObj);
       else this.unsettledObjects.delete(existingObj);
     }
 
@@ -1049,171 +398,6 @@ export class ObjectManager {
     return staleIds;
   }
 
-  // Patches a resolved import's subtree in place to bring back node(s) whose
-  // Object3D was disposed independently of the root (see syncMeshes) — reparses
-  // the import's buffer (there's no partial-parse API), but only splices the
-  // missing node(s) back into the *existing* live scene graph rather than
-  // rebuilding the whole import, so every untouched sibling keeps its original
-  // Object3D. Falls back to forceFullRehydrate if a missing node's parent can't
-  // be cleanly resolved, so correctness never depends on this optimization.
-  private async reattachMissingImportNodes(rootEntityId: string, missingIds: string[]): Promise<void> {
-    this.hydratingRootIds.add(rootEntityId);
-    try {
-      // The entities as they are now, before the model loads: the rest of this pass reads this
-      // snapshot (and its index), as it did when it searched the array.
-      const entities = this.source.getEntities();
-      const { byId } = getEntityIndex(entities);
-      const rootEntity = byId.get(rootEntityId);
-      const rootObj = this.meshMap.get(rootEntityId);
-      if (!rootEntity?.assetId || !rootObj) return;
-
-      let gltf: GLTF | null | undefined = takeParsedModel(rootEntity.assetId);
-      if (!gltf) {
-        const buffer = await this.source.loadModel(rootEntity.assetId);
-        if (!buffer) {
-          console.error(`[Libre3D] Imported model asset "${rootEntity.assetId}" was found neither in this browser nor in the cloud.`);
-          return;
-        }
-        const loader = await createConfiguredGltfLoader();
-        gltf = await new Promise<GLTF | null>((resolve) => {
-          loader.parse(
-            buffer,
-            "",
-            (result) => resolve(result),
-            (error) => {
-              console.error(`[Libre3D] Failed to parse imported model asset "${rootEntity.assetId}":`, error);
-              resolve(null);
-            },
-          );
-        });
-      }
-      if (!gltf) {
-        this.forceFullRehydrate(rootEntityId);
-        return;
-      }
-
-      const nodeByPath = new Map<string, THREE.Object3D>();
-      walkGltfScene(gltf.scene, (object, nodePath) => {
-        nodeByPath.set(nodePathKey(nodePath), object);
-      });
-
-      // Shallow-to-deep order guarantees a missing parent is spliced in (and
-      // registered in meshMap) before any of its missing children are processed,
-      // so a whole missing subtree — not just a single leaf — resolves correctly.
-      const pending = missingIds
-        .map((id) => byId.get(id))
-        .filter((entity): entity is Entity => !!entity?.nodePath)
-        .sort((a, b) => a.nodePath!.length - b.nodePath!.length);
-
-      // This import's entities by node path (the first one, where two share a path), to find each
-      // missing node's parent without searching every entity per node.
-      const entityIdByNodePath = new Map<string, string>();
-      for (const candidate of entities) {
-        if (candidate.rootEntityId !== rootEntityId) continue;
-        const pathKey = nodePathKey(candidate.nodePath ?? []);
-        if (!entityIdByNodePath.has(pathKey)) entityIdByNodePath.set(pathKey, candidate.id);
-      }
-
-      const resolvedObjects: Array<{ entityId: string; object: THREE.Object3D }> = [];
-
-      for (const entity of pending) {
-        const freshObject = nodeByPath.get(nodePathKey(entity.nodePath!));
-        if (!freshObject) continue;
-
-        // A node's structural parent is just its own nodePath minus the last
-        // index (the same convention walkGltfScene/nodePathKey define); an
-        // empty parent path means it's a direct child of gltf.scene, i.e. the
-        // root itself.
-        const parentPath = entity.nodePath!.slice(0, -1);
-        const parentEntityId = parentPath.length === 0 ? rootEntityId : entityIdByNodePath.get(nodePathKey(parentPath));
-        const parentObj = parentEntityId ? this.meshMap.get(parentEntityId) : undefined;
-        if (!parentObj) continue;
-
-        parentObj.add(freshObject);
-        freshObject.userData.entityId = entity.id;
-        freshObject.userData.entityType = "importedModel";
-        freshObject.userData.parentEntityId = parentEntityId;
-        this.meshMap.set(entity.id, freshObject);
-        resolvedObjects.push({ entityId: entity.id, object: freshObject });
-      }
-
-      if (resolvedObjects.length !== pending.length) {
-        // Something didn't resolve cleanly (an unresolvable parent) — don't
-        // leave the scene half-patched, fall back to the known-correct
-        // full-recreate path for this root instead.
-        this.forceFullRehydrate(rootEntityId);
-        return;
-      }
-
-      for (const { entityId, object } of resolvedObjects) {
-        const entity = byId.get(entityId)!;
-        this.syncEntityToSceneObject(object, entity, false);
-        if (object instanceof THREE.Mesh) {
-          const material = Array.isArray(object.material) ? object.material[0] : object.material;
-          if (material) this.fadeInMesh(object, material.opacity);
-        }
-      }
-
-      this.applyParenting(this.source.getEntities());
-      void this.backfillMaterialLayers(resolvedObjects);
-    } finally {
-      this.hydratingRootIds.delete(rootEntityId);
-    }
-  }
-
-  // Tears down and rebuilds an entire import's subtree from a fresh parse.
-  // This was syncMeshes' original (pre-fade) fix for a node coming back with no
-  // live object — kept now as reattachMissingImportNodes' fallback for the rare
-  // case it can't cleanly resolve a missing node's parent on its own. Leaves
-  // rootEntityId out of meshMap so the next syncMeshes pass's normal
-  // !existingObj branch recreates it via createSceneObject/hydrateImportedModel.
-  private forceFullRehydrate(rootEntityId: string): void {
-    const rootObj = this.meshMap.get(rootEntityId);
-    if (!rootObj) return;
-    (rootObj.parent ?? this.scene).remove(rootObj);
-    this.disposeSceneObject(rootObj);
-    const entities = this.source.getEntities();
-    for (const entity of entities) {
-      if (entity.rootEntityId === rootEntityId) this.meshMap.delete(entity.id);
-    }
-    this.meshMap.delete(rootEntityId);
-  }
-
-  // Fades a freshly reattached node's material in from transparent to its real
-  // opacity over a short duration, mirroring Spline's brief fade-in when a
-  // deleted node is undone, instead of a hard pop back into place. Runs its own
-  // rAF chain independent of the main render loop — useViewportRenderer already
-  // renders every frame unconditionally, so mutating opacity here is picked up
-  // automatically with no signal back to React needed.
-  private fadeInMesh(mesh: THREE.Mesh, targetOpacity: number, durationMs = 300): void {
-    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    const wasTransparent = materials.map((material) => material.transparent);
-    materials.forEach((material) => {
-      material.transparent = true;
-      material.opacity = 0;
-      material.needsUpdate = true;
-    });
-
-    const start = performance.now();
-    const step = (now: number) => {
-      const t = Math.min(1, (now - start) / durationMs);
-      const eased = 1 - Math.pow(1 - t, 3); // ease-out cubic
-      materials.forEach((material) => {
-        material.opacity = eased * targetOpacity;
-      });
-      if (t < 1) {
-        requestAnimationFrame(step);
-      } else {
-        materials.forEach((material, index) => {
-          material.opacity = targetOpacity;
-          material.transparent = targetOpacity < 1 ? true : wasTransparent[index];
-          material.needsUpdate = true;
-        });
-      }
-    };
-    requestAnimationFrame(step);
-  }
-
   // Makes the THREE graph agree with store-level parentId. Each object tracks
   // the parent entity it is currently attached under (userData.parentEntityId);
   // only a diff triggers a reattach, so glTF-internal nesting (gltf.scene
@@ -1221,7 +405,7 @@ export class ObjectManager {
   // reparented. Local TRS is re-applied from the store after a reattach — the
   // store already solved it against the new parent, so no .attach() world-math
   // is needed here. A missing parent object (async glTF hydration still in
-  // flight) is skipped; hydrateImportedModel re-runs this pass when it finishes.
+  // flight) is skipped; ImportedModels runs this pass again when the model lands.
   private applyParenting(entities: Entity[]): void {
     for (const entity of entities) {
       const obj = this.meshMap.get(entity.id);
@@ -1236,9 +420,7 @@ export class ObjectManager {
 
       parentObj.add(obj);
       obj.userData.parentEntityId = desiredParentId;
-      obj.position.set(...entity.position);
-      obj.rotation.set(...entity.rotation);
-      obj.scale.set(...entity.scale);
+      applyTransform(obj, entity);
     }
   }
 
@@ -1254,9 +436,7 @@ export class ObjectManager {
     // No longer where its entity says: the next sync puts it back, though its entity is the same.
     this.unsettledObjects.add(obj);
     rememberBasePose(obj);
-    obj.position.set(...pose.position);
-    obj.rotation.set(...pose.rotation);
-    obj.scale.set(...pose.scale);
+    applyTransform(obj, pose);
     if (obj instanceof THREE.DirectionalLight) aimDirectionalLight(obj);
     if (obj instanceof PathMesh && (pose.trimStart !== undefined || pose.trimEnd !== undefined)) {
       obj.setTrim(pose.trimStart ?? 0, pose.trimEnd ?? 1);

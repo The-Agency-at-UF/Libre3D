@@ -153,7 +153,7 @@ async function extractModelHierarchy(buffer: ArrayBuffer, assetId: string): Prom
 
 // Collapses pass-through wrappers and drops dead leaves from a freshly
 // extracted node list via the shared pruneImportNodes algorithm -- reused
-// as-is by ObjectManager's backfill pass for pre-existing imports, so both
+// as-is by the viewport's backfill pass (importedModels.ts) for pre-existing imports, so both
 // call sites share one implementation of the actual graph/matrix logic.
 function pruneExtractedNodes(
   nodes: ImportNodeSpec[],

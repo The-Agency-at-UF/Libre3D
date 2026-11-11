@@ -7,13 +7,14 @@
  * blends each stop into the next as Spline's does: in order, each blend clamped to its own span,
  * eased when `smooth`. Blends happen in sRGB (as the stops are picked) and are then converted to
  * the linear colours vertex colours hold. The result goes over the Color layer's colour by the
- * Depth layer's opacity; the material's own colour is then white (see ObjectManager).
+ * Depth layer's opacity; the material's own colour is then white (see viewport/entityMaterials.ts).
  *
  * How smooth it looks depends on the geometry's vertices: tubes, spheres and models have plenty, a
  * cube or a flat shape's face very few.
  */
 
 import * as THREE from "three";
+import { colorLayerOf } from "../scene/layers";
 import type { DepthLayer, MaterialLayer } from "../scene/types";
 
 export const MAX_DEPTH_STOPS = 10;
@@ -29,8 +30,7 @@ export interface DepthPaint {
 export const depthPaintOf = (layers: MaterialLayer[] | undefined): DepthPaint | null => {
   const layer = layers?.find((each): each is DepthLayer => each.type === "depth" && each.enabled);
   if (!layer) return null;
-  const color = layers?.find((each) => each.type === "color");
-  return { layer, base: color?.type === "color" ? color.color : "#ffffff" };
+  return { layer, base: colorLayerOf(layers)?.color ?? "#ffffff" };
 };
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));

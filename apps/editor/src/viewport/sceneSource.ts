@@ -2,11 +2,12 @@ import type { Entity, MaterialLayer } from "../scene/types";
 import type { Vec3 } from "../scene/vec3";
 
 /**
- * What ObjectManager reads and writes besides the entities each sync hands it. In the editor that's
+ * What ObjectManager, and the materials and imported-model modules it owns (entityMaterials.ts,
+ * importedModels.ts), read and write besides the entities each sync hands it. In the editor that's
  * the store and this browser's asset storage (editorSceneSource.ts); in the share-link viewer, a
  * published scene and its download links (viewer/publishedSceneSource.ts). Imported models resolve
- * asynchronously, after the sync that started them, so ObjectManager asks for the entities again
- * when they land rather than keeping the list it was last given.
+ * asynchronously, after the sync that started them, so the entities are asked for again when they
+ * land rather than kept from the last sync.
  *
  * Type-only here, so the viewer can build objects without loading the editor's store.
  */
