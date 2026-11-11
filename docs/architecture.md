@@ -13,7 +13,7 @@ Every region of the UI is owned by one file. Run `pnpm dev`, put the editor on o
 ```mermaid
 graph LR
     subgraph LEFT["LEFT SIDEBAR"]
-        HP["<b>HierarchyPanel.tsx</b><br/>the scene tree — rename, hide,<br/>lock, delete, drag to reparent"]
+        HP["<b>hierarchy/HierarchyPanel.tsx</b><br/>the scene tree — rename, hide,<br/>lock, delete, drag to reparent"]
     end
     subgraph CENTER["CENTER"]
         FT["<b>FloatingToolbar.tsx</b><br/>top strip — move / rotate / scale,<br/>world vs local, Add Shape menu"]

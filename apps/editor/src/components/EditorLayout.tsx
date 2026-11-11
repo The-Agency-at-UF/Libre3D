@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { showAlert } from "./ui/Dialog";
 
 // tsx components for editor scene and UI
-import { HierarchyPanel } from "./HierarchyPanel";
+import { HierarchyPanel } from "./hierarchy/HierarchyPanel";
 import { ViewportCanvas } from "./ViewportCanvas";
 import { ViewportOverlays } from "./ViewportOverlays";
 import { RightSidebar } from "./RightSidebar";
