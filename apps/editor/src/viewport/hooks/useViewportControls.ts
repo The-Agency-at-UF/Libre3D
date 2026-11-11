@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { selectViewedObjectState, useEditorStore } from "../../store/useEditorStore";
+import { getEntityIndex } from "../../scene/entityIndex";
 import { resolveState, unwrapRotation } from "../../animation/objectStates";
 
 export function useViewportControls(
@@ -370,8 +371,9 @@ export function useViewportControls(
     transformControls.addEventListener("objectChange", () => {
       const target = transformControls.object;
       const store = useEditorStore.getState();
+      // Through the index: this runs on every pointer event of a drag.
       const entity = target?.userData.entityId
-        ? store.entities.find((e) => e.id === target.userData.entityId)
+        ? getEntityIndex(store.entities).byId.get(target.userData.entityId)
         : undefined;
       if (target && entity && !target.userData.locked) {
         // The gizmo hands back rotations wrapped to ±180° (they go through a quaternion); keep the

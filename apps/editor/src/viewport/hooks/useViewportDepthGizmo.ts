@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { useEditorStore, type DepthLayer, type EditorState } from "../../store/useEditorStore";
+import { getEntityIndex } from "../../scene/entityIndex";
 import { distanceAlongAxis, dragFar, dragNear, dragStop, pointOnAxis, stopDistance } from "../../utils/depthGizmo";
 import type { ObjectManager } from "../ObjectManager";
 
@@ -16,7 +17,7 @@ const store = () => useEditorStore.getState();
 const editedLayer = (state: EditorState): DepthLayer | null => {
   const { depthEdit, selectedEntityIds, entities } = state;
   if (!depthEdit || selectedEntityIds.length !== 1 || selectedEntityIds[0] !== depthEdit) return null;
-  const entity = entities.find((e) => e.id === depthEdit);
+  const entity = getEntityIndex(entities).byId.get(depthEdit);
   return entity?.materialLayers?.find((each): each is DepthLayer => each.type === "depth" && each.enabled) ?? null;
 };
 

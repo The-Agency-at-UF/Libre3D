@@ -3,7 +3,7 @@ import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { useEditorStore, type Entity, type PenToolState } from "../../store/useEditorStore";
-import { isEffectivelyLocked } from "../../scene/entityIndex";
+import { getEntityIndex, isEffectivelyLocked } from "../../scene/entityIndex";
 import { getEntityWorldMatrix } from "../../utils/entityTransforms";
 import type { PathData, PathPoint } from "../../paths/pathGeometry";
 import {
@@ -50,16 +50,18 @@ const drawingNext = (): PenToolState => ({ ...DRAWING, draws: store().penTool?.d
 const toTuple = (vector: THREE.Vector3): Vector => [vector.x, vector.y, vector.z];
 const toVector3 = (vector: Vector) => new THREE.Vector3(...vector);
 const store = () => useEditorStore.getState();
+// Through the index: the pen looks its path up every frame while it's on.
+const findEntity = (id: string | null): Entity | undefined => (id ? getEntityIndex(store().entities).byId.get(id) : undefined);
 
 const findPath = (id: string | null): (Entity & { path: PathData }) | null => {
-  const entity = id ? store().entities.find((e) => e.id === id) : undefined;
+  const entity = findEntity(id);
   return entity?.type === "path" && entity.path ? (entity as Entity & { path: PathData }) : null;
 };
 
 // The shape or path being drawn and its outline: a drawn shape has one outline, its first region's;
 // a path's is its curve.
 const findDrawn = (id: string | null): { entity: Entity; outline: PathData } | null => {
-  const entity = id ? store().entities.find((e) => e.id === id) : undefined;
+  const entity = findEntity(id);
   const outline = entity?.type === "shape" ? entity.shape?.regions[0]?.outline : entity?.type === "path" ? entity.path : undefined;
   return entity && outline ? { entity, outline } : null;
 };
@@ -86,7 +88,7 @@ const findEditable = (id: string | null): Editable | null => {
       remove: () => store().removeEntity([path.id]),
     };
   }
-  const entity = id ? store().entities.find((e) => e.id === id) : undefined;
+  const entity = findEntity(id);
   const shape = entity?.type === "shape" ? entity.shape : undefined;
   if (!entity || !shape) return null;
   return {
