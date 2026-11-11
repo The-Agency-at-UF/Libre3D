@@ -1,17 +1,12 @@
 import { useState, useRef, useMemo } from "react";
 import { useEditorStore } from "../../store/useEditorStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
-import {
-  getChildren,
-  getEntityIndex,
-  filterMoveRoots,
-  canReparentEntities,
-  isEffectivelyLocked,
-} from "../../scene/entityIndex";
+import { isEffectivelyLocked } from "../../scene/entityIndex";
 import { BatchRenameDialog } from "./BatchRenameDialog";
 import { HierarchyContextMenu } from "./HierarchyContextMenu";
 import { MemoizedHierarchyItem } from "./HierarchyItem";
-import { ROW_INDENT_BASE_REM, ROW_INDENT_STEP_REM, type ContextMenuState, type DropTarget } from "./hierarchyTypes";
+import type { ContextMenuState } from "./hierarchyTypes";
+import { useHierarchyDragDrop } from "./useHierarchyDragDrop";
 import { useHierarchyRows } from "./useHierarchyRows";
 import { useRowWindow } from "./useRowWindow";
 
@@ -22,7 +17,6 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const selectedIdSet = useMemo(() => new Set(selectedEntityIds), [selectedEntityIds]);
   const selectEntity = useEditorStore((state) => state.selectEntity);
   const selectEntities = useEditorStore((state) => state.selectEntities);
-  const reparentEntities = useEditorStore((state) => state.reparentEntities);
   const { flatRows, trimmedQuery, collapsedIds, toggleExpand, setSubtreeCollapsed, expandRow } = useHierarchyRows(entities, searchQuery);
   // Keyboard cursor + range anchor. `activeId` follows every click and arrow
   // move; `anchorId` only follows non-shift clicks, so successive Shift+Clicks
@@ -33,12 +27,6 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // The ids being dragged live in a ref, not dataTransfer — browsers hide
-  // dataTransfer contents during dragover, and we need them there to compute
-  // legality (blocked cursor) per hovered row.
-  const draggedIdsRef = useRef<string[]>([]);
-  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
-  const dragExpandTimer = useRef<{ id: string; timer: number } | null>(null);
   const [batchRenameOpen, setBatchRenameOpen] = useState(false);
   const { treeRef, mountedRows, spacerAbove, spacerBelow, scrollRowIntoView } = useRowWindow(flatRows, containerRef);
 
@@ -53,233 +41,23 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     return true;
   };
 
-  // --- Drag and drop ---
-
-  const cancelAutoExpand = () => {
-    if (dragExpandTimer.current) {
-      clearTimeout(dragExpandTimer.current.timer);
-      dragExpandTimer.current = null;
-    }
+  // One row becomes the whole selection, the keyboard's row, and the range's start.
+  const selectOnly = (id: string) => {
+    selectEntity(id, false);
+    setActiveId(id);
+    setAnchorId(id);
   };
 
-  const clearDrag = useStableCallback(() => {
-    draggedIdsRef.current = [];
-    setDropTarget(null);
-    cancelAutoExpand();
-  });
-
-  // Hovering "onto" a collapsed branch expands it after a short dwell so the
-  // user can dive into subtrees mid-drag (standard file-tree behavior).
-  const scheduleAutoExpand = (id: string) => {
-    if (!collapsedIds.has(id) || dragExpandTimer.current?.id === id) return;
-    cancelAutoExpand();
-    dragExpandTimer.current = {
-      id,
-      timer: window.setTimeout(() => {
-        dragExpandTimer.current = null;
-        expandRow(id);
-      }, 650),
-    };
-  };
-
-  // Insertion index among `parentId`'s children with the dragged entities
-  // removed — exactly the semantics reparentEntities expects.
-  const insertionIndex = (parentId: string | null, referenceId: string | null, after: boolean): number => {
-    const dragged = new Set(draggedIdsRef.current);
-    const siblings = getChildren(entities, parentId).filter((sibling) => !dragged.has(sibling.id));
-    if (!referenceId) return siblings.length;
-    const referenceIndex = siblings.findIndex((sibling) => sibling.id === referenceId);
-    if (referenceIndex === -1) return siblings.length;
-    return after ? referenceIndex + 1 : referenceIndex;
-  };
-
-  const computeDropTarget = (rowId: string, event: React.DragEvent): DropTarget | null => {
-    const rowIndex = flatRows.findIndex((row) => row.id === rowId);
-    if (rowIndex === -1) return null;
-    const row = flatRows[rowIndex];
-    const { byId } = getEntityIndex(entities);
-    const entity = byId.get(row.id);
-    if (!entity) return null;
-
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    const ratio = (event.clientY - rect.top) / Math.max(rect.height, 1);
-
-    // Top quarter: insert before this row among its siblings.
-    if (ratio < 0.25) {
-      const parentId = entity.parentId ?? null;
-      return {
-        kind: "between",
-        parentId,
-        index: insertionIndex(parentId, row.id, false),
-        indicatorRowId: row.id,
-        edge: "top",
-        depth: row.depth,
-      };
-    }
-
-    // Bottom quarter: insert after. An expanded branch's "after" slot is its
-    // first-child position; at the end of a subtree the same gap visually
-    // belongs to several ancestors, so cursor X picks the indent level
-    // (Blender's drop-indicator indent snap).
-    if (ratio > 0.75) {
-      if (row.hasChildren && row.isExpanded) {
-        return {
-          kind: "between",
-          parentId: row.id,
-          index: 0,
-          indicatorRowId: row.id,
-          edge: "bottom",
-          depth: row.depth + 1,
-        };
-      }
-
-      const nextRow = flatRows[rowIndex + 1] ?? null;
-      const minDepth = nextRow ? nextRow.depth : (flatRows[0]?.depth ?? 0);
-
-      const candidates = [{ parentId: entity.parentId ?? null, refId: entity.id, depth: row.depth }];
-      let current = entity;
-      while (current.parentId && candidates[candidates.length - 1].depth > minDepth) {
-        const parent = byId.get(current.parentId);
-        if (!parent) break;
-        const parentRow = flatRows.find((r) => r.id === parent.id);
-        const parentDepth = parentRow?.depth ?? 0;
-        if (parentDepth < minDepth) break;
-        candidates.push({ parentId: parent.parentId ?? null, refId: parent.id, depth: parentDepth });
-        current = parent;
-      }
-
-      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
-      const cursorDepth = Math.round(
-        ((event.clientX - rect.left) / rem - ROW_INDENT_BASE_REM) / ROW_INDENT_STEP_REM,
-      );
-      let best = candidates[0];
-      for (const candidate of candidates) {
-        if (Math.abs(candidate.depth - cursorDepth) < Math.abs(best.depth - cursorDepth)) best = candidate;
-      }
-      return {
-        kind: "between",
-        parentId: best.parentId,
-        index: insertionIndex(best.parentId, best.refId, true),
-        indicatorRowId: row.id,
-        edge: "bottom",
-        depth: best.depth,
-      };
-    }
-
-    return { kind: "onto", targetId: row.id };
-  };
-
-  const handleRowDragStart = useStableCallback((id: string, event: React.DragEvent) => {
-    const state = useEditorStore.getState();
-    const entity = state.entities.find((e) => e.id === id);
-    if (!entity || isEffectivelyLocked(state.entities, id)) {
-      event.preventDefault();
-      return;
-    }
-
-    // Dragging a selected row moves the whole selection (its move roots);
-    // dragging an unselected row selects and moves just that row.
-    let ids: string[];
-    if (state.selectedEntityIds.includes(id)) {
-      ids = filterMoveRoots(state.entities, state.selectedEntityIds).filter((rootId) => {
-        return !isEffectivelyLocked(state.entities, rootId);
-      });
-    } else {
-      selectEntity(id, false);
-      setActiveId(id);
-      setAnchorId(id);
-      ids = [id];
-    }
-    if (ids.length === 0) {
-      event.preventDefault();
-      return;
-    }
-
-    draggedIdsRef.current = ids;
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", "libre3d-entities"); // Firefox needs data to start a drag
-
-    if (ids.length > 1) {
-      const ghost = document.createElement("div");
-      ghost.className = "hierarchy-drag-ghost";
-      ghost.textContent = `${ids.length} objects`;
-      document.body.appendChild(ghost);
-      event.dataTransfer.setDragImage(ghost, 12, 12);
-      setTimeout(() => ghost.remove(), 0); // only needs to exist for the capture
-    }
-  });
-
-  const handleRowDragOver = useStableCallback((id: string, event: React.DragEvent) => {
-    event.stopPropagation();
-    if (draggedIdsRef.current.length === 0) return; // foreign drag (files, etc.)
-
-    const target = computeDropTarget(id, event);
-    const newParentId = target ? (target.kind === "onto" ? target.targetId : target.parentId) : null;
-    const legal = !!target && canReparentEntities(entities, draggedIdsRef.current, newParentId);
-
-    if (legal) {
-      // Without preventDefault the browser shows the blocked cursor and
-      // refuses the drop — exactly what an illegal target should do.
-      event.preventDefault();
-      event.dataTransfer.dropEffect = "move";
-    }
-    setDropTarget(legal ? target : null);
-
-    if (legal && target!.kind === "onto") {
-      const row = flatRows.find((r) => r.id === id);
-      if (row?.hasChildren && !row.isExpanded) scheduleAutoExpand(id);
-    } else {
-      cancelAutoExpand();
-    }
-  });
-
-  const handleRowDrop = useStableCallback((id: string, event: React.DragEvent) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const ids = draggedIdsRef.current;
-    const target = computeDropTarget(id, event);
-    if (ids.length > 0 && target) {
-      const newParentId = target.kind === "onto" ? target.targetId : target.parentId;
-      if (canReparentEntities(entities, ids, newParentId)) {
-        if (target.kind === "onto") {
-          reparentEntities(ids, target.targetId);
-        } else {
-          reparentEntities(ids, target.parentId, target.index);
-        }
-      }
-    }
-    clearDrag();
-  });
-
-  // Empty space below the rows: move to the end of the scene root.
-  const handleContainerDragOver = (event: React.DragEvent) => {
-    if (draggedIdsRef.current.length === 0) return;
-    const legal = canReparentEntities(entities, draggedIdsRef.current, null);
-    if (!legal) {
-      setDropTarget(null);
-      return;
-    }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    const lastRow = flatRows[flatRows.length - 1];
-    setDropTarget({
-      kind: "between",
-      parentId: null,
-      index: insertionIndex(null, null, false),
-      indicatorRowId: lastRow?.id ?? "",
-      edge: "bottom",
-      depth: flatRows[0]?.depth ?? 0,
-    });
-  };
-
-  const handleContainerDrop = (event: React.DragEvent) => {
-    event.preventDefault();
-    const ids = draggedIdsRef.current;
-    if (ids.length > 0 && canReparentEntities(entities, ids, null)) {
-      reparentEntities(ids, null, insertionIndex(null, null, false));
-    }
-    clearDrag();
-  };
+  const {
+    dropTarget,
+    handleRowDragStart,
+    handleRowDragOver,
+    handleRowDrop,
+    clearDrag,
+    handleContainerDragOver,
+    handleContainerDrop,
+    handleContainerDragLeave,
+  } = useHierarchyDragDrop({ entities, flatRows, collapsedIds, expandRow, containerRef, selectOnly });
 
   // The handlers passed to a row go through useStableCallback: rows are memoized, and a handler
   // that was a new function on every render would re-render all of them on every edit.
@@ -290,11 +68,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const handleRowContextMenu = useStableCallback((id: string, event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
-    if (!useEditorStore.getState().selectedEntityIds.includes(id)) {
-      selectEntity(id, false);
-      setActiveId(id);
-      setAnchorId(id);
-    }
+    if (!useEditorStore.getState().selectedEntityIds.includes(id)) selectOnly(id);
     setContextMenu({ x: event.clientX, y: event.clientY, targetId: id });
   });
 
@@ -396,11 +170,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
       }}
       onDragOver={handleContainerDragOver}
       onDrop={handleContainerDrop}
-      onDragLeave={(e) => {
-        // Only clear when the drag actually leaves the panel, not when moving
-        // between child rows.
-        if (!containerRef.current?.contains(e.relatedTarget as Node)) setDropTarget(null);
-      }}
+      onDragLeave={handleContainerDragLeave}
     >
       <div className="editor-tree" aria-label="Scene hierarchy" ref={treeRef}>
         {pendingImportCount > 0 && (
