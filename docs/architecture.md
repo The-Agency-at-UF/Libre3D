@@ -132,7 +132,9 @@ getObject(id: string): THREE.Object3D | undefined
 disposeSceneObject(obj: THREE.Object3D): void
 ```
 
-`syncMeshes` does three things in order: dispose meshes whose entity is gone, create meshes for entities that have none, and update every surviving mesh's transform, visibility, and material. The `isDragging` flag exists so a mesh you are actively dragging isn't fought over by the sync.
+`syncMeshes` does three things: create meshes for entities that have none, update the surviving meshes' transform, visibility, and material, and dispose meshes whose entity is gone. The `isDragging` flag exists so a mesh you are actively dragging isn't fought over by the sync.
+
+**It only updates what changed.** A mesh is skipped when its entity is the same object the last sync applied to it, so moving one object in a scene of 2,000 applies one entity, not 2,000. That works because store actions never change an entity in place: a changed entity is always a new object (rule 1 below is part of the same promise). What a mesh shows that doesn't come from its own entity is handled apart from that: an object shown in a pose (`applyPose`), the gizmo's object, and an object waiting for a texture are synced again whatever their entity; a lock inherited from a group is worked out again for every object when a lock or a parent changes anywhere; lights are never skipped (a light is aimed from where its parents put it); wireframe is a scene setting that `ViewportCanvas` applies to every mesh when it changes. If you add something a mesh shows that depends on anything but its own entity, it needs the same care: `ObjectManager.sync.test.ts` runs a skipping manager against one that applies everything, through random edits, and is the place to add the new case.
 
 **Why reconcile instead of mutating in place?** Entity data changes for many reasons — undo, GLB import, a paste, a migration on load. Reconciliation handles all of them with one code path.
 
@@ -253,7 +255,8 @@ These are the ones that cause real bugs. They also appear in [CLAUDE.md](../CLAU
 **1. Clone vectors — never hand out a live reference.**
 
 ```typescript
-// mutates the store in place; undo and re-renders break
+// mutates the store in place; undo and re-renders break, and the viewport, which
+// skips an object whose entity is the same object as before, never shows the change
 const pos = entity.position;
 pos[1] += 5;
 
