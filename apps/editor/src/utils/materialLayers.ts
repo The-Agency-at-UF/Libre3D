@@ -14,7 +14,7 @@ import type {
 
 // Turns a parsed glTF THREE.Material into the editable layer stack this codebase
 // already uses for primitives (Color + Lighting, plus an Image layer per texture
-// map). It's the reverse of ObjectManager.materialClassForModel: read a material,
+// map). It's the reverse of materialClassForLayer (viewport/entityMaterials.ts): read a material,
 // emit layers; that function reads layers, builds a material.
 //
 // TEXTURE EXTRACTION — approach chosen: (A) canvas re-encode.
@@ -34,7 +34,7 @@ import type {
 const createLayerId = (): string => createId("layer");
 
 // Maps a parsed material's class to our LightingModel, mirroring
-// ObjectManager.materialClassForModel in reverse. MeshPhysicalMaterial extends
+// materialClassForLayer (viewport/entityMaterials.ts) in reverse. MeshPhysicalMaterial extends
 // MeshStandardMaterial and both map to "physical" (clearcoat is read into the
 // lighting layer; other physical-only features like sheen aren't surfaced yet).
 export function lightingModelForMaterial(material: THREE.Material): LightingModel {
@@ -220,7 +220,7 @@ export async function buildTextureFromLayer(blob: Blob, layer: ImageLayer): Prom
   // imported photo, utils/importImage.ts) stays one in exports and published
   // scenes, which keeps them several times smaller.
   if (await isJpeg(blob)) texture.userData.mimeType = "image/jpeg";
-  // Marks this texture as owned by ObjectManager's session cache so the group
+  // Marks this texture as owned by EntityMaterials' session cache so the group
   // disposal pass doesn't free it out from under other meshes sharing the id.
   texture.userData.libre3dManaged = true;
   texture.needsUpdate = true;

@@ -1249,7 +1249,7 @@ export const useEditorStore = create<EditorState>()(
               }),
             })),
           // Replaces an entity's whole layer stack. Used by hydrate-time backfill
-          // (ObjectManager) to write the layers derived from an imported mesh's
+          // (viewport/importedModels.ts) to write the layers derived from an imported mesh's
           // parsed glTF material — the one place layers can be built, since it
           // needs parsed texture/material data unavailable at migrate() time.
           setEntityMaterialLayers: (entityId, layers) =>

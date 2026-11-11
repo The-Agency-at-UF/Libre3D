@@ -7,7 +7,7 @@
  * blends each stop into the next as Spline's does: in order, each blend clamped to its own span,
  * eased when `smooth`. Blends happen in sRGB (as the stops are picked) and are then converted to
  * the linear colours vertex colours hold. The result goes over the Color layer's colour by the
- * Depth layer's opacity; the material's own colour is then white (see ObjectManager).
+ * Depth layer's opacity; the material's own colour is then white (see viewport/entityMaterials.ts).
  *
  * How smooth it looks depends on the geometry's vertices: tubes, spheres and models have plenty, a
  * cube or a flat shape's face very few.
