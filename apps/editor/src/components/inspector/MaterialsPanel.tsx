@@ -15,6 +15,7 @@ import { colorLayerOf, lightingLayerOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } f
 import { loadTextureForScene } from "../../utils/assetTransfers";
 import { depthReach } from "../../utils/depthColors";
 import { getLiveScene } from "../../utils/exportScene";
+import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
 import { Slider } from "../ui/Slider";
 import { Select } from "../ui/Select";
@@ -327,17 +328,7 @@ function NumberRow({ label, value, min, onChange }: { label: string; value: numb
   return (
     <div className="prop">
       <span className="prop-label">{label}</span>
-      <input
-        type="number"
-        step="0.1"
-        min={min}
-        value={Number(value.toFixed(2))}
-        onChange={(e) => {
-          const next = parseFloat(e.target.value);
-          if (Number.isFinite(next) && next !== value) onChange(min === undefined ? next : Math.max(min, next));
-        }}
-        aria-label={label}
-      />
+      <NumberField label={label} value={value} min={min} onChange={onChange} />
     </div>
   );
 }
@@ -416,14 +407,14 @@ function DepthLayerSection({
           <ColorSwatchField label="Stop Color" value={stop.color} mixed={false} onChange={(color) => setStop({ color })} />
           <div className="prop">
             <span className="prop-label">Stop Position</span>
-            <input
-              type="number"
+            <NumberField
+              label="Stop position"
               min={0}
               max={100}
               step={1}
+              integer
               value={Math.round(stop.position * 100)}
-              onChange={(e) => setStop({ position: Math.min(1, Math.max(0, (parseFloat(e.target.value) || 0) / 100)) })}
-              aria-label="Stop position"
+              onChange={(percent) => setStop({ position: percent / 100 })}
             />
             <button
               type="button"

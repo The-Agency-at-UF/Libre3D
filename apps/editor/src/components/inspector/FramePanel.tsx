@@ -1,4 +1,5 @@
 import { useEditorStore, FrameSizePreset } from "../../store/useEditorStore";
+import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
 import { Select } from "../ui/Select";
 
@@ -44,11 +45,13 @@ export function FramePanel() {
 
       <div className="prop" style={{ opacity: isResponsiveFrame ? 0.45 : 1 }}>
         <span className="prop-label">Width</span>
-        <input
-          type="number"
+        <NumberField
+          label="Frame width in pixels"
           min={1}
+          step={1}
+          integer
           value={frame.width}
-          onChange={(e) => updateFrameDimension("width", Number(e.target.value) || 0)}
+          onChange={(width) => updateFrameDimension("width", width)}
           disabled={isResponsiveFrame}
           style={{ width: "100%" }}
         />
@@ -56,11 +59,13 @@ export function FramePanel() {
 
       <div className="prop" style={{ opacity: isResponsiveFrame ? 0.45 : 1 }}>
         <span className="prop-label">Height</span>
-        <input
-          type="number"
+        <NumberField
+          label="Frame height in pixels"
           min={1}
+          step={1}
+          integer
           value={frame.height}
-          onChange={(e) => updateFrameDimension("height", Number(e.target.value) || 0)}
+          onChange={(height) => updateFrameDimension("height", height)}
           disabled={isResponsiveFrame}
           style={{ width: "100%" }}
         />
