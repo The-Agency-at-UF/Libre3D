@@ -11,7 +11,7 @@ This guide documents the naming conventions, architectural patterns, and testing
 
 ## 2. File & directory naming
 
-- **React components**: `PascalCase.tsx`, one component per file, filename matches the exported component name (`HierarchyPanel.tsx` exports `HierarchyPanel`). Small presentational sub-components used only by one file (e.g. `HierarchyItem` inside `HierarchyPanel.tsx`) can live unexported in the same file rather than getting their own module.
+- **React components**: `PascalCase.tsx`, one component per file, filename matches the exported component name (`HierarchyPanel.tsx` exports `HierarchyPanel`). Small presentational sub-components used only by one file (e.g. `LayerDeleteButton` inside `MaterialsPanel.tsx`) can live unexported in the same file rather than getting their own module.
 - **Hooks**: `camelCase.ts` starting with `use`, matching the exported hook (`useViewportControls.ts` exports `useViewportControls`).
 - **Manager classes** (imperative Three.js wrappers): `PascalCase.ts` matching the exported class (`SceneManager.ts` exports `SceneManager`).
 - **Utility modules**: `camelCase.ts`, named after what they do, not what they contain (`exportScene.ts`, `publishScene.ts`), exporting a small set of named functions rather than a single default.
