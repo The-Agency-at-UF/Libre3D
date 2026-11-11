@@ -33,6 +33,5 @@ export const createPublishedSceneSource = (entities: Entity[], assetUrls: Record
     setMaterialLayers: (entityId, layers) => {
       current = current.map((entity) => (entity.id === entityId ? { ...entity, materialLayers: layers } : entity));
     },
-    applyHierarchyPrune: () => undefined,
   };
 };

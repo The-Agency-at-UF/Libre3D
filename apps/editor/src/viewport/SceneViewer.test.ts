@@ -92,7 +92,6 @@ describe("a published scene's source", () => {
     const layers: MaterialLayer[] = [{ id: "c", type: "color", enabled: true, opacity: 1, color: "#123456" }];
 
     source.setMaterialLayers("cube-2", layers);
-    source.applyHierarchyPrune(new Set(["cube-1"]), new Map());
 
     expect(source.getEntities().map((each) => each.materialLayers)).toEqual([undefined, layers]);
     expect(source.isWireframe()).toBe(false);

@@ -24,9 +24,4 @@ export interface SceneSource {
   saveTexture(assetId: string, blob: Blob): Promise<void>;
   /** Editable layers derived from an imported mesh's own material, for a mesh that had none. */
   setMaterialLayers(entityId: string, layers: MaterialLayer[]): void;
-  /**
-   * An import's empty wrapper nodes collapsed after the fact (utils/pruneImportHierarchy.ts): the
-   * entities to remove, and the parent and transform each kept one takes over from them.
-   */
-  applyHierarchyPrune(removedIds: Set<string>, updates: Map<string, { position: Vec3; rotation: Vec3; scale: Vec3; parentId: string | null }>): void;
 }

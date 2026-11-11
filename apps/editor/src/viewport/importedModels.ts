@@ -8,9 +8,9 @@
  * OUTPUT: The parsed scene under the group, with every node that has an entity registered in the
  * object map under that entity's id.
  *
- * It also derives material layers for meshes that have none yet, collapses empty wrapper nodes on
- * imports made before the importer did, shows a red box for a model that can't be loaded, and
- * brings back a node whose object was removed while its root stayed (delete, then undo).
+ * It also derives material layers for meshes that have none yet, shows a red box for a model that
+ * can't be loaded, and brings back a node whose object was removed while its root stayed (delete,
+ * then undo).
  *
  * Loading and parsing are asynchronous: a model's nodes appear some time after the sync that made
  * its root, so this asks the source for the entities again when they land.
@@ -25,8 +25,7 @@ import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import type { Entity } from "../scene/types";
 import { getEntityIndex } from "../scene/entityIndex";
 import { deriveMaterialLayers, createTextureDedupCache } from "../utils/materialLayers";
-import { indexNodesByPath, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";
-import { pruneImportNodes, type PrunableNode } from "../utils/pruneImportHierarchy";
+import { indexNodesByPath, nodePathKey } from "../utils/gltfHierarchy";
 import { takeParsedModel } from "../utils/parsedModelCache";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
 import type { SceneSource } from "./sceneSource";
@@ -123,12 +122,6 @@ export class ImportedModels {
     // once parented, world and local space diverge and the box would reflect
     // wherever `group` happens to already be positioned in the scene.
     const boundingBox = new THREE.Box3().setFromObject(gltf.scene);
-
-    // Retroactively prune any already-persisted import created before this
-    // shipped -- a no-op for anything extracted after (already pruned at
-    // extraction time), real work only for pre-upgrade imports, mirroring how
-    // backfillMaterialLayers below backfills materialLayers.
-    this.backfillPruneHierarchy(gltf, rootEntityId);
 
     // Map every glTF node to its nodePath so the flat node entities created
     // by prepareModelImport can be resolved back to the actual parsed
@@ -232,66 +225,6 @@ export class ImportedModels {
         console.error(`[Libre3D] Failed to derive material layers for imported node "${entityId}":`, error);
       }
     }
-  }
-
-  // Retroactively collapses/drops any prunable node still present on an import
-  // created before this shipped. Reuses the exact pruneImportNodes algorithm
-  // extraction runs on new imports, fed from entities already in the store
-  // instead of a fresh ImportNodeSpec[] -- hasMesh/isProtected are derived from
-  // the same parsed gltf every hydrate already has in hand, no extra parse
-  // needed. A no-op (removedIds empty) for any import already pruned, whether
-  // at extraction time or a previous hydrate's backfill.
-  private backfillPruneHierarchy(gltf: GLTF, rootEntityId: string): void {
-    const entities = this.host.source.getEntities();
-    const rootEntity = entities.find((entity) => entity.id === rootEntityId);
-    if (!rootEntity) return;
-
-    const boneSet = collectSkinnedBones(gltf.scene);
-    const nodeByPath = indexNodesByPath(gltf.scene);
-
-    const nodeEntities = entities.filter(
-      (entity) => entity.rootEntityId === rootEntityId && entity.id !== rootEntityId,
-    );
-
-    const prunable: PrunableNode[] = [
-      {
-        id: rootEntityId,
-        parentId: null,
-        hasMesh: false,
-        isProtected: true,
-        position: rootEntity.position,
-        rotation: rootEntity.rotation,
-        scale: rootEntity.scale,
-      },
-      ...nodeEntities.map((entity) => {
-        const object = entity.nodePath ? nodeByPath.get(nodePathKey(entity.nodePath)) : undefined;
-        return {
-          id: entity.id,
-          parentId: entity.parentId ?? rootEntityId,
-          hasMesh: object instanceof THREE.Mesh,
-          // A node whose object can't be found (shouldn't happen) is protected
-          // defensively rather than risking an incorrect prune.
-          isProtected: object ? boneSet.has(object) : true,
-          position: entity.position,
-          rotation: entity.rotation,
-          scale: entity.scale,
-        };
-      }),
-    ];
-
-    const { keptById, removedIds } = pruneImportNodes(prunable);
-    if (removedIds.size === 0) return;
-
-    const updates = new Map<
-      string,
-      { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number]; parentId: string | null }
-    >();
-    for (const [id, node] of keptById) {
-      if (id === rootEntityId) continue;
-      updates.set(id, { position: node.position, rotation: node.rotation, scale: node.scale, parentId: node.parentId });
-    }
-
-    this.host.source.applyHierarchyPrune(removedIds, updates);
   }
 
   // Resets every parsed Object3D that has no surviving store entity (i.e. was

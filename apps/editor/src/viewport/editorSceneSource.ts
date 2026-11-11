@@ -16,5 +16,4 @@ export const editorSceneSource: SceneSource = {
   loadTexture: loadTextureForScene,
   saveTexture: saveTextureAsset,
   setMaterialLayers: (entityId, layers) => useEditorStore.getState().setEntityMaterialLayers(entityId, layers),
-  applyHierarchyPrune: (removedIds, updates) => useEditorStore.getState().applyHierarchyPrune(removedIds, updates),
 };

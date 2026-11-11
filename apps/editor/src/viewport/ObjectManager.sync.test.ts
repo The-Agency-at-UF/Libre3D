@@ -29,7 +29,6 @@ const createScene = (initial: Entity[]) => {
     loadTexture,
     saveTexture: async () => {},
     setMaterialLayers: () => {},
-    applyHierarchyPrune: () => {},
   };
   return {
     source,
