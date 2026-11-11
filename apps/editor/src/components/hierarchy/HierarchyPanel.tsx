@@ -1,15 +1,27 @@
 import { useState, useRef, useMemo } from "react";
 import { useEditorStore } from "../../store/useEditorStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
-import { isEffectivelyLocked } from "../../scene/entityIndex";
 import { BatchRenameDialog } from "./BatchRenameDialog";
 import { HierarchyContextMenu } from "./HierarchyContextMenu";
 import { MemoizedHierarchyItem } from "./HierarchyItem";
 import type { ContextMenuState } from "./hierarchyTypes";
 import { useHierarchyDragDrop } from "./useHierarchyDragDrop";
+import { useHierarchyKeyboard } from "./useHierarchyKeyboard";
 import { useHierarchyRows } from "./useHierarchyRows";
 import { useRowWindow } from "./useRowWindow";
 
+/**
+ * PURPOSE: The scene tree in the left sidebar: one row per entity, with selection, rename, the
+ * right-click menu, drag and drop, and the panel's own keys.
+ *
+ * This component holds what the pieces share (the selection's keyboard row and range start,
+ * which row is being renamed, the open menu) and composes them:
+ * - useHierarchyRows: the rows on show and which branches are collapsed (hierarchyRows.ts)
+ * - useRowWindow: which rows are mounted when the list is long
+ * - useHierarchyDragDrop: reordering and re-parenting by drag (hierarchyDrop.ts)
+ * - useHierarchyKeyboard: arrows and F2
+ * - HierarchyItem (a row), HierarchyContextMenu, BatchRenameDialog
+ */
 export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const entities = useEditorStore((state) => state.entities) ?? [];
   // Each row gets `isSelected` from this set, so a click re-renders the rows whose answer changed.
@@ -48,6 +60,13 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
     setAnchorId(id);
   };
 
+  // Shift+click and Shift+arrow: select from the range's start to this row. The start stays put.
+  const extendRangeTo = (id: string): boolean => {
+    if (!anchorId || !selectRange(anchorId, id)) return false;
+    setActiveId(id);
+    return true;
+  };
+
   const {
     dropTarget,
     handleRowDragStart,
@@ -73,10 +92,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   });
 
   const handleRowClick = useStableCallback((id: string, event: React.MouseEvent) => {
-    if (event.shiftKey && anchorId && selectRange(anchorId, id)) {
-      setActiveId(id);
-      return;
-    }
+    if (event.shiftKey && extendRangeTo(id)) return;
     if (event.ctrlKey || event.metaKey) {
       selectEntity(id, true);
     } else {
@@ -93,67 +109,17 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
 
   const finishRename = useStableCallback(() => setRenamingId(null));
 
-  // Outliner-scoped keys — deliberately NOT in the global useHotkeys: they
-  // should only fire while the panel (or a row inside it) has focus.
-  const handleKeyDown = (event: React.KeyboardEvent) => {
-    const target = event.target as HTMLElement;
-    if (target.tagName === "INPUT") return; // rename input owns its keys
-
-    const activeIndex = activeId ? flatRows.findIndex((row) => row.id === activeId) : -1;
-    const activeRow = activeIndex !== -1 ? flatRows[activeIndex] : null;
-
-    switch (event.key) {
-      case "ArrowDown":
-      case "ArrowUp": {
-        event.preventDefault();
-        if (flatRows.length === 0) return;
-
-        const delta = event.key === "ArrowDown" ? 1 : -1;
-        const nextIndex = activeIndex === -1
-          ? (delta === 1 ? 0 : flatRows.length - 1)
-          : Math.min(flatRows.length - 1, Math.max(0, activeIndex + delta));
-        const nextId = flatRows[nextIndex].id;
-
-        if (event.shiftKey && anchorId && selectRange(anchorId, nextId)) {
-          // extended the range; anchor stays put
-        } else {
-          selectEntity(nextId, false);
-          setAnchorId(nextId);
-        }
-        setActiveId(nextId);
-        scrollRowIntoView(nextId);
-        break;
-      }
-      case "ArrowRight":
-      case "ArrowLeft": {
-        if (!activeRow || !activeRow.hasChildren) return;
-        event.preventDefault();
-
-        const collapse = event.key === "ArrowLeft";
-        if (event.shiftKey) {
-          setSubtreeCollapsed(activeRow.id, collapse);
-        } else if (collapse === activeRow.isExpanded) {
-          toggleExpand(activeRow.id);
-        }
-        break;
-      }
-      case "F2": {
-        if (!activeId) return;
-        if (
-          !entities.some((e) => e.id === activeId) ||
-          isEffectivelyLocked(entities, activeId) ||
-          useEditorStore.getState().readOnlyReason
-        ) {
-          return;
-        }
-        event.preventDefault();
-        setRenamingId(activeId);
-        break;
-      }
-      default:
-        break;
-    }
-  };
+  const handleKeyDown = useHierarchyKeyboard({
+    entities,
+    flatRows,
+    activeId,
+    selectOnly,
+    extendRangeTo,
+    scrollRowIntoView,
+    toggleExpand,
+    setSubtreeCollapsed,
+    requestRename,
+  });
 
   return (
     <div
