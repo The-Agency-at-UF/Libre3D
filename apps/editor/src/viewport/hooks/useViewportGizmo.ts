@@ -24,7 +24,7 @@ const GIZMO_CLASS_NAME = "libre3d-viewport-gizmo";
  *  The right sidebar's width isn't user-resizable (only the left one is —
  *  see `left-sidebar-resize-handle` in `App.tsx`), so this can be a
  *  constant instead of something measured live off the DOM every resize. */
-const RIGHT_SIDEBAR_CLEARANCE = 296 + 16 + 16;
+export const RIGHT_SIDEBAR_CLEARANCE = 296 + 16 + 16;
 
 /** Top offset matching the sidebars' own 16px outer margin, so the gizmo's
  *  top edge lines up with the top of the left/right inspector panels. */

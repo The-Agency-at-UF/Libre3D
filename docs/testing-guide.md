@@ -275,7 +275,7 @@ Open Chrome DevTools Console (F12). After loading the app, you should see:
 
 ### Performance
 
-- [ ] **FPS stable** (toggle HUD overlay, check FPS — should be 60 with no lag)
+- [ ] **FPS stable** (turn on FPS Panel in Viewport Settings, check FPS — should be 60 with no lag)
 - [ ] **No stuttering** (smooth camera panning, no frame drops)
 - [ ] **Large scene performant** (add 50+ entities, still interactive)
 - [ ] **Memory doesn't leak** (open DevTools Performance, record for 30s, memory stable)
@@ -392,7 +392,7 @@ Check in order:
 1. DevTools console for errors
 2. Is the scene empty? (Add a cube with "Add Shape")
 3. Is the camera looking at the scene? (Press F to focus)
-4. Is the renderer working? (HUD overlay shows FPS?)
+4. Is the renderer working? (FPS Panel, in Viewport Settings, shows a frame rate?)
 5. Is WebGL supported? (Chrome → Settings → Privacy → Site Settings → JavaScript)
 
 ### "Undo/redo don't work"
@@ -515,7 +515,7 @@ Check in order:
 5. **Test large scenes** — 50+ entities reveal performance issues
 6. **Test all transform modes** — translate, rotate, scale each matter
 7. **Check both projection modes** — perspective and orthographic
-8. **Use HUD overlay** — quick FPS check
+8. **Use the FPS Panel** (Viewport Settings) — quick FPS check
 
 ---
 

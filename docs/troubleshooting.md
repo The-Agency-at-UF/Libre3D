@@ -247,7 +247,7 @@ useEditorStore.getState().updateEntityTransform(id, updates);
 **Diagnosis**:
 1. Open DevTools Console (F12) — any errors?
 2. Check if scene loads: add a cube with "Add Shape"
-3. Check HUD overlay (toggle via Scene Panel) — does it show FPS?
+3. Turn on FPS Panel in Viewport Settings (right sidebar) — does it show a frame rate, bottom right of the viewport?
 
 **Solutions** (try in order):
 1. **Check camera** — press F to focus on scene

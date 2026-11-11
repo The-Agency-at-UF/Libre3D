@@ -5,6 +5,7 @@ import Stats from "three/examples/jsm/libs/stats.module.js";
 import { hasPendingThumbnail, renderPendingThumbnail } from "../thumbnailCapture";
 import { hideEditorOnlyObjects } from "../editorOnly";
 import { createSceneRenderer, exposeLiveRenderer } from "../rendererSettings";
+import { RIGHT_SIDEBAR_CLEARANCE } from "./useViewportGizmo";
 
 export function useViewportRenderer(
   containerRef: React.RefObject<HTMLDivElement | null>,
@@ -85,9 +86,14 @@ export function useViewportRenderer(
         const canvas = rendererRef.current?.domElement;
         if (statsRef.current || !canvas) return;
         const stats = new Stats();
+        // Bottom right of the part of the viewport that shows. The container runs under both
+        // sidebars, and the panel's old place (its top left corner) is behind the left one, whose
+        // width the user can change; the right one's is fixed, as for the navigation gizmo.
         stats.dom.style.position = "absolute";
-        stats.dom.style.top  = "10px";
-        stats.dom.style.left = "10px";
+        stats.dom.style.top = "auto";
+        stats.dom.style.left = "auto";
+        stats.dom.style.bottom = "16px";
+        stats.dom.style.right = `${RIGHT_SIDEBAR_CLEARANCE}px`;
         // Right after the canvas, where it has always been in the container.
         canvas.after(stats.dom);
         statsRef.current = stats;
