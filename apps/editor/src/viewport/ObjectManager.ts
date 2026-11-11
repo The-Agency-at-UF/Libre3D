@@ -16,6 +16,7 @@ import type { ShapeData, ShapeSolid } from "../paths/shapeGeometry";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { depthPaintOf, syncDepthColors } from "../utils/depthColors";
 import { createPrimitiveGeometry } from "./entityGeometry";
+import { attachSelectionOutline, disposeSelectionOutline, replaceSelectionOutline } from "./selectionOutline";
 
 type LayeredMaterial =
   | THREE.MeshBasicMaterial
@@ -438,41 +439,6 @@ export class ObjectManager {
     }
   }
 
-  // A thin wireframe box parented directly to the mesh, sized from the mesh's own
-  // geometry bounding box. Parenting it (rather than recomputing a world-space AABB
-  // every frame, e.g. THREE.BoxHelper) means it inherits the mesh's full transform for
-  // free — it stays a tight, correctly oriented box even when the object is rotated,
-  // matching Spline's selection indicator instead of a looser world-axis-aligned box.
-  private createSelectionOutline(boundingBox: THREE.Box3, color = 0xffffff): THREE.LineSegments {
-    // An empty box (a path with nothing to draw) has a size of -Infinity; outline a point instead.
-    const box = boundingBox.isEmpty() ? new THREE.Box3(new THREE.Vector3(), new THREE.Vector3()) : boundingBox;
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const center = new THREE.Vector3();
-    box.getCenter(center);
-
-    const boxGeometry = new THREE.BoxGeometry(size.x, size.y, size.z);
-    boxGeometry.translate(center.x, center.y, center.z);
-    const edges = new THREE.EdgesGeometry(boxGeometry);
-    boxGeometry.dispose();
-
-    const material = new THREE.LineBasicMaterial({
-      color,
-      transparent: true,
-      opacity: 0.9,
-      depthTest: false, // always render on top, same convention TransformControls uses
-    });
-
-    const outline = new THREE.LineSegments(edges, material);
-    outline.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
-    outline.visible = false;
-    outline.renderOrder = 999;
-    outline.raycast = () => { }; // never an independent click/box-select target —
-    // Raycaster doesn't check .visible, so this guards
-    // against it being hit while hidden (see gizmo picker fix)
-    return outline;
-  }
-
   private createSceneObject(entity: Entity): THREE.Object3D {
     if (entity.type === "importedModel") {
       const group = new THREE.Group();
@@ -534,9 +500,7 @@ export class ObjectManager {
       mesh.scale.set(...entity.scale);
       mesh.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
 
-      const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
-      mesh.add(outline);
-      mesh.userData.selectionOutline = outline;
+      attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
 
       return mesh;
     } else if (entity.type === "shape") {
@@ -546,9 +510,7 @@ export class ObjectManager {
       mesh.rotation.set(...entity.rotation);
       mesh.scale.set(...entity.scale);
 
-      const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
-      mesh.add(outline);
-      mesh.userData.selectionOutline = outline;
+      attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
 
       return mesh;
     } else {
@@ -559,9 +521,7 @@ export class ObjectManager {
       mesh.rotation.set(...entity.rotation);
       mesh.scale.set(...entity.scale);
 
-      const outline = this.createSelectionOutline(geometry.boundingBox!);
-      mesh.add(outline);
-      mesh.userData.selectionOutline = outline;
+      attachSelectionOutline(mesh, geometry.boundingBox!);
 
       return mesh;
     }
@@ -570,17 +530,8 @@ export class ObjectManager {
   // Recolors/rebuilds the group's outline as a red box so a failed import stays visible,
   // selectable, and obviously broken instead of silently vanishing from the scene.
   private showImportedModelError(group: THREE.Group): void {
-    const existingOutline = group.userData.selectionOutline as THREE.LineSegments | undefined;
-    if (existingOutline) {
-      group.remove(existingOutline);
-      existingOutline.geometry.dispose();
-      (existingOutline.material as THREE.Material).dispose();
-    }
-
     const errorBox = new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
-    const outline = this.createSelectionOutline(errorBox, 0xff3b30);
-    group.add(outline);
-    group.userData.selectionOutline = outline;
+    replaceSelectionOutline(group, errorBox, { color: 0xff3b30 });
     group.userData.loadError = true;
   }
 
@@ -699,9 +650,7 @@ export class ObjectManager {
     // reparenting needed once every node object is tagged and registered.
     group.add(gltf.scene);
 
-    const outline = this.createSelectionOutline(boundingBox);
-    group.add(outline);
-    group.userData.selectionOutline = outline;
+    attachSelectionOutline(group, boundingBox);
 
     // Now that the nodes exist, apply any store-level hierarchy that
     // diverges from the file structure, and attach any entities that were
@@ -720,26 +669,13 @@ export class ObjectManager {
   // outline is sized from the geometry's bounds when it's made, so it's made again too.
   private rebuildPath(mesh: PathMesh, entity: Entity): void {
     mesh.rebuild(pathOf(entity), strokeOf(entity));
-    this.replaceSelectionOutline(mesh);
+    replaceSelectionOutline(mesh, mesh.geometry.boundingBox!, { keepVisibility: true });
   }
 
   // A shape's geometry is rebuilt when its outline, extrusion or bevel changes, and its outline with it.
   private rebuildShape(mesh: ShapeMesh, entity: Entity): void {
     mesh.rebuild(shapeOf(entity), solidOf(entity));
-    this.replaceSelectionOutline(mesh);
-  }
-
-  private replaceSelectionOutline(mesh: THREE.Mesh): void {
-    const oldOutline = mesh.userData.selectionOutline as THREE.LineSegments | undefined;
-    const outline = this.createSelectionOutline(mesh.geometry.boundingBox!);
-    if (oldOutline) {
-      outline.visible = oldOutline.visible;
-      mesh.remove(oldOutline);
-      oldOutline.geometry.dispose();
-      (oldOutline.material as THREE.Material).dispose();
-    }
-    mesh.add(outline);
-    mesh.userData.selectionOutline = outline;
+    replaceSelectionOutline(mesh, mesh.geometry.boundingBox!, { keepVisibility: true });
   }
 
   public disposeSceneObject(obj: THREE.Object3D): void {
@@ -752,11 +688,7 @@ export class ObjectManager {
       } else {
         material.dispose();
       }
-      const outline = obj.userData.selectionOutline as THREE.LineSegments | undefined;
-      if (outline) {
-        outline.geometry.dispose();
-        (outline.material as THREE.Material).dispose();
-      }
+      disposeSelectionOutline(obj);
     } else if (obj instanceof THREE.DirectionalLight) {
       if (obj.userData.helper) {
         this.scene.remove(obj.userData.helper);
@@ -765,11 +697,7 @@ export class ObjectManager {
       // The target is a child of the light now, so it goes with it — nothing to
       // detach from the scene.
     } else if (obj instanceof THREE.Group) {
-      const outline = obj.userData.selectionOutline as THREE.LineSegments | undefined;
-      if (outline) {
-        outline.geometry.dispose();
-        (outline.material as THREE.Material).dispose();
-      }
+      disposeSelectionOutline(obj);
 
       const textureSlots = [
         "map", "normalMap", "roughnessMap", "metalnessMap", "emissiveMap",
