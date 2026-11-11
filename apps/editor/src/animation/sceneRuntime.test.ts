@@ -135,6 +135,13 @@ describe("SceneRuntime: Start", () => {
 });
 
 describe("SceneRuntime: clicks", () => {
+  it("says a scene with only Start events, or none, has nothing to click", () => {
+    const startOnly = cubeScene([event("bob", { actions: [transition({ from: "up", steps: [{ to: "base", duration: 1, easing: "linear" }] })] })]);
+
+    expect(startOnly.hasClickEvents).toBe(false);
+    expect(cubeScene([]).hasClickEvents).toBe(false);
+  });
+
   const growOnClick = (from: TransitionAction["from"] = "current") =>
     cubeScene(
       [event("grow", { trigger: "mouseDown", actions: [transition({ from, steps: [{ to: "big", duration: 0.3, easing: "linear" }] })] })],
