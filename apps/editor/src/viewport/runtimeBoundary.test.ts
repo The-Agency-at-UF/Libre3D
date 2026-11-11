@@ -76,6 +76,9 @@ const chainTo = (importedBy: Map<string, string | null>, module: string): string
   return chain.join(" <- ");
 };
 
+/** The viewer's own source files, among everything it reaches. */
+const reachableFiles = (): string[] => [...reachable().keys()].filter((module) => existsSync(path.join(SRC, module)));
+
 const offenders = (isOffender: (module: string) => boolean): string[] => {
   const importedBy = reachable();
   return [...importedBy.keys()].filter(isOffender).map((module) => chainTo(importedBy, module));
@@ -104,6 +107,17 @@ describe("what the share-link viewer imports", () => {
           module.startsWith("components/") || module.startsWith("hooks/") || module === "react" || module.startsWith("react-dom") || editorOnly.includes(module),
       ),
     ).toEqual([]);
+  });
+
+  // Two viewers on one page (the embed) would share a global and the second would take the first's.
+  // What a module needs is handed to it: the renderer through ObjectManager's options, the scene as
+  // an argument. The editor's console handles (utils/consoleHandle.ts) are set by the editor and the
+  // share page, outside what the viewer imports.
+  it("reads and sets no window globals", () => {
+    // A handle's name, or `window` cast to another type, which is how a made-up property is reached.
+    const usesGlobal = (module: string) => /__libre3d|\bwindow as\b/.test(withoutComments(readFileSync(path.join(SRC, module), "utf8")));
+
+    expect(reachableFiles().filter(usesGlobal)).toEqual([]);
   });
 
   // Deriving an imported mesh's material layers takes the textures out of its material. Where they

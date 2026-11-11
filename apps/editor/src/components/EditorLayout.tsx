@@ -17,7 +17,8 @@ import { useRightSidebarState } from "../hooks/useRightSidebarState";
 import { useHotkeys } from "../hooks/useHotkeys";
 
 //import tsx utils for editor export and publish
-import { exportLiveScene, getLiveScene } from "../utils/exportScene";
+import { exportLiveScene } from "../utils/exportScene";
+import { getLiveScene } from "../viewport/liveViewport";
 import { publishScene, PublishError } from "../utils/publishScene";
 import { downloadSceneFile } from "../utils/sceneFileTransfers";
 import { ApiAuthError } from "../utils/apiFetch";

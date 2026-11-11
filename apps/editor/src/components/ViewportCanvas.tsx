@@ -9,7 +9,7 @@ import { createRoomEnvironment } from "../viewport/sceneEnvironment";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
 import { editorSceneSource } from "../viewport/editorSceneSource";
-import { getLiveRenderer } from "../viewport/liveViewport";
+import { getLiveRenderer, setLiveScene } from "../viewport/liveViewport";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
 import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
@@ -83,14 +83,8 @@ export function ViewportCanvas() {
   // active camera, even after perspective ↔ orthographic switches.
   const cameraRef = useRef<THREE.Camera>(cameraManager.activeCamera);
 
-  useEffect(() => {
-    (window as any).__libre3dScene = sceneManager.scene;
-    return () => {
-      if ((window as any).__libre3dScene === sceneManager.scene) {
-        delete (window as any).__libre3dScene;
-      }
-    };
-  }, [sceneManager]);
+  // Export and the Depth layer's reach read the live scene from outside the viewport (liveViewport.ts).
+  useEffect(() => setLiveScene(sceneManager.scene), [sceneManager]);
 
 
 
