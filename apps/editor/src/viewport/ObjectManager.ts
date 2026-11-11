@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { Entity, MaterialLayer, ColorLayer, LightingLayer, ImageLayer, ImageSlot } from "../scene/types";
 import { getEntityIndex, isEffectivelyLocked } from "../scene/entityIndex";
+import { colorLayerOf, lightingLayerOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../scene/layers";
 import type { SceneSource } from "./sceneSource";
 import { deriveMaterialLayers, createTextureDedupCache, buildTextureFromLayer } from "../utils/materialLayers";
 import { indexNodesByPath, nodePathKey, collectSkinnedBones } from "../utils/gltfHierarchy";
@@ -137,8 +138,8 @@ export class ObjectManager {
   }
 
   private createMaterialFromLayers(layers: MaterialLayer[] | undefined): LayeredMaterial {
-    const colorLayer = layers?.find((layer): layer is ColorLayer => layer.type === "color");
-    const lightingLayer = layers?.find((layer): layer is LightingLayer => layer.type === "lighting");
+    const colorLayer = colorLayerOf(layers);
+    const lightingLayer = lightingLayerOf(layers);
     const model = lightingLayer?.model ?? "physical";
     const MaterialClass = materialClassForLayer(lightingLayer);
     const opacity = colorLayer?.opacity ?? 1;
@@ -425,8 +426,8 @@ export class ObjectManager {
     model: LightingLayer["model"]
   ): void {
     if (model === "physical" && material instanceof THREE.MeshStandardMaterial) {
-      material.roughness = lightingLayer?.roughness ?? 0.45;
-      material.metalness = lightingLayer?.metalness ?? 0.08;
+      material.roughness = lightingLayer?.roughness ?? DEFAULT_ROUGHNESS;
+      material.metalness = lightingLayer?.metalness ?? DEFAULT_METALNESS;
     }
     // Left alone when the layer has no value, so an imported glTF clearcoat survives layers made
     // before clearcoat was one. Turning it back to 0 keeps the physical material: three compiles it
@@ -747,8 +748,8 @@ export class ObjectManager {
     // the same as a primitive. Meshes still awaiting their backfill (materialLayers
     // undefined) skip this and keep their parsed glTF material untouched.
     if (obj instanceof THREE.Mesh && entity.materialLayers) {
-      const colorLayer = entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
-      const lightingLayer = entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
+      const colorLayer = colorLayerOf(entity.materialLayers);
+      const lightingLayer = lightingLayerOf(entity.materialLayers);
       const model = lightingLayer?.model ?? "physical";
       const MaterialClass = materialClassForLayer(lightingLayer);
 

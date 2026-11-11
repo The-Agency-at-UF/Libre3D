@@ -14,6 +14,7 @@
  */
 
 import * as THREE from "three";
+import { colorLayerOf } from "../scene/layers";
 import type { DepthLayer, MaterialLayer } from "../scene/types";
 
 export const MAX_DEPTH_STOPS = 10;
@@ -29,8 +30,7 @@ export interface DepthPaint {
 export const depthPaintOf = (layers: MaterialLayer[] | undefined): DepthPaint | null => {
   const layer = layers?.find((each): each is DepthLayer => each.type === "depth" && each.enabled);
   if (!layer) return null;
-  const color = layers?.find((each) => each.type === "color");
-  return { layer, base: color?.type === "color" ? color.color : "#ffffff" };
+  return { layer, base: colorLayerOf(layers)?.color ?? "#ffffff" };
 };
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));

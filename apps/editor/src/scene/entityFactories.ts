@@ -15,6 +15,7 @@ import { clonePath, createSamplePath, DEFAULT_STROKE } from "../paths/pathGeomet
 import { cloneShape } from "../paths/shapeGeometry";
 import { createId } from "../utils/createId";
 import { DEFAULT_CAMERA_PROFILE } from "./defaults";
+import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "./layers";
 import type { CameraProfile, ColorLayer, DepthLayer, Entity, EntityType, LightingLayer, MaterialLayer } from "./types";
 import { cloneVector } from "./vec3";
 
@@ -100,8 +101,8 @@ export const createLightingLayer = (overrides: Partial<LightingLayer> = {}): Lig
   enabled: true,
   opacity: 1,
   model: "physical",
-  roughness: 0.45,
-  metalness: 0.08,
+  roughness: DEFAULT_ROUGHNESS,
+  metalness: DEFAULT_METALNESS,
   clearcoat: 0,
   clearcoatRoughness: 0,
   shininess: 30,

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createId } from "./createId";
+import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../scene/layers";
 import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
 import { saveTextureAsset } from "./textureAssetStore";
 import type {
@@ -84,8 +85,8 @@ function lightingLayerFromMaterial(material: THREE.Material, model: LightingMode
     enabled: true,
     opacity: 1,
     model,
-    roughness: typeof std.roughness === "number" ? std.roughness : 0.45,
-    metalness: typeof std.metalness === "number" ? std.metalness : 0.08,
+    roughness: typeof std.roughness === "number" ? std.roughness : DEFAULT_ROUGHNESS,
+    metalness: typeof std.metalness === "number" ? std.metalness : DEFAULT_METALNESS,
     clearcoat: material instanceof THREE.MeshPhysicalMaterial ? material.clearcoat : 0,
     clearcoatRoughness: material instanceof THREE.MeshPhysicalMaterial ? material.clearcoatRoughness : 0,
     shininess: typeof phong.shininess === "number" ? phong.shininess : 30,

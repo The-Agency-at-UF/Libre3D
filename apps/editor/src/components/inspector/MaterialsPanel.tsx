@@ -11,6 +11,7 @@ import {
   type ImageSlot,
   type DepthLayer,
 } from "../../store/useEditorStore";
+import { colorLayerOf, lightingLayerOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../../scene/layers";
 import { loadTextureForScene } from "../../utils/assetTransfers";
 import { depthReach } from "../../utils/depthColors";
 import { getLiveScene } from "../../utils/exportScene";
@@ -485,11 +486,9 @@ const ALPHA_MODE_OPTIONS: { label: string; value: AlphaMode }[] = [
   { label: "Blend", value: "BLEND" },
 ];
 
-const getColorLayer = (entity: Entity): ColorLayer | undefined =>
-  entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
+const getColorLayer = (entity: Entity): ColorLayer | undefined => colorLayerOf(entity.materialLayers);
 
-const getLightingLayer = (entity: Entity): LightingLayer | undefined =>
-  entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
+const getLightingLayer = (entity: Entity): LightingLayer | undefined => lightingLayerOf(entity.materialLayers);
 
 const getDepthLayer = (entity: Entity): DepthLayer | undefined =>
   entity.materialLayers?.find((layer): layer is DepthLayer => layer.type === "depth");
@@ -648,7 +647,7 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
                       min={0}
                       max={1}
                       step={0.01}
-                      value={firstLighting.roughness ?? 0.45}
+                      value={firstLighting.roughness ?? DEFAULT_ROUGHNESS}
                       onChange={(val) => applyLightingUpdate({ roughness: val })}
                     />
                     <Slider
@@ -656,7 +655,7 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
                       min={0}
                       max={1}
                       step={0.01}
-                      value={firstLighting.metalness ?? 0.08}
+                      value={firstLighting.metalness ?? DEFAULT_METALNESS}
                       onChange={(val) => applyLightingUpdate({ metalness: val })}
                     />
                     <Slider
