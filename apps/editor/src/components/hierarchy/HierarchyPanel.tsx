@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useMemo } from "react";
 import { useEditorStore } from "../../store/useEditorStore";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import {
@@ -13,12 +13,7 @@ import { HierarchyContextMenu } from "./HierarchyContextMenu";
 import { MemoizedHierarchyItem } from "./HierarchyItem";
 import { ROW_INDENT_BASE_REM, ROW_INDENT_STEP_REM, type ContextMenuState, type DropTarget } from "./hierarchyTypes";
 import { useHierarchyRows } from "./useHierarchyRows";
-
-// Above this many visible rows the tree windows its rendering: only rows in
-// (and near) the scroll viewport mount, with spacer divs standing in for the
-// rest. Below it, plain full rendering — simpler and plenty fast.
-const VIRTUALIZE_THRESHOLD = 200;
-const VIRTUALIZE_OVERSCAN = 12;
+import { useRowWindow } from "./useRowWindow";
 
 export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const entities = useEditorStore((state) => state.entities) ?? [];
@@ -45,77 +40,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
   const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
   const dragExpandTimer = useRef<{ id: string; timer: number } | null>(null);
   const [batchRenameOpen, setBatchRenameOpen] = useState(false);
-  // Virtualization: mounted row window (null = render everything).
-  const treeRef = useRef<HTMLDivElement | null>(null);
-  const scrollParentRef = useRef<HTMLElement | null>(null);
-  const rowPitchRef = useRef(26);
-  const [rowWindow, setRowWindow] = useState<{ start: number; end: number } | null>(null);
-
-  // Window the mounted rows to the scroll viewport once the tree is large.
-  useEffect(() => {
-    if (flatRows.length <= VIRTUALIZE_THRESHOLD) {
-      scrollParentRef.current = null;
-      setRowWindow(null);
-      return;
-    }
-    const treeEl = treeRef.current;
-    if (!treeEl) return;
-
-    let scroller: HTMLElement | null = treeEl.parentElement;
-    while (scroller && scroller !== document.body) {
-      const { overflowY } = getComputedStyle(scroller);
-      if (overflowY === "auto" || overflowY === "scroll") break;
-      scroller = scroller.parentElement;
-    }
-    if (scroller === document.body) scroller = null;
-    scrollParentRef.current = scroller;
-
-    const update = () => {
-      // Pitch (row height + tree gap) measured from two mounted neighbors.
-      const rows = treeEl.querySelectorAll("[data-entity-id]");
-      if (rows.length >= 2) {
-        const pitch = rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().top;
-        if (pitch > 8) rowPitchRef.current = pitch;
-      }
-      const pitch = rowPitchRef.current;
-      const viewTop = scroller ? scroller.getBoundingClientRect().top : 0;
-      const viewHeight = scroller ? scroller.clientHeight : window.innerHeight;
-      const scrolledPast = viewTop - treeEl.getBoundingClientRect().top;
-      const start = Math.max(0, Math.floor(scrolledPast / pitch) - VIRTUALIZE_OVERSCAN);
-      const count = Math.ceil(viewHeight / pitch) + VIRTUALIZE_OVERSCAN * 2;
-      setRowWindow((prev) => {
-        const next = { start, end: Math.min(flatRows.length, start + count) };
-        return prev && prev.start === next.start && prev.end === next.end ? prev : next;
-      });
-    };
-
-    update();
-    const target: HTMLElement | Window = scroller ?? window;
-    target.addEventListener("scroll", update, { passive: true });
-    const resizeObserver = new ResizeObserver(update);
-    if (scroller) resizeObserver.observe(scroller);
-    return () => {
-      target.removeEventListener("scroll", update);
-      resizeObserver.disconnect();
-    };
-  }, [flatRows.length]);
-
-  const scrollRowIntoView = (id: string) => {
-    const el = containerRef.current?.querySelector(`[data-entity-id="${CSS.escape(id)}"]`);
-    if (el) {
-      el.scrollIntoView({ block: "nearest" });
-      return;
-    }
-    // Virtualized and not mounted: jump the scroll container to the row's
-    // computed offset; the window effect mounts it on the resulting scroll.
-    const rowIndex = flatRows.findIndex((row) => row.id === id);
-    const scroller = scrollParentRef.current;
-    const treeEl = treeRef.current;
-    if (rowIndex === -1 || !scroller || !treeEl) return;
-    const treeTopInScroller =
-      treeEl.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
-    scroller.scrollTop = treeTopInScroller + rowIndex * rowPitchRef.current - scroller.clientHeight / 2;
-  };
+  const { treeRef, mountedRows, spacerAbove, spacerBelow, scrollRowIntoView } = useRowWindow(flatRows, containerRef);
 
   // Replace-select every visible row between the two ids (inclusive).
   const selectRange = (fromId: string, toId: string): boolean => {
@@ -491,10 +416,8 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
               : "Scene is empty. Add a shape with the + button, or drop a .glb or .svg file into the viewport."}
           </div>
         )}
-        {rowWindow && rowWindow.start > 0 && (
-          <div style={{ height: rowWindow.start * rowPitchRef.current - 2, flexShrink: 0 }} aria-hidden="true" />
-        )}
-        {(rowWindow ? flatRows.slice(rowWindow.start, rowWindow.end) : flatRows).map((row) => (
+        {spacerAbove !== null && <div style={{ height: spacerAbove, flexShrink: 0 }} aria-hidden="true" />}
+        {mountedRows.map((row) => (
           <MemoizedHierarchyItem
             key={row.id}
             entityId={row.id}
@@ -523,12 +446,7 @@ export function HierarchyPanel({ searchQuery = "" }: { searchQuery?: string }) {
             onFinishRename={finishRename}
           />
         ))}
-        {rowWindow && rowWindow.end < flatRows.length && (
-          <div
-            style={{ height: (flatRows.length - rowWindow.end) * rowPitchRef.current - 2, flexShrink: 0 }}
-            aria-hidden="true"
-          />
-        )}
+        {spacerBelow !== null && <div style={{ height: spacerBelow, flexShrink: 0 }} aria-hidden="true" />}
       </div>
 
       {contextMenu && (
