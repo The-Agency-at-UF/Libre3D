@@ -126,7 +126,8 @@ The pages outside the editor (landing, gallery, status screens) are built only f
 - **`Select.tsx`** — A labeled `<select>` dropdown wrapper taking a list of `{label, value}` options.
 - **`Slider.tsx`** — A labeled range-input slider that keeps a `--value-percent` CSS variable in sync for a gradient-fill track effect, plus a numeric value readout. A drag is one undo step (`useSliderUndoStep`).
 - **`Switch.tsx`** — A labeled toggle switch (styled checkbox) component.
-- **`Vector3Input.tsx`** — A labeled X/Y/Z (color-coded) numeric input row, used for position/rotation/scale editing; supports a "mixed values" blank/placeholder state for multi-selection.
+- **`NumberField.tsx`** — The inspector's number input, used by `Vector3Input`, the Frame size, the Depth layer's values, and the Edit Event panel. Live by default: the scene follows as you type and the whole visit to the field is one undo step (`useSliderUndoStep`, ended on blur or Enter); `commit="enter"` applies once, on Enter or blur, with Escape putting the old value back. Shows what was typed while focused, ignores text that isn't a number yet, clamps to `min`/`max`, rounds for `integer`, and reads "---" for a null (mixed) value.
+- **`Vector3Input.tsx`** — A labeled X/Y/Z (color-coded) row of `NumberField`s, used for position/rotation/scale editing; supports a "mixed values" blank/placeholder state for multi-selection.
 
 ## `apps/editor/src/hooks/` — app-level React hooks
 

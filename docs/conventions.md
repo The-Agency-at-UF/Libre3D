@@ -52,6 +52,7 @@ This guide documents the naming conventions, architectural patterns, and testing
 - **Vector fields are always cloned**, never referenced. `cloneVector` (`scene/vec3.ts`) and `cloneEntity`/`cloneCameraProfile` (`scene/entityFactories.ts`) exist specifically so callers can't mutate a `position`/`rotation`/`scale` tuple in place and corrupt store state. Any new code reading or writing these fields should clone on the way in and out.
 - **An entity is replaced, never changed in place.** A store action that changes an entity puts a new object in a new `entities` array (`entities.map((entity) => (entity.id === id ? { ...entity, ...changes } : entity))`), and the same for what it holds (`materialLayers`, `path`, `shape`). Undo depends on it, and so does the viewport: `ObjectManager.syncMeshes` skips an object whose entity is the same object it applied last time.
 - **Props over context**: cross-component data flow is via explicit props (see `EditorApp.tsx` → `ExportModal`/`RightSidebar`) or direct Zustand selectors, not React Context. Add a new Zustand slice/selector rather than introducing a Context provider.
+- **Number inputs are `ui/NumberField`**, not a raw `<input type="number">`: it gives every field the same typing behavior (live, one undo step per visit) and the same handling of half-typed text, limits, and mixed values. Use `commit="enter"` only where there is nothing to preview.
 - **No default exports**: components, hooks, managers, and utils are all named exports. Match this — avoid `export default`.
 
 ## 6. Testing requirements

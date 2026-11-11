@@ -20,6 +20,7 @@ import {
   type TransitionAction,
   type TransitionStep,
 } from "../../animation/transitions";
+import { NumberField } from "../ui/NumberField";
 import { Select } from "../ui/Select";
 
 const DELAY_REPEATS: { value: DelayRepeat; label: string }[] = [
@@ -51,58 +52,6 @@ const targetOptions = (entities: Entity[]) => {
   entities.filter((entity) => !entity.parentId || !ids.has(entity.parentId)).forEach((entity) => visit(entity, 0));
   return options;
 };
-
-/**
- * A number typed in and kept on Enter or leaving the field (Escape puts it back), so one edit is
- * one undo step rather than one per keystroke.
- */
-function NumberField({
-  value,
-  onCommit,
-  label,
-  min = 0,
-  step = 0.1,
-  integer = false,
-}: {
-  value: number;
-  onCommit: (value: number) => void;
-  label: string;
-  min?: number;
-  step?: number;
-  integer?: boolean;
-}) {
-  const [draft, setDraft] = useState<string | null>(null);
-
-  const commit = () => {
-    if (draft === null) return;
-    const parsed = parseFloat(draft);
-    setDraft(null);
-    if (!Number.isFinite(parsed)) return;
-    const next = Math.max(min, integer ? Math.round(parsed) : parsed);
-    if (next !== value) onCommit(next);
-  };
-
-  return (
-    <input
-      type="number"
-      aria-label={label}
-      title={label}
-      min={min}
-      step={step}
-      value={draft ?? String(Number(value.toFixed(2)))}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") {
-          e.currentTarget.blur();
-        } else if (e.key === "Escape") {
-          setDraft(null);
-          e.stopPropagation();
-        }
-      }}
-    />
-  );
-}
 
 function PropRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -234,9 +183,11 @@ function TransitionEditor({ action, entities, states, isReadOnly, onChange, onRe
                   {index > 0 && (
                     <div className="transition-step">
                       <NumberField
+                        commit="enter"
+                        min={0}
                         label={`Seconds from ${index} to ${index + 1}`}
                         value={action.steps[index - 1].duration}
-                        onCommit={(duration) => setStep(index - 1, { duration })}
+                        onChange={(duration) => setStep(index - 1, { duration })}
                       />
                       <span className="transition-step-unit">s</span>
                       <Select
@@ -278,7 +229,7 @@ function TransitionEditor({ action, entities, states, isReadOnly, onChange, onRe
               <span>Sequence (1 → {rows.length})</span>
             </div>
             <PropRow label="Delay">
-              <NumberField label="Delay in seconds" value={action.delay} onCommit={(delay) => onChange({ ...action, delay })} />
+              <NumberField commit="enter" min={0} label="Delay in seconds" value={action.delay} onChange={(delay) => onChange({ ...action, delay })} />
               <span className="transition-step-unit">s</span>
             </PropRow>
             <Select
@@ -291,12 +242,13 @@ function TransitionEditor({ action, entities, states, isReadOnly, onChange, onRe
             {loopMode === "count" && (
               <PropRow label="Repeats">
                 <NumberField
+                  commit="enter"
                   label="Repeats after the first run"
                   value={action.loop as number}
                   min={1}
                   step={1}
                   integer
-                  onCommit={(loop) => onChange({ ...action, loop })}
+                  onChange={(loop) => onChange({ ...action, loop })}
                 />
               </PropRow>
             )}
