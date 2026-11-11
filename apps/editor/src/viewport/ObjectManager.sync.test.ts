@@ -27,6 +27,7 @@ const createScene = (initial: Entity[]) => {
     isWireframe: () => wireframe,
     loadModel: async () => null,
     loadTexture,
+    saveTexture: async () => {},
     setMaterialLayers: () => {},
     applyHierarchyPrune: () => {},
   };
@@ -54,7 +55,7 @@ const createScene = (initial: Entity[]) => {
 
 const createManager = (source: SceneSource) => {
   const meshMap = new Map<string, THREE.Object3D>();
-  const manager = new ObjectManager(new THREE.Scene(), meshMap, source);
+  const manager = new ObjectManager(new THREE.Scene(), meshMap, source, { getRenderer: () => null });
   return { manager, meshMap, object: (id: string) => meshMap.get(id)! };
 };
 
@@ -491,5 +492,52 @@ describe("ObjectManager.syncMeshes: the same scene as syncing everything", () =>
       expect(describeScene(skipping.meshMap), `step ${step}`).toEqual(describeScene(everything.meshMap));
     }
     expect(scene.entities.length).toBeGreaterThan(0);
+  });
+});
+
+describe("ObjectManager without the editor's helpers (the share-link viewer)", () => {
+  // One of each kind of object that gets an outline, a helper, or an error box in the editor.
+  const everyKind = () => [
+    make("cube", "cube"),
+    make("path", "path"),
+    make("shape", "shape"),
+    make("directionalLight", "light"),
+    make("group", "group"),
+    make("importedModel", "broken", { assetId: "missing" }), // can't be loaded: the editor shows its red box
+  ];
+
+  const editorOnlyObjects = async (editorHelpers: boolean | undefined) => {
+    vi.spyOn(console, "error").mockImplementation(() => {}); // the missing model is reported
+    const scene = createScene(everyKind());
+    const threeScene = new THREE.Scene();
+    const manager = new ObjectManager(threeScene, new Map(), scene.source, { getRenderer: () => null, editorHelpers });
+    manager.syncMeshes(scene.entities, null, false);
+    await new Promise((resolve) => setTimeout(resolve, 0)); // the model's load comes back empty
+    // A path and a shape rebuild their outline with their geometry.
+    scene.update("path", { stroke: { ...scene.get("path").stroke!, radius: 0.3 } });
+    scene.update("shape", { extrusion: 0.5 });
+    manager.syncMeshes(scene.entities, null, false);
+
+    const found: string[] = [];
+    threeScene.traverse((object) => {
+      if (object.userData.editorOnly) found.push(object.type);
+    });
+    return { found, manager };
+  };
+
+  it("builds no outline, light helper, or error box", async () => {
+    const { found, manager } = await editorOnlyObjects(false);
+
+    expect(found).toEqual([]);
+    expect(manager.getObject("cube")!.userData.selectionOutline).toBeUndefined();
+    expect(manager.getObject("light")!.userData.helper).toBeUndefined();
+    expect(manager.getObject("broken")!.userData.loadError).toBe(true);
+  });
+
+  it("builds them in the editor, where the option is left out", async () => {
+    const { found } = await editorOnlyObjects(undefined);
+
+    // An outline each for the cube, the path, the shape, and the broken model, and the light's helper.
+    expect(found.sort()).toEqual(["DirectionalLightHelper", "LineSegments", "LineSegments", "LineSegments", "LineSegments"]);
   });
 });

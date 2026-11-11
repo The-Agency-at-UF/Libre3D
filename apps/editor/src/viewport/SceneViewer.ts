@@ -10,9 +10,9 @@
  * as it did in Play: the same renderer settings (rendererSettings.ts), scene (SceneManager, with its
  * environment light), objects (ObjectManager), events (SceneRuntime: Start events on load, Mouse
  * Down on a click, a pointer cursor over what can be clicked) and camera (PlayCamera, with the
- * scene camera's Play setting). The editor's own objects (grid, light helpers, outlines) are hidden
- * for each frame, as in Play. Nothing here loads the editor's store: the published scene is the
- * only state, and nothing is ever saved.
+ * scene camera's Play setting). The editor's own objects (grid, light helpers, outlines) are never
+ * built (`editorHelpers: false`), so there is nothing to hide. Nothing here loads the editor's
+ * store: the published scene is the only state, and nothing is ever saved.
  *
  * Settings and the camera fall back to the defaults a new scene starts with when a scene doesn't
  * hold them (scene/defaults.ts, the same values the editor's store uses).
@@ -22,17 +22,16 @@ import * as THREE from "three";
 import { SceneRuntime } from "../animation/sceneRuntime";
 import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialSceneDefaults } from "../scene/defaults";
 import type { CameraProfile, SceneSettingsConfig } from "../scene/types";
-import { hideEditorOnlyObjects } from "./editorOnly";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
 import { pickEntityAt } from "./pickEntity";
-import { createSceneRenderer, exposeLiveRenderer } from "./rendererSettings";
+import { createSceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
 import { SceneManager } from "./SceneManager";
 import type { SceneSource } from "./sceneSource";
 
-/** The scene settings SceneManager draws with, the stored ones over the defaults. No grid: it's the editor's. */
+/** The scene settings SceneManager draws with, the stored ones over the defaults. */
 export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"]): SceneSettingsConfig =>
   // SceneManager reads only these; the rest of the settings are the editor's.
   ({
@@ -57,25 +56,28 @@ export const viewerCamera = (content: StoredSceneContent): Pick<CameraProfile, "
 };
 
 export class SceneViewer {
+  /** The viewer's own renderer. Handed to what needs it here; the viewer never puts it on `window`. */
+  readonly renderer: THREE.WebGLRenderer;
   private readonly disposers: (() => void)[] = [];
   private frameId = 0;
 
   constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false } = {}) {
     const renderer = createSceneRenderer();
+    this.renderer = renderer;
     container.appendChild(renderer.domElement);
-    this.disposers.push(exposeLiveRenderer(renderer), () => {
+    this.disposers.push(() => {
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
     });
     const canvas = renderer.domElement;
 
-    const sceneManager = new SceneManager(viewerSceneSettings(content.sceneSettings));
+    const sceneManager = new SceneManager(viewerSceneSettings(content.sceneSettings), { editorHelpers: false });
     const environment = createRoomEnvironment(renderer);
     sceneManager.setEnvironmentMap(environment.texture);
     const scene = sceneManager.scene;
 
-    const objects = new ObjectManager(scene, new Map(), source);
+    const objects = new ObjectManager(scene, new Map(), source, { getRenderer: () => renderer, editorHelpers: false });
     objects.syncMeshes(content.entities, null, false);
     // Syncing to no objects disposes them all (geometry, materials, textures).
     this.disposers.push(() => {
@@ -145,9 +147,7 @@ export class SceneViewer {
         hoverPoint = null;
       }
 
-      const restoreEditorOnlyObjects = hideEditorOnlyObjects(scene);
       renderer.render(scene, camera.camera);
-      restoreEditorOnlyObjects();
     };
     animate();
   }

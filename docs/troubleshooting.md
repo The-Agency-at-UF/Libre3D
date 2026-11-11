@@ -525,7 +525,7 @@ useEditorStore.subscribe(
 ### Check Three.js scene
 ```typescript
 // In browser console
-window.__libre3dScene  // Live THREE.Scene
+window.__libre3dScene  // Live THREE.Scene (a console handle: code reads viewport/liveViewport.ts)
 window.__libre3dScene.children  // All objects in scene
 ```
 

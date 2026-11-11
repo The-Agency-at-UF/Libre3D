@@ -38,6 +38,10 @@ export interface ImportedModelHost {
   /** The scene's objects by entity id. A model's nodes are added to it as they resolve. */
   meshMap: Map<string, THREE.Object3D>;
   source: SceneSource;
+  /** The renderer the scene is drawn with, for decoding a model's KTX2 textures; null before there is one. */
+  getRenderer(): THREE.WebGLRenderer | null;
+  /** Whether models get a selection outline, and a failed one its red box (the editor's; not the viewer's). */
+  editorHelpers: boolean;
   /** Applies an entity to its object: transform, visibility, lock, material. */
   syncEntity(object: THREE.Object3D, entity: Entity): void;
   /** Moves every object under the parent its entity names. */
@@ -59,10 +63,13 @@ export class ImportedModels {
   }
 
   // Recolors/rebuilds the group's outline as a red box so a failed import stays visible,
-  // selectable, and obviously broken instead of silently vanishing from the scene.
+  // selectable, and obviously broken instead of silently vanishing from the scene. The box is the
+  // editor's, like every outline: a published scene shows nothing for a model it can't load.
   public showImportedModelError(group: THREE.Group): void {
-    const errorBox = new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
-    replaceSelectionOutline(group, errorBox, { color: 0xff3b30 });
+    if (this.host.editorHelpers) {
+      const errorBox = new THREE.Box3(new THREE.Vector3(-0.5, -0.5, -0.5), new THREE.Vector3(0.5, 0.5, 0.5));
+      replaceSelectionOutline(group, errorBox, { color: 0xff3b30 });
+    }
     group.userData.loadError = true;
   }
 
@@ -88,7 +95,7 @@ export class ImportedModels {
         return;
       }
 
-      const loader = await createConfiguredGltfLoader();
+      const loader = await createConfiguredGltfLoader(this.host.getRenderer());
 
       loader.parse(
         buffer,
@@ -178,7 +185,7 @@ export class ImportedModels {
     // reparenting needed once every node object is tagged and registered.
     group.add(gltf.scene);
 
-    attachSelectionOutline(group, boundingBox);
+    if (this.host.editorHelpers) attachSelectionOutline(group, boundingBox);
 
     // Now that the nodes exist, apply any store-level hierarchy that
     // diverges from the file structure, and attach any entities that were
@@ -216,7 +223,7 @@ export class ImportedModels {
       const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
       if (!material) continue;
       try {
-        const layers = await deriveMaterialLayers(material, cache);
+        const layers = await deriveMaterialLayers(material, cache, this.host.source.saveTexture);
         // Written through the source at the time: this runs async, after the
         // hydrate's initial set(), and the editor's setEntityMaterialLayers
         // no-ops if the entity was removed meanwhile.
@@ -367,7 +374,7 @@ export class ImportedModels {
           console.error(`[Libre3D] Imported model asset "${rootEntity.assetId}" was found neither in this browser nor in the cloud.`);
           return;
         }
-        const loader = await createConfiguredGltfLoader();
+        const loader = await createConfiguredGltfLoader(this.host.getRenderer());
         gltf = await new Promise<GLTF | null>((resolve) => {
           loader.parse(
             buffer,

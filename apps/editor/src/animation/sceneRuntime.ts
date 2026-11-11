@@ -79,6 +79,12 @@ export class SceneRuntime {
   private readonly running = new Map<string, RunningTransition>(); // by target ID
   private readonly current = new Map<string, Pose>(); // where each moved object is, by entity ID
 
+  /**
+   * Whether any object has a Mouse Down event (if not, clicks and hovers needn't be looked at).
+   * Events never change after construction, so it's worked out once, not on every hover frame.
+   */
+  readonly hasClickEvents: boolean;
+
   constructor(scene: RuntimeScene) {
     for (const entity of scene.entities) {
       this.entities.set(entity.id, {
@@ -100,6 +106,7 @@ export class SceneRuntime {
       list.push(event);
       this.eventsByOwner.set(event.ownerId, list);
     }
+    this.hasClickEvents = events.some((event) => event.trigger === "mouseDown");
   }
 
   /** Fires every Start event. */
@@ -122,11 +129,6 @@ export class SceneRuntime {
       id = this.entities.get(id)?.parentId;
     }
     return null;
-  }
-
-  /** Whether any object has a Mouse Down event (if not, clicks needn't be looked at). */
-  get hasClickEvents(): boolean {
-    return [...this.eventsByOwner.values()].some((events) => events.some((event) => event.trigger === "mouseDown"));
   }
 
   /** A click (mouse button down) on an object. Returns whether it fired anything. */

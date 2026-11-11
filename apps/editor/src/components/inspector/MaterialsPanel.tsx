@@ -14,7 +14,7 @@ import {
 import { colorLayerOf, lightingLayerOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../../scene/layers";
 import { loadTextureForScene } from "../../utils/assetTransfers";
 import { depthReach } from "../../utils/depthColors";
-import { getLiveScene } from "../../utils/exportScene";
+import { getLiveScene } from "../../viewport/liveViewport";
 import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
 import { Slider } from "../ui/Slider";

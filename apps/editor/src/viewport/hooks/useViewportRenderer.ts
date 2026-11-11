@@ -4,7 +4,8 @@ import { useEditorStore } from "../../store/useEditorStore";
 import Stats from "three/examples/jsm/libs/stats.module.js";
 import { hasPendingThumbnail, renderPendingThumbnail } from "../thumbnailCapture";
 import { hideEditorOnlyObjects } from "../editorOnly";
-import { createSceneRenderer, exposeLiveRenderer } from "../rendererSettings";
+import { setLiveRenderer } from "../liveViewport";
+import { createSceneRenderer } from "../rendererSettings";
 import { RIGHT_SIDEBAR_CLEARANCE } from "./useViewportGizmo";
 
 export function useViewportRenderer(
@@ -35,7 +36,7 @@ export function useViewportRenderer(
     rendererRef.current = renderer;
 
     // KTX2 decoding in .glb imports (non-component code) needs the live renderer.
-    const unexposeRenderer = exposeLiveRenderer(renderer);
+    const clearLiveRenderer = setLiveRenderer(renderer);
 
     let animationFrameId = 0;
 
@@ -60,7 +61,7 @@ export function useViewportRenderer(
 
     return () => {
       window.cancelAnimationFrame(animationFrameId);
-      unexposeRenderer();
+      clearLiveRenderer();
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();

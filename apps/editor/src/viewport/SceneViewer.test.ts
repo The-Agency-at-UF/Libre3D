@@ -3,6 +3,7 @@ import { DEFAULT_CAMERA_PROFILE, initialSceneDefaults } from "../scene/defaults"
 import type { Entity, MaterialLayer } from "../scene/types";
 import { stubBrowserGlobals } from "../testing/browserStubs";
 import { createPublishedSceneSource } from "./publishedSceneSource";
+import { SceneManager } from "./SceneManager";
 import { viewerCamera, viewerSceneSettings } from "./SceneViewer";
 
 const entity = (id: string): Entity => ({
@@ -55,6 +56,23 @@ describe("the viewer's defaults", () => {
   });
 });
 
+describe("the viewer's scene", () => {
+  it("is built without the editor's grid, which the editor's scene has", () => {
+    const settings = viewerSceneSettings(undefined);
+    const editorOnly = (manager: SceneManager) => manager.scene.children.filter((child) => child.userData.editorOnly);
+
+    const viewer = new SceneManager(settings, { editorHelpers: false });
+    const editor = new SceneManager(settings);
+
+    expect(viewer.grid).toBeNull();
+    expect(editorOnly(viewer)).toEqual([]);
+    expect(editorOnly(editor)).toEqual([editor.grid]);
+    viewer.updateGridVisibility(true); // nothing to show, and nothing thrown
+    viewer.dispose();
+    editor.dispose();
+  });
+});
+
 describe("a published scene's source", () => {
   it("downloads assets through the share link's URLs, by hash, and nothing else", async () => {
     const fetchMock = vi.fn(async (url: string) =>
@@ -78,5 +96,17 @@ describe("a published scene's source", () => {
 
     expect(source.getEntities().map((each) => each.materialLayers)).toEqual([undefined, layers]);
     expect(source.isWireframe()).toBe(false);
+  });
+
+  it("keeps a texture derived from an imported model in memory, and loads it back without a download", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const source = createPublishedSceneSource([entity("cube-1")], {});
+    const texture = new Blob([new Uint8Array([1, 2, 3])]);
+
+    await source.saveTexture("derived", texture);
+
+    expect(await source.loadTexture("derived")).toBe(texture);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

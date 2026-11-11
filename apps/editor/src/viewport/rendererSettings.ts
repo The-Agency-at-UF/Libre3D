@@ -21,17 +21,3 @@ export const createSceneRenderer = (): THREE.WebGLRenderer => {
   renderer.domElement.style.display = "block";
   return renderer;
 };
-
-type LiveRendererWindow = Window & { __libre3dRenderer?: THREE.WebGLRenderer | null };
-
-/**
- * Makes `renderer` the one non-component code reaches (utils/createGltfLoader.ts: KTX2Loader needs a
- * real renderer to probe GPU texture support), and returns a function that undoes it if it's still
- * this one.
- */
-export const exposeLiveRenderer = (renderer: THREE.WebGLRenderer): (() => void) => {
-  (window as LiveRendererWindow).__libre3dRenderer = renderer;
-  return () => {
-    if ((window as LiveRendererWindow).__libre3dRenderer === renderer) (window as LiveRendererWindow).__libre3dRenderer = null;
-  };
-};

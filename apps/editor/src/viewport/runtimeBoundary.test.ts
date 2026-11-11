@@ -76,6 +76,9 @@ const chainTo = (importedBy: Map<string, string | null>, module: string): string
   return chain.join(" <- ");
 };
 
+/** The viewer's own source files, among everything it reaches. */
+const reachableFiles = (): string[] => [...reachable().keys()].filter((module) => existsSync(path.join(SRC, module)));
+
 const offenders = (isOffender: (module: string) => boolean): string[] => {
   const importedBy = reachable();
   return [...importedBy.keys()].filter(isOffender).map((module) => chainTo(importedBy, module));
@@ -106,10 +109,21 @@ describe("what the share-link viewer imports", () => {
     ).toEqual([]);
   });
 
-  // Known today: deriving an imported mesh's material layers saves its textures to this browser's
-  // asset storage, and the viewer runs the same code. Remove `.fails` when storage goes through
-  // the SceneSource.
-  it.fails("never reaches this browser's asset storage", () => {
+  // Two viewers on one page (the embed) would share a global and the second would take the first's.
+  // What a module needs is handed to it: the renderer through ObjectManager's options, the scene as
+  // an argument. The editor's console handles (utils/consoleHandle.ts) are set by the editor and the
+  // share page, outside what the viewer imports.
+  it("reads and sets no window globals", () => {
+    // A handle's name, or `window` cast to another type, which is how a made-up property is reached.
+    const usesGlobal = (module: string) => /__libre3d|\bwindow as\b/.test(withoutComments(readFileSync(path.join(SRC, module), "utf8")));
+
+    expect(reachableFiles().filter(usesGlobal)).toEqual([]);
+  });
+
+  // Deriving an imported mesh's material layers takes the textures out of its material. Where they
+  // are kept is the SceneSource's `saveTexture`: the editor's writes to this browser's storage, the
+  // viewer's keeps them in memory, so a visitor's browser is never written to.
+  it("never reaches this browser's asset storage", () => {
     const storage = ["utils/createAssetStore.ts", "utils/modelAssetStore.ts", "utils/textureAssetStore.ts"];
 
     expect(offenders((module) => storage.includes(module))).toEqual([]);

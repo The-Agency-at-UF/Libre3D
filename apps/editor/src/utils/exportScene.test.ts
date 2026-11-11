@@ -39,7 +39,7 @@ const loadModules = async () => {
   ]);
   // The editor's own objects, built from the store as the viewport builds them.
   const createObjectManager = (scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>) =>
-    new ObjectManager(scene, meshMap, editorSceneSource);
+    new ObjectManager(scene, meshMap, editorSceneSource, { getRenderer: () => null });
   return { useEditorStore, createObjectManager, createSceneExportBlob };
 };
 

@@ -13,19 +13,7 @@ type GLTFExporterOptions = {
   embedImages?: boolean;
 };
 
-type LiveSceneWindow = Window & {
-  __libre3dScene?: THREE.Scene | null;
-};
-
 const FILE_BASE_NAME = "libre3d-scene";
-
-const getSceneWindow = (): LiveSceneWindow | null => {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  return window as LiveSceneWindow;
-};
 
 export const createDownload = (content: BlobPart, fileName: string, mimeType: string): void => {
   const blob = new Blob([content], { type: mimeType });
@@ -124,8 +112,6 @@ const hasExportableMeshes = (scene: THREE.Scene): boolean => {
 
   return meshCount > 0;
 };
-
-export const getLiveScene = (): THREE.Scene | null => getSceneWindow()?.__libre3dScene ?? null;
 
 const parseScene = async (
   exporter: {

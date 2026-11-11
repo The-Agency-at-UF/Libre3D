@@ -2,7 +2,6 @@ import * as THREE from "three";
 import { createId } from "./createId";
 import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../scene/layers";
 import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
-import { saveTextureAsset } from "./textureAssetStore";
 import type {
   ColorLayer,
   ImageLayer,
@@ -130,14 +129,21 @@ async function extractTextureBlob(texture: THREE.Texture): Promise<Blob | null> 
 // A cache spanning one import's derivation pass, keyed by underlying image
 // identity. glTF materials routinely reuse the same physical image across slots
 // and meshes (a shared packed metallic-roughness map is the classic case) — this
-// dedupes so each unique image is extracted and saved to OPFS exactly once, with
+// dedupes so each unique image is extracted and saved exactly once, with
 // one shared textureAssetId. A cached `null` records "extraction already failed"
 // so a failing image isn't retried per-slot. The ID itself is the PNG's content
 // hash (sceneAssets.ts), so the same image across imports is also stored once.
 export type TextureDedupCache = Map<unknown, string | null>;
 export const createTextureDedupCache = (): TextureDedupCache => new Map();
 
-async function resolveTextureAssetId(texture: THREE.Texture, cache: TextureDedupCache): Promise<string | null> {
+/**
+ * Where an extracted texture is kept, under its content hash: the SceneSource's `saveTexture`
+ * (viewport/sceneSource.ts). This module never touches storage itself, so the share-link viewer,
+ * which runs it too, writes nothing to a visitor's browser.
+ */
+export type SaveTexture = (assetId: string, blob: Blob) => Promise<void>;
+
+async function resolveTextureAssetId(texture: THREE.Texture, cache: TextureDedupCache, saveTexture: SaveTexture): Promise<string | null> {
   const key: unknown = texture.image ?? texture;
   if (cache.has(key)) return cache.get(key) ?? null;
 
@@ -149,18 +155,18 @@ async function resolveTextureAssetId(texture: THREE.Texture, cache: TextureDedup
     return null;
   }
   const id = await hashAsset(blob);
-  await saveTextureAsset(id, blob);
+  await saveTexture(id, blob);
   cache.set(key, id);
   return id;
 }
 
-async function imageLayersFromMaterial(material: THREE.Material, cache: TextureDedupCache): Promise<ImageLayer[]> {
+async function imageLayersFromMaterial(material: THREE.Material, cache: TextureDedupCache, saveTexture: SaveTexture): Promise<ImageLayer[]> {
   const std = material as THREE.MeshStandardMaterial;
   const layers: ImageLayer[] = [];
 
   const add = async (texture: THREE.Texture | null | undefined, slot: ImageSlot): Promise<void> => {
     if (!texture) return;
-    const textureAssetId = await resolveTextureAssetId(texture, cache);
+    const textureAssetId = await resolveTextureAssetId(texture, cache, saveTexture);
     if (!textureAssetId) return;
     layers.push({
       id: createLayerId(),
@@ -187,10 +193,10 @@ async function imageLayersFromMaterial(material: THREE.Material, cache: TextureD
 
 // Builds the full editable layer stack (Color + Lighting + Image layers) for one
 // imported mesh's material. Pass a shared cache across every mesh in the same
-// import so reused images are extracted once.
-export async function deriveMaterialLayers(material: THREE.Material, cache: TextureDedupCache): Promise<MaterialLayer[]> {
+// import so reused images are extracted once. Each image goes to `saveTexture` under its hash.
+export async function deriveMaterialLayers(material: THREE.Material, cache: TextureDedupCache, saveTexture: SaveTexture): Promise<MaterialLayer[]> {
   const model = lightingModelForMaterial(material);
-  const imageLayers = await imageLayersFromMaterial(material, cache);
+  const imageLayers = await imageLayersFromMaterial(material, cache, saveTexture);
   return [colorLayerFromMaterial(material), lightingLayerFromMaterial(material, model), ...imageLayers];
 }
 

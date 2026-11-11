@@ -5,6 +5,7 @@ import { createId } from "./createId";
 import { walkGltfScene, nodePathKey, collectSkinnedBones } from "./gltfHierarchy";
 import { pruneImportNodes, type PrunableNode } from "./pruneImportHierarchy";
 import { createConfiguredGltfLoader } from "./createGltfLoader";
+import { getLiveRenderer } from "../viewport/liveViewport";
 import { cacheParsedModel } from "./parsedModelCache";
 import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
 import type { ImportNodeSpec } from "../scene/types";
@@ -81,7 +82,7 @@ export async function prepareModelImport(file: File): Promise<{ assetId: string;
 // one node, keyed by its nodePath (child-index path from gltf.scene).
 // The parsed result is also cached under assetId for the imminent hydrate.
 async function extractModelHierarchy(buffer: ArrayBuffer, assetId: string): Promise<ImportNodeSpec[]> {
-  const loader = await createConfiguredGltfLoader();
+  const loader = await createConfiguredGltfLoader(getLiveRenderer());
 
   const gltf = await new Promise<GLTF>((resolve, reject) => {
     loader.parse(buffer, "", resolve, reject);
