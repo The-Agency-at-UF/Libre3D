@@ -1,3 +1,9 @@
+/**
+ * PURPOSE: Manages Three.js camera OrbitControls and object TransformControls (translate/rotate/scale gizmo).
+ * Handles pointer dragging, snapping, multi-selection stand-in objects, and coalescing camera
+ * updates before committing to the editor store.
+ */
+
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";

@@ -70,6 +70,6 @@ This guide documents the naming conventions, architectural patterns, and testing
 
 ## 7. Commit & PR conventions
 
-- **Branch naming**: `[initials]/[feature-name]` (e.g. `em/add-sandbox-viewport`).
+- **Branch naming**: `[initials]/[feature-name]` (e.g. `ea/add-sandbox-viewport`).
 - **Commit messages**: Conventional Commits style, `type: short description` (`feat: ...`, `fix: ...`, `refactor: ...`), imperative mood, one logical change per commit.
-- **PRs**: opened against `main`, must have `pnpm build` and `pnpm test` passing and a manual dev-server smoke test completed before requesting review (see §6).
+- **PRs**: opened against `dev`, must have `pnpm build` and `pnpm test` passing and a manual dev-server smoke test completed before requesting review (see §6).

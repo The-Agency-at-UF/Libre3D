@@ -1,3 +1,9 @@
+/**
+ * PURPOSE: Interactive vector pen drawing and path editing inside the 3D viewport canvas.
+ * Handles mouse gestures (click to add/close, drag for Bézier handles, Alt/Shift constraints),
+ * drawing plane raycasting, point selection, and committing drawn paths/shapes to the store.
+ */
+
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";

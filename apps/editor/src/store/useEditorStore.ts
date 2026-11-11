@@ -1,3 +1,9 @@
+/**
+ * PURPOSE: The central Zustand store for the Libre3D editor. Holds the scene graph (entities),
+ * selection state, animation states and events, camera profiles, and editor preferences.
+ * Provides undo/redo history via zundo temporal middleware and persistence for local settings.
+ */
+
 import { ClampToEdgeWrapping, Euler, Vector3 } from "three";
 import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
@@ -151,52 +157,62 @@ export interface EditorState {
   toggleLock: (id: string) => void;
   renameEntity: (id: string, newName: string) => void;
   renameEntities: (updates: Record<string, string>) => void;
-  // The radius or cap style of every path among `ids`, in one undo step (not their trim, which
-  // states can set: see updateShownTransforms).
+  /** The radius or cap style of every path among `ids`, in one undo step. */
   updatePathStrokes: (ids: string[], updates: Partial<PathStroke>) => void;
-  // A shape the pen tool drew: one outline (`outline`, in the shape's own XY plane, so turned by
-  // `rotation`), its origin at `origin`. Filled in the default shape colour from both sides, like an
-  // imported one. Selected, like addEntity. Returns its ID.
+  /**
+   * A shape the pen tool drew: one outline (`outline`, in the shape's own XY plane, turned by
+   * `rotation`), its origin at `origin`. Filled in default shape colour from both sides.
+   * Selected, like addEntity. Returns its ID.
+   */
   addShape: (origin: [number, number, number], rotation: [number, number, number], outline: PathData) => string;
-  // A path the pen tool drew (the Path pen), its origin at `origin` and its points relative to it.
-  // Selected, like addEntity. Returns its ID.
+  /**
+   * A path the pen tool drew (the Path pen), its origin at `origin` and its points relative to it.
+   * Selected, like addEntity. Returns its ID.
+   */
   addPath: (origin: [number, number, number], path: PathData) => string;
-  // Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
-  // the path, not to a state, so this changes them in every state.
+  /**
+   * Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
+   * the path, not to a state, so this changes them in every state.
+   */
   updatePath: (id: string, path: PathData) => void;
-  // Replaces a shape's outlines (the pen tool's edits). Flat: their points' and handles' Z is dropped.
+  /** Replaces a shape's outlines (the pen tool's edits). Flat: their points' and handles' Z is dropped. */
   updateShape: (id: string, shape: ShapeData) => void;
-  // Moves a path's or shape's origin to the middle of its curves (pathsCenter) without moving it on
-  // screen: its points shift one way and its position the other. Its states keep their transforms,
-  // so it's for one that has none yet: the pen tool's, as it finishes drawing one.
+  /**
+   * Moves a path's or shape's origin to the middle of its curves (pathsCenter) without moving it on
+   * screen: its points shift one way and its position the other.
+   */
   centerOrigin: (id: string) => void;
-  // The shapes and paths of an imported SVG (paths/svgImport.ts), in one undo step: one named `name`,
-  // or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
-  // Returns its ID ("" when there's nothing to add).
+  /**
+   * The shapes and paths of an imported SVG (paths/svgImport.ts), in one undo step: one named `name`,
+   * or several in a group named `name`. Selects it and puts the pen down. Returns its ID.
+   */
   addImportedSvg: (name: string, items: ImportedSvgItem[]) => string;
-  // An imported picture (utils/importImage.ts) as a plane named `name`, at the origin: `aspect` is its
-  // width / height, and `textureAssetId` its bytes in the texture store, shown unlit from both sides
-  // and blended when it has see-through pixels (`transparent`). Selects it and puts the pen down.
-  // Returns its ID.
+  /**
+   * An imported picture (utils/importImage.ts) as a plane named `name`, at the origin: `aspect` is its
+   * width / height, and `textureAssetId` its bytes in the texture store. Returns its ID.
+   */
   addImagePlane: (name: string, textureAssetId: string, aspect: number, transparent: boolean) => string;
-  // The extrusion (depth) or bevel of every shape among `ids`, in one undo step.
+  /** The extrusion (depth) or bevel of every shape among `ids`, in one undo step. */
   updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
-  // Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
-  // a path along the middle of its strokes (paths/centerLine.ts), with a tube as thick as the
-  // strokes, in one undo step. A shape keeps its ID, name, place, material, states and events; when
-  // it has several strokes, the others become paths next to it ("Shape 1 (2)"). Returns how many
-  // shapes were converted.
+  /**
+   * Convert to Path: every shape among `ids` and inside them becomes a path along the middle of its
+   * strokes (paths/centerLine.ts), with a tube as thick as the strokes, in one undo step. Returns how many
+   * shapes were converted.
+   */
   convertShapesToPaths: (ids: string[]) => number;
 
   // Viewport / Projection
   activeTransformTool: "translate" | "rotate" | "scale";
-  // Drawing or editing paths (see PenToolState), or null. Not saved and not undoable; off in Play,
-  // during a ▶ preview, and while view only.
+  /**
+   * Drawing or editing paths (see PenToolState), or null. Not saved and not undoable; off in Play,
+   * during a ▶ preview, and while view only.
+   */
   penTool: PenToolState | null;
   setPenTool: (penTool: PenToolState | null) => void;
-  // Editing an object's Depth layer in the viewport (useViewportDepthGizmo): its handles show, and
-  // the transform gizmo moves the layer's origin instead of the object. The object's ID, or null.
-  // Not saved and not undoable; off like the pen, and the pen and it end each other.
+  /**
+   * Editing an object's Depth layer in the viewport (useViewportDepthGizmo): its handles show, and
+   * the transform gizmo moves the layer's origin instead of the object. The object's ID, or null.
+   */
   depthEdit: string | null;
   setDepthEdit: (entityId: string | null) => void;
   projectionMode: "perspective" | "orthographic";
@@ -213,61 +229,68 @@ export interface EditorState {
   // Play Mode / Preview
   isPreviewMode: boolean;
   setPreviewMode: (active: boolean) => void;
-  // The transition the Edit Event panel's ▶ is playing in the editor viewport (useViewportPlay), by
-  // action ID, or null. Not saved and not undoable, and allowed in a view-only scene: it's looking.
+  /**
+   * The transition the Edit Event panel's ▶ is playing in the editor viewport (useViewportPlay), by
+   * action ID, or null. Not saved and not undoable.
+   */
   previewingActionId: string | null;
   setPreviewingAction: (actionId: string | null) => void;
 
-  // Number of .glb imports currently being read/parsed (file picked but
-  // entities not yet materialized). Not persisted — like isPreviewMode it's
-  // transient session state that happens to need cross-component visibility.
+  /**
+   * Number of .glb imports currently being read/parsed (file picked but
+   * entities not yet materialized). Transient session state.
+   */
   pendingImportCount: number;
   adjustPendingImports: (delta: number) => void;
 
-  // Why the scene can't be edited right now; null when it can. While set, updates that would change
-  // the scene's content are dropped (see guardSceneContent). Not persisted and not undoable: the
-  // editor sets it each time it opens a scene and whenever the editing lock moves.
+  /**
+   * Why the scene can't be edited right now; null when it can. While set, updates that would change
+   * the scene's content are dropped.
+   */
   readOnlyReason: ReadOnlyReason | null;
   setReadOnly: (reason: ReadOnlyReason | null) => void;
 
-  // Object states and events (see animation/objectStates.ts and animation/events.ts). Saved with the
-  // scene and undoable.
+  // Object states and events (see animation/objectStates.ts and animation/events.ts).
   animation: SceneAnimation;
-  // The state each object is shown in while editing (entity ID → state ID; no entry = Base). It
-  // stays when the object is deselected, and is saved with the scene so it reopens as it was left.
-  // Not undoable, and allowed while read-only (looking at a state changes nothing). Read it through
-  // selectViewedObjectState, which treats an entry whose state is gone (deleted, undone) as Base.
+  /**
+   * The state each object is shown in while editing (entity ID → state ID; no entry = Base). It
+   * stays when the object is deselected, and is saved with the scene so it reopens as it was left.
+   */
   viewedStates: Record<string, string>;
-  // Shows an object in one of its states, or in Base (null).
+  /** Shows an object in one of its states, or in Base (null). */
   setViewedState: (entityId: string, stateId: string | null) => void;
-  // Adds "State N" (setting nothing yet) to an object and views it, like addEntity selects. Returns its ID.
+  /** Adds "State N" (setting nothing yet) to an object and views it. Returns its ID. */
   addState: (entityId: string) => string;
   renameState: (stateId: string, name: string) => void;
   removeState: (stateId: string) => void;
-  // Sets values in a state, leaving the ones not passed as they are.
+  /** Sets values in a state, leaving the ones not passed as they are. */
   setStateValues: (stateId: string, values: StateValues) => void;
-  // Transform edits from the inspector and the gizmo: each object's go to the state it's shown in,
-  // or to its own values in Base. One undo step for all of them.
+  /**
+   * Transform edits from the inspector and the gizmo: each object's go to the state it's shown in,
+   * or to its own values in Base. One undo step for all of them.
+   */
   updateShownTransforms: (updates: Record<string, StateValues>) => void;
-  // "Reset to Base": the state stops setting that value, so it follows the object's own again.
+  /** "Reset to Base": the state stops setting that value, so it follows the object's own again. */
   clearStateValue: (stateId: string, key: StateValueKey) => void;
-  // Adds an event to an object, last in its list, with one transition of the object. Returns its ID.
+  /** Adds an event to an object, last in its list, with one transition of the object. Returns its ID. */
   addEvent: (ownerId: string, trigger: EventTrigger) => string;
-  // Changes an event's trigger or replaces its actions (a list edited as a whole).
+  /** Changes an event's trigger or replaces its actions (a list edited as a whole). */
   updateEvent: (eventId: string, updates: { trigger?: EventTrigger; actions?: TransitionAction[] }) => void;
   removeEvent: (eventId: string) => void;
 
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
-  // `depthFar`: where a new Depth layer's ramp ends (its object's reach); 2 when not given.
+  /** `depthFar`: where a new Depth layer's ramp ends (its object's reach); 2 when not given. */
   addMaterialLayer: (entityId: string, layerType: MaterialLayerType, depthFar?: number) => void;
   removeMaterialLayer: (entityId: string, layerId: string) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
   setEntityMaterialLayers: (entityId: string, layers: MaterialLayer[]) => void;
-  // Replaces the whole scene with a saved one (null = a new scene's starting content) and clears
-  // undo history, so Ctrl+Z can't reach into the previously open scene.
+  /**
+   * Replaces the whole scene with a saved one (null = a new scene's starting content) and clears
+   * undo history, so Ctrl+Z can't reach into the previously open scene.
+   */
   loadScene: (content: StoredSceneContent | null) => void;
   setEditorState:(updates: Partial<Omit<EditorState, "entities" | "animation" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "setPreviewingAction" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
@@ -1228,10 +1251,9 @@ export const useEditorStore = create<EditorState>()(
                 };
               }),
             })),
-          // Replaces an entity's whole layer stack. Used by hydrate-time backfill
+          // Replaces an entity's whole layer stack. Used when hydrating imported models
           // (viewport/importedModels.ts) to write the layers derived from an imported mesh's
-          // parsed glTF material — the one place layers can be built, since it
-          // needs parsed texture/material data unavailable at migrate() time.
+          // parsed glTF material.
           setEntityMaterialLayers: (entityId, layers) =>
             set((state) => ({
               entities: state.entities.map((entity) =>

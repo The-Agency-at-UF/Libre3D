@@ -1,3 +1,9 @@
+/**
+ * PURPOSE: Inspector panel for inspecting and modifying entity material layers.
+ * Controls color, lighting (Phong/Physical/Lambert/Toon), metalness, roughness, clearcoat,
+ * image texture maps, and Depth gradient ramps for selected 3D objects.
+ */
+
 import { useState, useEffect, useRef, type ReactNode } from "react";
 import * as THREE from "three";
 import {

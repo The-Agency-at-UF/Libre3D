@@ -41,7 +41,7 @@ export function getChildren(entities: Entity[], parentId: string | null): Entity
   return ids.map((id) => byId.get(id)).filter((entity): entity is Entity => !!entity);
 }
 
-// Pre-order DFS, guarded against cycles from corrupted persisted state.
+// Pre-order DFS, guarded against cycles from a damaged document.
 export function getDescendantIds(entities: Entity[], rootId: string): string[] {
   const { childrenByParentId } = getEntityIndex(entities);
   const visited = new Set<string>([rootId]);
@@ -111,7 +111,7 @@ export function canReparentEntities(entities: Entity[], ids: string[], newParent
   return true;
 }
 
-// Guarded against cycles from corrupted persisted state.
+// Guarded against cycles from a damaged document.
 export function getAncestorIds(entities: Entity[], id: string): string[] {
   const { byId } = getEntityIndex(entities);
   const visited = new Set<string>();
@@ -134,7 +134,7 @@ export function getAncestorIds(entities: Entity[], id: string): string[] {
 // anything sitting inside one or more groups resolves to the outermost enclosing
 // group — so a group built from primitives behaves exactly like an imported
 // model. A specific child is still reached by double-clicking (drill-in) or via
-// the hierarchy panel. Guarded against cycles from corrupted persisted state.
+// the hierarchy panel. Guarded against cycles from a damaged document.
 export function getSelectionRootId(entities: Entity[], id: string): string {
   const { byId } = getEntityIndex(entities);
   let current = byId.get(id);

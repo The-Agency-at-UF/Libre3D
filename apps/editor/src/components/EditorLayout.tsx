@@ -1,3 +1,9 @@
+/**
+ * PURPOSE: The three-pane editor workspace layout shell. Coordinates the left hierarchy sidebar,
+ * center 3D viewport canvas with floating toolbars, and right inspector sidebar.
+ * Manages global keyboard shortcuts, drag-and-drop file import overlays, and export/share modals.
+ */
+
 import { useEffect, useState, type ReactNode } from "react";
 import { showAlert } from "./ui/Dialog";
 
