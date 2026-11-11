@@ -150,7 +150,8 @@ export const clearDepthColors = (geometry: THREE.BufferGeometry): void => {
 
 /**
  * Paints `geometry` (or clears it, for null), skipping the work when it was last painted with the
- * same `key` (ObjectManager syncs every object on every store change, gizmo drags included).
+ * same `key` (ObjectManager syncs an object whenever its entity changes, and the gizmo's object on
+ * every frame of a drag, for changes that mostly aren't to its Depth layer).
  */
 export const syncDepthColors = (geometry: THREE.BufferGeometry, paint: DepthPaint | null, key: string | null): void => {
   if (!paint || !key) {
