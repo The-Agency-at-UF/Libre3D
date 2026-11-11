@@ -80,6 +80,20 @@ export class ObjectManager {
   // resolved yet.
   private hydratingRootIds = new Set<string>();
 
+  // What lets syncMeshes skip an object: the entity it last applied to it. Store actions never
+  // change an entity in place (they replace what they change), so the same entity object means
+  // none of the object's own values changed. Kept by object, so one that is built again starts
+  // without an entry, and in a WeakMap rather than userData, which the exporter writes into the file.
+  private syncedEntities = new WeakMap<THREE.Object3D, Entity>();
+  // Objects that must be synced again even if their entity is the same: something other than the
+  // sync has moved them since (a pose, see applyPose), or the last sync left them unfinished (the
+  // gizmo holds them, or a texture they need hasn't loaded).
+  private unsettledObjects = new WeakSet<THREE.Object3D>();
+  // Set by applyImageLayers when an Image layer's texture isn't there yet; read by syncMeshes.
+  private textureWasMissing = false;
+  // The entities of the last sync by id, to tell when a lock or a parent changed anywhere.
+  private lastSyncedById: Map<string, Entity> | null = null;
+
   // Where the entities, the wireframe setting and imported assets come from, and where what it
   // derives for imported models goes: the editor's store, or a published scene (sceneSource.ts).
   private readonly source: SceneSource;
@@ -289,6 +303,8 @@ export class ObjectManager {
       if (layer.enabled) {
         if (!this.slotNeedsTexture(material, layer.slot)) continue;
         const texture = this.getTextureForLayer(layer);
+        // Still loading, or it couldn't be had: the object is tried again on the next sync.
+        if (!texture) this.textureWasMissing = true;
         if (texture && this.assignTextureToSlot(material, layer.slot, texture)) changed = true;
       } else if (this.clearTextureSlot(material, layer.slot)) {
         changed = true;
@@ -860,11 +876,12 @@ export class ObjectManager {
         const alphaState = this.computeAlphaBlendState(colorLayer, opacity);
         const newSide = colorLayer?.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
         // Only transparent/alphaTest/side changes force a shader recompile; color,
-        // opacity, roughness, etc. do not. This syncMeshes path re-runs for every
-        // entity on every store change — including every frame of a gizmo drag —
-        // so unconditionally setting needsUpdate recompiled every imported child
-        // mesh's shader each frame, which is what made dragging a hydrated model
-        // jitter. Set it only when a program-affecting value actually changed.
+        // opacity, roughness, etc. do not. This runs for the gizmo's object on every
+        // frame of a drag (and ran for every entity on every store change before
+        // syncMeshes skipped the unchanged ones), so unconditionally setting
+        // needsUpdate recompiled every imported child mesh's shader each frame, which
+        // is what made dragging a hydrated model jitter. Set it only when a
+        // program-affecting value actually changed.
         const needsRecompile =
           material.transparent !== alphaState.transparent ||
           material.alphaTest !== alphaState.alphaTest ||
@@ -889,9 +906,28 @@ export class ObjectManager {
     }
   }
 
+  /**
+   * Makes the scene's objects match `entities`: builds the missing ones, removes the ones whose
+   * entity is gone, and applies each entity to its object.
+   *
+   * An object is skipped when its entity is the same one applied to it last time and nothing else
+   * has touched it since, so an edit to one object doesn't re-apply every other one. What an object
+   * shows that doesn't come from its own entity is handled apart from that:
+   * - a pose (applyPose), the gizmo's object, and an object waiting for a texture are synced again
+   *   whatever their entity (`unsettledObjects`);
+   * - an inherited lock is worked out again for every object when a lock or a parent changed
+   *   anywhere, or an entity came or went;
+   * - a light is aimed at the origin from where its parents put it, so lights are never skipped;
+   * - wireframe is a scene setting, applied to every object by ViewportCanvas when it changes.
+   *
+   * @param transformTarget The object the transform gizmo is attached to, if any.
+   * @param isDragging True while the gizmo is being dragged: its object keeps the transform the
+   *   drag gave it.
+   * @returns The ids of the entities whose objects were removed.
+   */
   public syncMeshes(entities: Entity[], transformTarget: THREE.Object3D | null, isDragging: boolean): Set<string> {
-    const nextIds = new Set(entities.map((entity) => entity.id));
-    const processedIds = new Set<string>();
+    const { byId } = getEntityIndex(entities);
+    let locksMayHaveChanged = this.lastSyncedById !== null && this.lastSyncedById.size !== byId.size;
 
     // An imported-model *node* (non-root: no assetId) only gets its Object3D back
     // via its root's hydrateImportedModel -> attachHydratedModel pass, which only
@@ -922,7 +958,11 @@ export class ObjectManager {
     }
 
     for (const entity of entities) {
-      processedIds.add(entity.id);
+      const before = this.lastSyncedById?.get(entity.id);
+      if (before !== entity && (!before || !!before.locked !== !!entity.locked || (before.parentId ?? null) !== (entity.parentId ?? null))) {
+        locksMayHaveChanged = true;
+      }
+
       let existingObj = this.meshMap.get(entity.id);
       const isBeingDragged = existingObj && transformTarget === existingObj && isDragging;
 
@@ -955,14 +995,30 @@ export class ObjectManager {
         continue;
       }
 
+      // The gizmo's object is never skipped, dragging or not: a drag moves the object itself, and the
+      // sync after the drag is what puts it where its entity says.
+      const isTransformTarget = transformTarget === existingObj;
+      if (
+        this.syncedEntities.get(existingObj) === entity &&
+        !isTransformTarget &&
+        !this.unsettledObjects.has(existingObj) &&
+        !(existingObj instanceof THREE.DirectionalLight)
+      ) {
+        continue;
+      }
+
       const skipSync = !!isBeingDragged;
+      this.textureWasMissing = false;
       this.syncEntityToSceneObject(existingObj, entity, skipSync, entities);
+      this.syncedEntities.set(existingObj, entity);
+      if (isTransformTarget || this.textureWasMissing) this.unsettledObjects.add(existingObj);
+      else this.unsettledObjects.delete(existingObj);
     }
 
     // Identify stale objects
     const staleIds = new Set<string>();
     for (const entityId of this.meshMap.keys()) {
-      if (!nextIds.has(entityId)) {
+      if (!byId.has(entityId)) {
         staleIds.add(entityId);
       }
     }
@@ -980,6 +1036,15 @@ export class ObjectManager {
     }
 
     this.applyParenting(entities);
+
+    // A lock is inherited from an ancestor's entity, so it can change for an object that was
+    // skipped above.
+    if (locksMayHaveChanged) {
+      for (const [entityId, obj] of this.meshMap) {
+        obj.userData.locked = isEffectivelyLocked(entities, entityId);
+      }
+    }
+    this.lastSyncedById = byId;
 
     return staleIds;
   }
@@ -1186,6 +1251,8 @@ export class ObjectManager {
     const obj = this.meshMap.get(entityId);
     if (!obj) return;
 
+    // No longer where its entity says: the next sync puts it back, though its entity is the same.
+    this.unsettledObjects.add(obj);
     rememberBasePose(obj);
     obj.position.set(...pose.position);
     obj.rotation.set(...pose.rotation);
