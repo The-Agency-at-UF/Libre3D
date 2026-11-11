@@ -9,6 +9,7 @@ import { createRoomEnvironment } from "../viewport/sceneEnvironment";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
 import { editorSceneSource } from "../viewport/editorSceneSource";
+import { getLiveRenderer } from "../viewport/liveViewport";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
 import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
@@ -48,7 +49,7 @@ export function ViewportCanvas() {
     const sceneManager  = new SceneManager(storeState.sceneSettings);
     // Use aspect = 1 initially; ResizeObserver will correct it immediately after mount.
     const cameraManager = new CameraManager(initialProfile, storeState.projectionMode, 1);
-    const objectManager = new ObjectManager(sceneManager.scene, new Map(), editorSceneSource);
+    const objectManager = new ObjectManager(sceneManager.scene, new Map(), editorSceneSource, { getRenderer: getLiveRenderer });
 
     return { sceneManager, cameraManager, objectManager };
   }, []);

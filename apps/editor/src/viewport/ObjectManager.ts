@@ -3,8 +3,9 @@
  * reconciler: it owns the map of objects by entity id and decides which to build, update, and
  * remove.
  *
- * INPUT: The entities on each sync (`syncMeshes`), and a SceneSource for everything else: the
- * entities when an imported model lands, the wireframe setting, imported assets.
+ * INPUT: The entities on each sync (`syncMeshes`), a SceneSource for everything else about the
+ * scene (the entities when an imported model lands, the wireframe setting, imported assets), and
+ * the renderer the scene is drawn with.
  * OUTPUT: One object per entity in the scene, under its parent's object, with its transform,
  * visibility, lock, and material; `getObject` and `getMeshes` for the code that picks, drags, and
  * poses them.
@@ -57,6 +58,14 @@ const NO_SHAPE: ShapeData = { regions: [] };
 const shapeOf = (entity: Entity) => entity.shape ?? NO_SHAPE;
 const solidOf = (entity: Entity): ShapeSolid => ({ extrusion: entity.extrusion ?? 0, bevel: entity.bevel ?? 0 });
 
+export interface ObjectManagerOptions {
+  /**
+   * The renderer the scene is drawn with, asked for when an imported model is parsed (its KTX2
+   * textures need one). A function, because the editor builds its renderer after its managers.
+   */
+  getRenderer: () => THREE.WebGLRenderer | null;
+}
+
 export class ObjectManager {
   private scene: THREE.Scene;
   private meshMap: Map<string, THREE.Object3D>;
@@ -84,7 +93,7 @@ export class ObjectManager {
   // brings back a node that was deleted and restored (importedModels.ts).
   private readonly importedModels: ImportedModels;
 
-  constructor(scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>, source: SceneSource) {
+  constructor(scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>, source: SceneSource, { getRenderer }: ObjectManagerOptions) {
     this.scene = scene;
     this.meshMap = meshMap;
     this.source = source;
@@ -93,6 +102,7 @@ export class ObjectManager {
       scene,
       meshMap,
       source,
+      getRenderer,
       syncEntity: (object, entity) => {
         this.syncEntityToSceneObject(object, entity, false);
       },

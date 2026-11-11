@@ -38,6 +38,8 @@ export interface ImportedModelHost {
   /** The scene's objects by entity id. A model's nodes are added to it as they resolve. */
   meshMap: Map<string, THREE.Object3D>;
   source: SceneSource;
+  /** The renderer the scene is drawn with, for decoding a model's KTX2 textures; null before there is one. */
+  getRenderer(): THREE.WebGLRenderer | null;
   /** Applies an entity to its object: transform, visibility, lock, material. */
   syncEntity(object: THREE.Object3D, entity: Entity): void;
   /** Moves every object under the parent its entity names. */
@@ -88,7 +90,7 @@ export class ImportedModels {
         return;
       }
 
-      const loader = await createConfiguredGltfLoader();
+      const loader = await createConfiguredGltfLoader(this.host.getRenderer());
 
       loader.parse(
         buffer,
@@ -367,7 +369,7 @@ export class ImportedModels {
           console.error(`[Libre3D] Imported model asset "${rootEntity.assetId}" was found neither in this browser nor in the cloud.`);
           return;
         }
-        const loader = await createConfiguredGltfLoader();
+        const loader = await createConfiguredGltfLoader(this.host.getRenderer());
         gltf = await new Promise<GLTF | null>((resolve) => {
           loader.parse(
             buffer,

@@ -55,7 +55,7 @@ const createScene = (initial: Entity[]) => {
 
 const createManager = (source: SceneSource) => {
   const meshMap = new Map<string, THREE.Object3D>();
-  const manager = new ObjectManager(new THREE.Scene(), meshMap, source);
+  const manager = new ObjectManager(new THREE.Scene(), meshMap, source, { getRenderer: () => null });
   return { manager, meshMap, object: (id: string) => meshMap.get(id)! };
 };
 

@@ -13,7 +13,7 @@ const loadModules = async () => {
     import("./editorSceneSource"),
   ]);
   // Built from the store as the editor's viewport builds them.
-  const createObjectManager = (meshMap: Map<string, THREE.Object3D>) => new ObjectManager(new THREE.Scene(), meshMap, editorSceneSource);
+  const createObjectManager = (meshMap: Map<string, THREE.Object3D>) => new ObjectManager(new THREE.Scene(), meshMap, editorSceneSource, { getRenderer: () => null });
   return { useEditorStore, createObjectManager };
 };
 
@@ -140,7 +140,7 @@ describe("ObjectManager image planes", () => {
       import("./editorSceneSource"),
     ]);
     const meshMap = new Map<string, THREE.Object3D>();
-    const manager = new ObjectManager(new THREE.Scene(), meshMap, editorSceneSource);
+    const manager = new ObjectManager(new THREE.Scene(), meshMap, editorSceneSource, { getRenderer: () => null });
     const hash = "b".repeat(64);
 
     const id = useEditorStore.getState().addImagePlane("logo", hash, 2, true);

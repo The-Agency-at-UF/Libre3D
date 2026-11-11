@@ -27,7 +27,7 @@ import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
 import { pickEntityAt } from "./pickEntity";
-import { createSceneRenderer, exposeLiveRenderer } from "./rendererSettings";
+import { createSceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
 import { SceneManager } from "./SceneManager";
 import type { SceneSource } from "./sceneSource";
@@ -57,13 +57,16 @@ export const viewerCamera = (content: StoredSceneContent): Pick<CameraProfile, "
 };
 
 export class SceneViewer {
+  /** The viewer's own renderer. Handed to what needs it here; the viewer never puts it on `window`. */
+  readonly renderer: THREE.WebGLRenderer;
   private readonly disposers: (() => void)[] = [];
   private frameId = 0;
 
   constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false } = {}) {
     const renderer = createSceneRenderer();
+    this.renderer = renderer;
     container.appendChild(renderer.domElement);
-    this.disposers.push(exposeLiveRenderer(renderer), () => {
+    this.disposers.push(() => {
       renderer.dispose();
       renderer.forceContextLoss();
       renderer.domElement.remove();
@@ -75,7 +78,7 @@ export class SceneViewer {
     sceneManager.setEnvironmentMap(environment.texture);
     const scene = sceneManager.scene;
 
-    const objects = new ObjectManager(scene, new Map(), source);
+    const objects = new ObjectManager(scene, new Map(), source, { getRenderer: () => renderer });
     objects.syncMeshes(content.entities, null, false);
     // Syncing to no objects disposes them all (geometry, materials, textures).
     this.disposers.push(() => {
