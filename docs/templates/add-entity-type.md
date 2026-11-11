@@ -14,7 +14,7 @@ An entity type is a kind of 3D object you can add to the scene: cube, sphere, to
 ### What You'll Do
 1. Add the type to the store's `EntityType` union
 2. Add default name/color to `ENTITY_DEFAULTS`
-3. Add geometry creation to `ObjectManager`
+3. Add geometry creation to `viewport/entityGeometry.ts`
 4. Add UI button to the "Add Shape" menu
 
 ---
@@ -69,13 +69,13 @@ const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
 
 ---
 
-## Step 2: Add Geometry to ObjectManager (`src/viewport/ObjectManager.ts`)
+## Step 2: Add Geometry (`src/viewport/entityGeometry.ts`)
 
-### Find the `createGeometry` method (line ~65)
+### Find the `createPrimitiveGeometry` function
 
 **Looks like**:
 ```typescript
-createGeometry(entity: Entity): THREE.BufferGeometry {
+export function createPrimitiveGeometry(entity: Entity): THREE.BufferGeometry {
   switch (entity.type) {
     case "cube":
       return new THREE.BoxGeometry(1, 1, 1);
@@ -208,7 +208,7 @@ pnpm build
 
 **If you see errors**:
 - Missing ENTITY_DEFAULTS entry → Add it in Step 1b
-- Missing createGeometry case → Add it in Step 2
+- Missing createPrimitiveGeometry case → Add it in Step 2
 - Typo in entity type name → Check spelling matches exactly
 
 ### 2. Start dev server
@@ -252,7 +252,7 @@ pnpm dev
 
 - [ ] EntityType union includes new type
 - [ ] ENTITY_DEFAULTS has entry for new type
-- [ ] createGeometry switch case handles new type
+- [ ] createPrimitiveGeometry switch case handles new type
 - [ ] FloatingToolbar has button for new type
 - [ ] `pnpm build` passes with no errors
 - [ ] Dev server starts (`pnpm dev`)
@@ -274,7 +274,7 @@ pnpm dev
 **Check**:
 - Did you add the EntityType to the union? (TypeScript should have caught this)
 - Did you add the ENTITY_DEFAULTS entry? (Otherwise `createEntity` fails)
-- Did you add the createGeometry case? (Otherwise mesh doesn't render)
+- Did you add the createPrimitiveGeometry case? (Otherwise mesh doesn't render)
 
 **Fix**: Run `pnpm build` to see which step you missed.
 
@@ -300,7 +300,7 @@ See [Three.js docs](https://threejs.org/docs/#api/en/geometries/ConeGeometry) fo
 **Check**:
 - EntityType union includes it?
 - ENTITY_DEFAULTS has entry?
-- createGeometry switch includes it?
+- createPrimitiveGeometry switch includes it?
 - Any other switch statements on entity type? (Unlikely in practice)
 
 ---
@@ -334,12 +334,12 @@ Add a defaults entry to `ENTITY_DEFAULTS` (line ~340). Order doesn't matter — 
 
 `addEntity("cone")` reads the name and colour from here. `ENTITY_DEFAULTS` is typed `Record<EntityType, ...>`, so if you add to the union and forget this, `pnpm build` fails and tells you exactly what's missing. That's deliberate.
 
-### 2. `src/viewport/ObjectManager.ts`
+### 2. `src/viewport/entityGeometry.ts`
 
-Add a case to `createGeometry` (line ~65):
+Add a case to `createPrimitiveGeometry`:
 
 ```diff
-  private createGeometry(entity: Entity): THREE.BufferGeometry {
+  export function createPrimitiveGeometry(entity: Entity): THREE.BufferGeometry {
     switch (entity.type) {
       case "sphere":
         return new THREE.SphereGeometry(0.5, 32, 16);
@@ -399,7 +399,7 @@ No undo handling. No save/load code. No hierarchy-panel entry. No export logic. 
 
 - Add another shape type (pyramid, cylinder, torus knot) using the same pattern
 - Read [docs/conventions.md](../conventions.md) to understand the naming and pattern rules
-- Explore ObjectManager.ts to understand how geometries become meshes
+- Explore `viewport/ObjectManager.ts` to understand how geometries become meshes (materials are in `viewport/entityMaterials.ts`)
 - Read [store-api-reference.md](../store-api-reference.md) to understand `addEntity` action
 
 ---
@@ -408,7 +408,7 @@ No undo handling. No save/load code. No hierarchy-panel entry. No export logic. 
 
 **Files modified**: 3
 - `src/store/useEditorStore.ts` (2 additions)
-- `src/viewport/ObjectManager.ts` (1 addition)
+- `src/viewport/entityGeometry.ts` (1 addition)
 - `src/components/FloatingToolbar.tsx` (1 addition)
 
 **Total lines added**: ~15

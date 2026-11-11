@@ -463,7 +463,7 @@ Replace an entity's entire layer stack.
   smooth: boolean; // eased blends between stops
 }
 ```
-It's painted as vertex colours by `utils/depthColors.ts` (in ObjectManager and PathMesh), so exports and published scenes show it as `COLOR_0`. Copy layers with `cloneMaterialLayer`, which copies its arrays.
+It's painted as vertex colours by `utils/depthColors.ts` (in `viewport/entityMaterials.ts` and PathMesh), so exports and published scenes show it as `COLOR_0`. Copy layers with `cloneMaterialLayer`, which copies its arrays.
 
 ---
 
