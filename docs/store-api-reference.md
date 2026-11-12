@@ -370,7 +370,9 @@ An object's material is a stack of layers, **top first** (`materialLayers[0]` is
 
 - **Drawn bottom to top.** Each layer goes over what's under it with its `blendMode` (`"normal" | "multiply" | "screen" | "overlay"`, the W3C compositing formulas on sRGB values) and its `opacity` (0–1, how strongly it shows). Its `enabled` is the row's eye. Every layer is drawn per pixel (`viewport/layerSources.ts`); a stack of Color layers under Lighting is just the material's colour.
 - **Lighting** shades the layers under it; the layers over it are drawn on the shaded colour as they are (a Fresnel there glows, as in Spline). Its opacity is how much shading shows (0 looks unlit, as with its eye off); its blend mode stays `"normal"`. It can't be removed, so it also holds the surface settings (`alphaMode`, `alphaCutoff`, `doubleSided`) and the maps.
-- **Colour layers** are Color, Image, Depth, Gradient, Noise, Fresnel, Normal, Matcap and Rainbow; a row's type dropdown switches among them, and any layer moves anywhere in the stack. An object keeps one that paints: a layer that paints can be removed only while another one stays.
+- **Colour layers** are Color, Image, Depth, Gradient, Noise, Fresnel, Normal, Matcap, Rainbow and Glass; a row's type dropdown switches among them and Displace, and any layer moves anywhere in the stack. An object keeps one that paints: a layer that paints can be removed, or switched to Displace, only while another one stays.
+- **Displace** paints nothing: it moves the surface (`planStack`'s `displace`). Its row's number is its intensity and it has no blend mode or Mask mode. Only primitives offer it (`DISPLACEABLE_ENTITY_TYPES`: cube, sphere, torus, plane), and they're built finer while they have one.
+- **Glass** paints what's behind the object (`planStack`'s `glass`), so the object is drawn after the solid ones. Under Lighting it still gets highlights, but what's behind isn't shaded again.
 - **Mask mode** (`mask: true`, on Image, Matcap, Rainbow, Depth, Gradient, Noise and Fresnel; Spline's Layer Masking): the layer paints nothing and shows the one painting layer right under it only where it's light (`maskTarget`). Over Lighting, another mask or nothing, it masks nothing.
 - **Image layers** (an image plane's picture, an imported model's colour map, or one picked in the drawer) are colour layers like the others since PR 4b.
 - New 3D objects start with Lighting (Phong) over a white Color layer; flat ones (`FLAT_ENTITY_TYPES`: plane, shape, image) start unlit and shown from both sides (`createFlatMaterialLayers`).
@@ -481,6 +483,10 @@ Before PR 4b an Image layer only filled the colour map (with a `slot`): on load 
 **MatcapLayer** (a lit-sphere picture looked up by the camera-space normal): `{ type: "matcap"; preset: string; textureAssetId?: string; name?: string; rotation: number }`. `preset` is one of Libre3D's own (`viewport/matcaps.ts`); `textureAssetId`, when set, is a picture of one's own instead.
 
 **RainbowLayer** (a soap-bubble shimmer): `{ type: "rainbow"; frequency: number; movement: number; color: [r, g, b]; noise: number; noiseScale: number; offset: [x, y, z] }` (defaults 30, 0, 0s, 0, 1, 0s, as Spline's).
+
+**GlassLayer** (what's behind the object, bent and blurred, as Spline's Glass / Transmission): `{ type: "glass"; blur: number; thickness: number; ior: number; absorption: string; absorbDistance: number }` (defaults 10, 10, 1.5, `#ffffff`, 0, as Spline's). Blur is 0–10 (Spline's roughness × 10); thickness and absorbDistance are in hundredths of the object's own units, as Spline's sizes are a hundred times Libre3D's; absorbDistance 0 = no tint.
+
+**DisplaceLayer** (moves the surface along its normals): `{ type: "displace"; displaceType: NoiseType | "image"; scale; movement; offset: [x, y, z]; intensity; voronoiStyle; smoothness; seed; lowCut; highCut; quality: "low" | "medium" | "high"; textureAssetId?; name? }` (defaults simplex, 10, 1, 0s, 8, as Spline's; quality medium). The noise fields are the Noise layer's; `"image"` takes a picture's lightness at the UV. Intensity is in hundredths of the object's own units.
 
 **DepthLayer** (colour by distance, as Spline's Depth layer):
 ```typescript
