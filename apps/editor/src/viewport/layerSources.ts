@@ -43,7 +43,6 @@ import {
   smoothstep,
   sRGBTransferOETF,
   step,
-  texture,
   time,
   uniform,
   uv,
@@ -52,6 +51,7 @@ import {
   vec4,
 } from "three/tsl";
 import { hexToRgb, sortedStops, type PaintLayer } from "../scene/layerStack";
+import { objectSlot, objectTexture, objectUniform, shaderNode } from "./objectValues";
 import type { DepthLayer, FresnelLayer, GradientLayer, ImageLayer, NoiseLayer, PaintColor, RampStop, TextureRef } from "../scene/types";
 
 // TSL's node types are too loose to name usefully here; every node is this.
@@ -61,7 +61,9 @@ type Vec2Uniform = ReturnType<typeof uniform<THREE.Vector2>>;
 type Vec3Uniform = ReturnType<typeof uniform<THREE.Vector3>>;
 type Vec4Uniform = ReturnType<typeof uniform<THREE.Vector4>>;
 
-const n = (node: unknown): Node => node as Node;
+// A node for the shader: a stack's own value (objectUniform) goes in as the shared node that reads
+// the drawn object's (objectValues.ts).
+const n = (node: unknown): Node => shaderNode(node) as Node;
 
 /** A layer's colour at a pixel: sRGB (as picked) and how much of it there is. */
 export interface SourceColor {
@@ -91,7 +93,7 @@ const setPaint = (target: Vec4Uniform, paint: PaintColor): void => {
   target.value.set(r, g, b, Math.min(1, Math.max(0, paint.alpha ?? 1)));
 };
 
-const vec4Uniform = (): Vec4Uniform => uniform(new THREE.Vector4(1, 1, 1, 1));
+const vec4Uniform = (): Vec4Uniform => objectUniform(new THREE.Vector4(1, 1, 1, 1));
 
 interface RampUniforms {
   colors: Vec4Uniform[];
@@ -101,8 +103,8 @@ interface RampUniforms {
 
 const rampUniforms = (count: number): RampUniforms => ({
   colors: Array.from({ length: count }, vec4Uniform),
-  positions: Array.from({ length: count }, () => uniform(0)),
-  smooth: uniform(0),
+  positions: Array.from({ length: count }, () => objectUniform(0)),
+  smooth: objectUniform(0),
 });
 
 const updateRamp = (ramp: RampUniforms, stops: RampStop[], smooth: boolean): void => {
@@ -122,7 +124,7 @@ const sampleRampNode = (ramp: RampUniforms, t: Node): Node => {
     const span = n(ramp.positions[i]).sub(from);
     const blended = clamp(t.sub(from).div(max(span, 1e-6)), 0, 1);
     let amount = n(select(span.greaterThan(0), blended, step(from, t)));
-    amount = n(mix(amount, amount.mul(amount).mul(float(3).sub(amount.mul(2))), ramp.smooth));
+    amount = n(mix(amount, amount.mul(amount).mul(float(3).sub(amount.mul(2))), n(ramp.smooth)));
     color = n(mix(color, n(ramp.colors[i]), amount));
   }
   return color;
@@ -133,7 +135,7 @@ const stopCount = (stops: RampStop[]): number => Math.max(1, sortedStops(stops).
 // ─── Color ───────────────────────────────────────────────────────────────────
 
 const colorSource = (): LayerSource => {
-  const color = uniform(new THREE.Vector3(1, 1, 1));
+  const color = objectUniform(new THREE.Vector3(1, 1, 1));
   return {
     update(layer) {
       if (layer.type !== "color") return;
@@ -157,10 +159,10 @@ const depthSource = (first: DepthLayer): LayerSource => {
   const world = first.space === "world";
   const linear = first.gradientType === "linear";
   const ramp = rampUniforms(stopCount(first.stops));
-  const origin: Vec3Uniform = uniform(new THREE.Vector3());
-  const direction: Vec3Uniform = uniform(new THREE.Vector3(1, 0, 0));
-  const near = uniform(0);
-  const far = uniform(1);
+  const origin: Vec3Uniform = objectUniform(new THREE.Vector3());
+  const direction: Vec3Uniform = objectUniform(new THREE.Vector3(1, 0, 0));
+  const near = objectUniform(0);
+  const far = objectUniform(1);
   return {
     update(layer) {
       if (layer.type !== "depth") return;
@@ -216,9 +218,9 @@ const gradientPositionNode = (type: GradientLayer["gradientType"], angle: Node, 
 
 const gradientSource = (first: GradientLayer): LayerSource => {
   const ramp = rampUniforms(stopCount(first.stops));
-  const angle = uniform(0);
-  const offset: Vec2Uniform = uniform(new THREE.Vector2());
-  const morph: Vec2Uniform = uniform(new THREE.Vector2());
+  const angle = objectUniform(0);
+  const offset: Vec2Uniform = objectUniform(new THREE.Vector2());
+  const morph: Vec2Uniform = objectUniform(new THREE.Vector2());
   return {
     update(layer) {
       if (layer.type !== "gradient") return;
@@ -335,16 +337,16 @@ const noiseValue = (type: NoiseLayer["noiseType"], style: NoiseLayer["voronoiSty
 
 const noiseSource = (first: NoiseLayer): LayerSource => {
   const colors = [vec4Uniform(), vec4Uniform(), vec4Uniform(), vec4Uniform()];
-  const size: Vec3Uniform = uniform(new THREE.Vector3(1, 1, 1));
-  const scale = uniform(1);
-  const movement = uniform(0);
-  const distortion: Vec2Uniform = uniform(new THREE.Vector2(1, 1));
-  const factorA: Vec2Uniform = uniform(new THREE.Vector2());
-  const factorB: Vec2Uniform = uniform(new THREE.Vector2());
-  const smoothness = uniform(0.3);
-  const seed = uniform(0);
-  const lowCut = uniform(0);
-  const highCut = uniform(1);
+  const size: Vec3Uniform = objectUniform(new THREE.Vector3(1, 1, 1));
+  const scale = objectUniform(1);
+  const movement = objectUniform(0);
+  const distortion: Vec2Uniform = objectUniform(new THREE.Vector2(1, 1));
+  const factorA: Vec2Uniform = objectUniform(new THREE.Vector2());
+  const factorB: Vec2Uniform = objectUniform(new THREE.Vector2());
+  const smoothness = objectUniform(0.3);
+  const seed = objectUniform(0);
+  const lowCut = objectUniform(0);
+  const highCut = objectUniform(1);
   return {
     update(layer) {
       if (layer.type !== "noise") return;
@@ -420,19 +422,14 @@ const projectedUv = (layer: ImageLayer, p: Node): Node => {
 };
 
 const imageSource = (first: ImageLayer): LayerSource => {
-  // One texture node per sample (triplanar takes three); all show the same picture.
-  const samplers: Array<ReturnType<typeof texture>> = [];
-  let picture: THREE.Texture = NO_PICTURE;
-  const scale: Vec2Uniform = uniform(new THREE.Vector2(1, 1));
-  const offset: Vec2Uniform = uniform(new THREE.Vector2());
-  const rotation = uniform(0);
-  const crop = uniform(0);
-  const aspect = uniform(1); // the picture's width / height
-  const sample = (at: Node): Node => {
-    const node = texture(picture, at as never);
-    samplers.push(node);
-    return n(node);
-  };
+  // The picture (each sample, of which triplanar takes three, reads the drawn object's own).
+  const picture = objectSlot<THREE.Texture>(NO_PICTURE);
+  const scale: Vec2Uniform = objectUniform(new THREE.Vector2(1, 1));
+  const offset: Vec2Uniform = objectUniform(new THREE.Vector2());
+  const rotation = objectUniform(0);
+  const crop = objectUniform(0);
+  const aspect = objectUniform(1); // the picture's width / height
+  const sample = (at: Node): Node => n(objectTexture(picture, at));
   // Rotation and repeats about the picture's middle, then the offset; Crop keeps its shape.
   const place = (at: Node): Node => {
     const centred = n(at.sub(0.5));
@@ -452,9 +449,8 @@ const imageSource = (first: ImageLayer): LayerSource => {
       const next = (layer.textureAssetId ? pictures(layer, { nearest: layer.sharpness === "pixelated" }) : null) ?? NO_PICTURE;
       const image = next.image as { width?: number; height?: number } | undefined;
       aspect.value = image?.width && image.height ? image.width / image.height : 1;
-      if (next === picture) return false;
-      picture = next;
-      for (const sampler of samplers) sampler.value = next;
+      if (next === picture.value) return false;
+      picture.value = next;
       return true;
     },
     node(context) {
@@ -483,7 +479,7 @@ const imageSource = (first: ImageLayer): LayerSource => {
 // ─── Normal ──────────────────────────────────────────────────────────────────
 
 const normalSource = (): LayerSource => {
-  const axes: Vec3Uniform = uniform(new THREE.Vector3(1, 1, 1));
+  const axes: Vec3Uniform = objectUniform(new THREE.Vector3(1, 1, 1));
   return {
     update(layer) {
       if (layer.type !== "normal") return;
@@ -500,10 +496,10 @@ const normalSource = (): LayerSource => {
 
 const fresnelSource = (): LayerSource => {
   const color = vec4Uniform();
-  const bias = uniform(0.1);
-  const scale = uniform(1);
-  const intensity = uniform(2);
-  const factor = uniform(1);
+  const bias = objectUniform(0.1);
+  const scale = objectUniform(1);
+  const intensity = objectUniform(2);
+  const factor = objectUniform(1);
   return {
     update(layer) {
       if (layer.type !== "fresnel") return;
