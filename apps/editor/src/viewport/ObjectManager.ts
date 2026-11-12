@@ -30,7 +30,7 @@ import { PathMesh } from "../paths/PathMesh";
 import { DEFAULT_STROKE, type PathData } from "../paths/pathGeometry";
 import { ShapeMesh } from "../paths/ShapeMesh";
 import type { ShapeData, ShapeSolid } from "../paths/shapeGeometry";
-import { createPrimitiveGeometry } from "./entityGeometry";
+import { createPrimitiveGeometry, displaceDetail } from "./entityGeometry";
 import { EntityMaterials } from "./entityMaterials";
 import { ImportedModels } from "./importedModels";
 import { attachSelectionOutline, disposeSelectionOutline, replaceSelectionOutline } from "./selectionOutline";
@@ -185,6 +185,9 @@ export class ObjectManager {
       const geometry = createPrimitiveGeometry(entity);
       geometry.computeBoundingBox();
       const mesh = new THREE.Mesh(geometry, this.materials.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1));
+      mesh.userData.displaceDetail = displaceDetail(entity);
+      // A displaced surface reaches past the shape it's built from, which is all three's culling knows.
+      mesh.frustumCulled = mesh.userData.displaceDetail === null;
       applyTransform(mesh, entity);
 
       if (this.editorHelpers) attachSelectionOutline(mesh, geometry.boundingBox!);
@@ -267,6 +270,15 @@ export class ObjectManager {
     }
     if (obj instanceof ShapeMesh && !obj.isBuiltFrom(shapeOf(entity), solidOf(entity))) {
       this.rebuildShape(obj, entity);
+    }
+    // A primitive is built finer while it has a Displace layer (entityGeometry.ts). Its bounds
+    // don't change, so its selection outline stays.
+    if (obj instanceof THREE.Mesh && "displaceDetail" in obj.userData && obj.userData.displaceDetail !== displaceDetail(entity)) {
+      obj.geometry.dispose();
+      obj.geometry = createPrimitiveGeometry(entity);
+      obj.geometry.computeBoundingBox();
+      obj.userData.displaceDetail = displaceDetail(entity);
+      obj.frustumCulled = obj.userData.displaceDetail === null;
     }
 
     if (!isBeingDragged) {

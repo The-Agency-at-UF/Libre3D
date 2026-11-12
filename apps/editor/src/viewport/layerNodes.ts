@@ -28,6 +28,8 @@ import type { NodeMaterial } from "three/webgpu";
 import { diffuseColor, dot, float, materialColor, max, mix, output, positionLocal, positionWorld, sRGBTransferEOTF, sRGBTransferOETF, step, uniform, vec3, vec4 } from "three/tsl";
 import { isPlainPlan, type PlanStep, type StackPlan } from "../scene/layerStack";
 import type { BlendMode } from "../scene/types";
+import type { DisplaceLayer } from "../scene/types";
+import { createDisplaceSource, displacedPosition, displaceShape, type DisplaceSource } from "./displaceNodes";
 import { createLayerSource, layerSourceShape, type LayerSource, type PictureSource, type SourceColor, type SourceContext } from "./layerSources";
 import { collectSlots, objectUniform, setSlotLookup, shaderNode, type Slot } from "./objectValues";
 
@@ -54,6 +56,8 @@ interface LayerStackRecord {
   // Null when the layers under Lighting are the material's own colour (Color layers alone).
   under: StepNodes[] | null;
   over: StepNodes[];
+  // The Displace layers (displaceNodes.ts), top first.
+  displace: DisplaceSource[];
   // Lighting's opacity, while it's under 1; null at 1 (three's own lit result).
   strength: FloatUniform | null;
   // The object whose own space Depth and Noise work in, when it isn't the mesh's: a path, whose end
@@ -104,6 +108,7 @@ const shapeOf = (plan: StackPlan, space: THREE.Object3D | null): string | null =
     `over:${plan.over.map(stepShape).join(",")}`,
     plan.strength < 1 ? "lit" : "",
     space ? "space" : "",
+    plan.displace.map(displaceShape).join(","),
   ].join("|");
 };
 
@@ -161,6 +166,7 @@ export const syncLayerNodes = (
       under: plan.folded ? null : plan.under.map((step) => stepNodes(step, pictures)),
       over: plan.over.map((step) => stepNodes(step, pictures)),
       strength: plan.strength < 1 ? objectUniform(1) : null,
+      displace: plan.displace.map((layer) => createDisplaceSource(layer, pictures)),
       space,
       slots,
     }));
@@ -172,6 +178,7 @@ export const syncLayerNodes = (
   if (record.under) plan.under.forEach((step, index) => (pictureChanged = updateStep(record.under![index], step, pictures) || pictureChanged));
   plan.over.forEach((step, index) => (pictureChanged = updateStep(record.over[index], step, pictures) || pictureChanged));
   if (record.strength) record.strength.value = plan.strength;
+  plan.displace.forEach((layer: DisplaceLayer, index) => (pictureChanged = record.displace[index].update(layer, pictures) || pictureChanged));
   markValuesChanged(material);
   return rebuilt || pictureChanged;
 };
@@ -285,6 +292,7 @@ export const applyLayerNodes = (material: Material, built: NodeMaterial): Node |
     }
     built.colorNode = record.colorNode as never;
   }
+  if (record.displace.length > 0) built.positionNode = displacedPosition(record.displace) as never;
   if (!record.strength && record.over.length === 0 && !record.glassLight) return null;
 
   let lit: Paint = { rgb: n(output.rgb), a: n(output.a) };

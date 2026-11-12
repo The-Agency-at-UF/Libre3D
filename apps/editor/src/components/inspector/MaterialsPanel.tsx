@@ -16,14 +16,15 @@
 
 import { useState, useEffect, useRef, useLayoutEffect, type DragEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useEditorStore, type Entity, type ImageLayer, type MaterialLayer as MaterialLayerData, type MaterialLayerType } from "../../store/useEditorStore";
+import { useEditorStore, type DisplaceLayer, type Entity, type ImageLayer, type MaterialLayer as MaterialLayerData, type MaterialLayerType } from "../../store/useEditorStore";
 import type { PaintLayerType } from "../../scene/entityFactories";
-import { BLEND_MODES, canSwitchLayerType, maskTarget, movableRange, removeBlockedReason, SWITCHABLE_LAYER_TYPES } from "../../scene/layerStack";
+import { BLEND_MODES, canSwitchLayerType, DISPLACEABLE_ENTITY_TYPES, maskTarget, movableRange, removeBlockedReason, SWITCHABLE_LAYER_TYPES } from "../../scene/layerStack";
 import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
 import {
   ColorSettings,
   DepthSettings,
+  DisplaceSettings,
   FresnelSettings,
   GlassSettings,
   GradientSettings,
@@ -156,6 +157,10 @@ function LayerRow({
   const first = row.pairs[0].layer;
   const isImage = row.type === "image";
   const isLighting = row.type === "lighting";
+  // Displace paints nothing: its number is how far it pushes (Spline's row shows that), and it has no blend mode.
+  const isDisplace = row.type === "displace";
+  // Only primitives can be displaced (scene/layerStack.ts).
+  const displaceable = row.pairs.every(({ entity }) => DISPLACEABLE_ENTITY_TYPES.includes(entity.type));
   const mixed = (read: (layer: MaterialLayerData) => unknown) => row.pairs.some(({ layer }) => read(layer) !== read(first));
 
   const update = (updates: Partial<MaterialLayerData>) =>
@@ -200,7 +205,7 @@ function LayerRow({
             </>
           }
           value={row.type}
-          options={SWITCHABLE_LAYER_TYPES.map((type) => ({
+          options={SWITCHABLE_LAYER_TYPES.filter((type) => type !== "displace" || displaceable || isDisplace).map((type) => ({
             value: type,
             label: LAYER_TYPE_NAMES[type],
             icon: LAYER_TYPE_ICONS[type],
@@ -238,24 +243,34 @@ function LayerRow({
         <i className={`ti ${LAYER_TYPE_ICONS[row.type]}`}></i>
       </button>
 
-      <NumberField
-        className="mat-row-opacity"
-        label={`${name} opacity (%)`}
-        value={isImage ? 100 : mixed((layer) => layer.opacity) ? null : Math.round(first.opacity * 100)}
-        min={0}
-        max={100}
-        step={1}
-        integer
-        disabled={isImage}
-        onChange={(percent) => update({ opacity: percent / 100 })}
-      />
+      {isDisplace ? (
+        <NumberField
+          className="mat-row-opacity"
+          label={`${name} intensity`}
+          value={mixed((layer) => (layer as DisplaceLayer).intensity) ? null : (first as DisplaceLayer).intensity}
+          step={1}
+          onChange={(intensity) => update({ intensity } as Partial<DisplaceLayer>)}
+        />
+      ) : (
+        <NumberField
+          className="mat-row-opacity"
+          label={`${name} opacity (%)`}
+          value={isImage ? 100 : mixed((layer) => layer.opacity) ? null : Math.round(first.opacity * 100)}
+          min={0}
+          max={100}
+          step={1}
+          integer
+          disabled={isImage}
+          onChange={(percent) => update({ opacity: percent / 100 })}
+        />
+      )}
 
       <RowMenu
         label={`${name} blend mode`}
-        title={isLighting ? "Lighting shades the layers under it; the ones over it are drawn as they are" : isImage ? "Comes with the imported model" : `Blend mode: ${mixed((layer) => layer.blendMode) ? "mixed" : BLEND_MODE_NAMES[first.blendMode]}`}
+        title={isLighting ? "Lighting shades the layers under it; the ones over it are drawn as they are" : isImage ? "Comes with the imported model" : isDisplace ? "Displace moves the surface; it paints nothing" : `Blend mode: ${mixed((layer) => layer.blendMode) ? "mixed" : BLEND_MODE_NAMES[first.blendMode]}`}
         triggerClassName="mat-icon-btn"
         trigger={<i className={`ti ${mixed((layer) => layer.blendMode) ? "ti-blend-mode" : BLEND_MODE_ICONS[first.blendMode]}`}></i>}
-        disabled={isLighting || isImage}
+        disabled={isLighting || isImage || isDisplace}
         value={mixed((layer) => layer.blendMode) ? null : first.blendMode}
         options={BLEND_MODES.map((mode) => ({ value: mode, label: BLEND_MODE_NAMES[mode], icon: BLEND_MODE_ICONS[mode] }))}
         onSelect={(blendMode) => update({ blendMode })}
@@ -351,6 +366,7 @@ function LayerDrawer({ row, anchor, onClose }: { row: LayerRowData; anchor: HTML
         {row.type === "matcap" && <MatcapSettings row={row} />}
         {row.type === "rainbow" && <RainbowSettings row={row} />}
         {row.type === "glass" && <GlassSettings row={row} />}
+        {row.type === "displace" && <DisplaceSettings row={row} />}
         {row.type === "image" && <ImageSettings row={row} />}
       </fieldset>
     </div>,

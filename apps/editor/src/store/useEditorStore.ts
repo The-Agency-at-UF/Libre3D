@@ -92,6 +92,8 @@ export type {
   ColorLayer,
   DeepPartial,
   DepthLayer,
+  DisplaceLayer,
+  DisplaceType,
   Entity,
   FresnelLayer,
   GlassLayer,

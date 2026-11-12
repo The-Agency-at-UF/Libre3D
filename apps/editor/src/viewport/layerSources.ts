@@ -1,6 +1,6 @@
 /**
  * PURPOSE: What each colour layer paints at a pixel, as TSL: Color, Image, Depth, Gradient, Noise,
- * Fresnel, Normal, Matcap, Rainbow, Glass.
+ * Fresnel, Normal, Matcap, Rainbow, Glass; and how far a Displace layer pushes the surface.
  * viewport/layerNodes.ts blends them into a stack.
  *
  * INPUT: A layer (scene/types.ts). OUTPUT: A LayerSource: its uniforms, a way to bring them up to
@@ -319,7 +319,7 @@ const simplexNode = (p: Node): Node => n(simplex3(p));
 const VORONOI_STYLE_CODES = { f1: 0, f2: 1, f2MinusF1: 2, smoothBlend: 3, edge: 4 } as const;
 
 /** One noise value at `p`, 0-1, of the layer's type. */
-const noiseValue = (type: NoiseLayer["noiseType"], style: NoiseLayer["voronoiStyle"], p: Node, smoothness: Node): Node => {
+export const noiseValue = (type: NoiseLayer["noiseType"], style: NoiseLayer["voronoiStyle"], p: Node, smoothness: Node): Node => {
   switch (type) {
     case "perlin":
       return n(mx_noise_float(p).mul(0.5).add(0.5));
@@ -416,7 +416,7 @@ const noiseSource = (first: NoiseLayer): LayerSource => {
 // ─── Image ───────────────────────────────────────────────────────────────────
 
 // What an Image layer with no picture yet (or one still loading) samples: nothing, see-through.
-const NO_PICTURE = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+export const NO_PICTURE = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
 NO_PICTURE.needsUpdate = true;
 
 // Where a point falls on the picture, before scale, offset and rotation: the mesh's UVs, or the

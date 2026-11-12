@@ -77,7 +77,7 @@ export const collectAssetRefs = (entities: unknown): AssetRef[] => {
 
     if (Array.isArray(entity.materialLayers)) {
       for (const layer of entity.materialLayers) {
-        if (isObject(layer) && (layer.type === "image" || layer.type === "matcap")) {
+        if (isObject(layer) && (layer.type === "image" || layer.type === "matcap" || layer.type === "displace")) {
           add(layer.textureAssetId, "texture");
         }
         // A Lighting layer's maps (normal, roughness, …): pictures too.

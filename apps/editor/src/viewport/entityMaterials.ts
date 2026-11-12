@@ -37,6 +37,7 @@ import { getEntityIndex } from "../scene/entityIndex";
 import { lightingLayerOf, surfaceOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, type Surface } from "../scene/layers";
 import { planStack, type StackPlan } from "../scene/layerStack";
 import { buildTexture } from "../utils/materialLayers";
+import { displacePictureRef } from "./displaceNodes";
 import { syncLayerNodes } from "./layerNodes";
 import type { PictureSource } from "./layerSources";
 import { PathMesh } from "../paths/PathMesh";
@@ -278,7 +279,10 @@ export class EntityMaterials {
           (layer.type === "image" && textureKey({ ref: layer, srgb: true, nearest: layer.sharpness === "pixelated" }) === key) ||
           (layer.type === "matcap" &&
             !!layer.textureAssetId &&
-            textureKey({ ref: { textureAssetId: layer.textureAssetId, wrapS: 1001, wrapT: 1001, flipY: true }, srgb: true, nearest: false }) === key),
+            textureKey({ ref: { textureAssetId: layer.textureAssetId, wrapS: 1001, wrapT: 1001, flipY: true }, srgb: true, nearest: false }) === key) ||
+          (layer.type === "displace" &&
+            !!layer.textureAssetId &&
+            textureKey({ ref: displacePictureRef(layer), srgb: true, nearest: false }) === key),
       );
       if (usesPicture && syncLayerNodes(material, planStack(layers), spaceOf(obj), this.pictures)) material.needsUpdate = true;
     }
