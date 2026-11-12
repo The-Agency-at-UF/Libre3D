@@ -1,6 +1,6 @@
 /**
  * PURPOSE: Inspector panel for configuring interactive animation events and transition sequences.
- * Allows users to set event triggers (Start, Mouse Down, Hover), target entities, transition sequences,
+ * Allows users to set event triggers (Start, Mouse Down), target entities, transition sequences,
  * durations, easing curves, repeats, and loop modes.
  */
 

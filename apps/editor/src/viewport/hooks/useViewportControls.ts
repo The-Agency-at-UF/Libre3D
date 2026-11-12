@@ -1,7 +1,8 @@
 /**
  * PURPOSE: Manages Three.js camera OrbitControls and object TransformControls (translate/rotate/scale gizmo).
- * Handles pointer dragging, snapping, multi-selection stand-in objects, and coalescing camera
- * updates before committing to the editor store.
+ * Switches the mouse between orbiting and panning (Alt, Space, the middle button), writes a gizmo
+ * drag of one object to the store as one undo step, and writes the camera back to the active
+ * profile at most once a frame.
  */
 
 import { useEffect, useRef } from "react";
