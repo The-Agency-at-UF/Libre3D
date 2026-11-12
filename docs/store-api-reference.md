@@ -122,7 +122,7 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, or group). A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), lit like the other primitives, with its Color layer shown from both sides (`doubleSided: true`). A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
+Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, or group). A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), unlit (Lighting `none`) and shown from both sides (`doubleSided: true` on its Lighting layer), like the other flat objects; the 3D primitives start with Phong lighting over a white Color layer. A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
 - **Signature**: `(type: "cube" | "sphere" | "torus" | "plane" | "path" | "directionalLight" | "group") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
@@ -147,7 +147,7 @@ Adds the shapes and paths of an imported SVG (made by `svgShapesToItems` in `pat
 - **Auto-selects**: The item or the group becomes selected
 
 #### `addImagePlane(name: string, textureAssetId: string, aspect: number, transparent: boolean) → string`
-Adds an imported picture (`importImageFile` in `utils/importImage.ts`) as an `"image"` entity named `name` at the origin: a flat plane `aspect` (width / height) wide, its longer side 2 units (`utils/imagePlane.ts`), stored as `imageAspect`. Its layers are a white Color layer shown from both sides (`alphaMode: "BLEND"` when `transparent`, the picture having see-through pixels), an unlit Lighting layer (`model: "none"`), and a Base Color Image layer pointing at `textureAssetId` (the file's SHA-256 in the texture store), clamped at the edges. One undo step; refused in view only; puts the pen down.
+Adds an imported picture (`importImageFile` in `utils/importImage.ts`) as an `"image"` entity named `name` at the origin: a flat plane `aspect` (width / height) wide, its longer side 2 units (`utils/imagePlane.ts`), stored as `imageAspect`. Its layers are an unlit Lighting layer (`model: "none"`) shown from both sides (`alphaMode: "BLEND"` when `transparent`, the picture having see-through pixels), a white Color layer, and a Base Color Image layer pointing at `textureAssetId` (the file's SHA-256 in the texture store), clamped at the edges. One undo step; refused in view only; puts the pen down.
 - **Returns**: New entity ID
 - **Auto-selects**: The new plane becomes selected
 
@@ -366,19 +366,34 @@ updatePostProcessing({
 
 ## Material Layers
 
-Each entity can have multiple material layers (color, lighting, textures) stacked on top of each other.
+An object's material is a stack of layers, **top first** (`materialLayers[0]` is the top, as the Materials panel lists it), plus the object's own `opacity`. The stack's rules live in `scene/layerStack.ts`:
+
+- **Drawn bottom to top.** Each layer goes over what's under it with its `blendMode` (`"normal" | "multiply" | "screen" | "overlay"`, the W3C compositing formulas on sRGB values) and its `opacity` (0–1, how strongly it shows). Its `enabled` is the row's eye.
+- **Lighting sits on top** and shades everything under it. Its opacity is how much shading shows (0 looks unlit, as with its eye off); its blend mode stays `"normal"`. It can't be removed, so it also holds the surface settings (`alphaMode`, `alphaCutoff`, `doubleSided`).
+- **Colour layers** are Color and Depth (more come with task D's later PRs). An object keeps at least one: a Color layer can be removed only while another colour layer stays. An object has at most one Depth layer.
+- **Image layers** come from imported models and fill the material's texture slots; they stay at the bottom, their opacity and blend mode unused (until Image is a layer type of its own, task D PR 4).
+- New 3D objects start with Lighting (Phong) over a white Color layer; flat ones (`FLAT_ENTITY_TYPES`: plane, shape, image) start unlit and shown from both sides (`createFlatMaterialLayers`).
+
+Every action below edits one object (or, in a batch, several), records one undo step, and records none when the rules refuse it. Refused in view only.
 
 ### Adding Layers
 
 #### `addMaterialLayer(entityId: string, layerType: MaterialLayerType, depthFar?: number) → void`
-Add a color, lighting, image, or depth layer to an entity (at most one of each; a second does nothing). Only a depth layer can be removed again.
-- **Types**: "color" | "lighting" | "image" | "depth"
-- **Defaults**: New layers created with sensible defaults. A depth layer is radial from the object's origin, near 0; its far is `depthFar` when given (above 0), else 2. The Materials panel passes the object's reach (`depthReach` in `utils/depthColors.ts`, its mesh's farthest vertex from its origin), so the ramp ends on the object rather than past it.
+Adds a Color or Depth layer just under Lighting (a new Color layer starts in the colour of the one it goes over), or a Lighting layer on top when the object has none. A second Depth layer, a second Lighting layer and an Image layer are refused.
+- **Depth**: radial from the object's origin, near 0; its far is `depthFar` when given (above 0), else 2. The Materials panel passes the object's reach (`depthReach` in `utils/depthColors.ts`, its mesh's farthest vertex from its origin), so the ramp ends on the object rather than past it.
 
 ### Removing Layers
 
 #### `removeMaterialLayer(entityId: string, layerId: string) → void`
-Remove a layer from an entity.
+Removes a layer the rules allow removing (`canRemoveLayer`): never Lighting or an Image layer; a colour layer while another stays.
+
+### Changing a Layer's Type or Place
+
+#### `switchMaterialLayerType(entityId: string, layerId: string, type: "color" | "depth", depthFar?: number) → void`
+Turns a Color layer into a Depth layer or back (the row's type dropdown), keeping its ID, eye, opacity and blend mode; the rest is the new type's defaults (a Color layer takes the colour of the next Color layer in the stack). Refused for Lighting and Image layers, and for a second Depth layer.
+
+#### `moveMaterialLayer(entityId: string, layerId: string, toIndex: number) → void`
+Moves a layer to `toIndex` (0 = top), kept between Lighting and the Image layers (`movableRange`). Lighting and Image layers don't move.
 
 ### Updating Layers
 
@@ -389,36 +404,33 @@ Update a single layer's properties.
 #### `updateMultipleEntityMaterialLayers(updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) → void`
 Batch update layers across multiple entities.
 
+#### `setEntityOpacity(opacities: Record<string, number>) → void`
+Sets how see-through objects are (entity ID → 0–1, clamped), one undo step for all. At 1 the field is left off the entity.
+
 ### Replacing All Layers
 
-#### `setEntityMaterialLayers(entityId: string, layers: MaterialLayer[]) → void`
-Replace an entity's entire layer stack.
-- **Full replacement**: Old layers are discarded
-- **Validation**: System enforces at least one color and one lighting layer
+#### `setEntityMaterialLayers(entityId: string, layers: MaterialLayer[], opacity?: number) → void`
+Replaces an entity's whole layer stack (copied), and sets its opacity when `opacity` isn't 1. Used for the layers derived from an imported mesh's own material (`deriveMaterialLayers`, through the `SceneSource`).
 
-**Layer interfaces**:
+### Material Assets
+
+#### `materials: Record<string, MaterialAsset>`
+Reusable materials by ID (`{ id, name, layers }`, layers top first), saved with the scene as the document's `materials` section and undoable. Empty until material assets arrive (task D PR 6); an entity's `materialAssetId` will point at one.
+
+**Layer interfaces** (every layer also has `id`, `enabled`, `opacity` and `blendMode`):
 
 **ColorLayer**:
 ```typescript
 {
-  id: string;
   type: "color";
-  enabled: boolean;
-  opacity: number; // 0-1
   color: string; // hex color
-  alphaMode?: "OPAQUE" | "MASK" | "BLEND"; // from imported material
-  alphaCutoff?: number; // for MASK mode
-  doubleSided?: boolean; // from imported material
 }
 ```
 
 **LightingLayer**:
 ```typescript
 {
-  id: string;
   type: "lighting";
-  enabled: boolean;
-  opacity: number; // 0-1
   model: "none" | "lambert" | "phong" | "physical" | "toon";
   roughness: number; // 0-1, for physical
   metalness: number; // 0-1, for physical
@@ -427,16 +439,16 @@ Replace an entity's entire layer stack.
   shininess: number; // for phong
   emissive: string; // hex color
   emissiveIntensity: number;
+  alphaMode?: "OPAQUE" | "MASK" | "BLEND"; // the surface; from an imported material
+  alphaCutoff?: number; // for MASK mode
+  doubleSided?: boolean;
 }
 ```
 
 **ImageLayer** (texture):
 ```typescript
 {
-  id: string;
   type: "image";
-  enabled: boolean;
-  opacity: number; // 0-1
   textureAssetId: string; // SHA-256 of the stored PNG (local storage and S3)
   slot: "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
   wrapS: number; // THREE.js wrap constant
@@ -447,10 +459,7 @@ Replace an entity's entire layer stack.
 **DepthLayer** (colour by distance, like Spline's Depth layer with a Vector origin in Local space):
 ```typescript
 {
-  id: string;
   type: "depth";
-  enabled: boolean;
-  opacity: number; // 0-1, over the Color layer's colour
   gradientType: "radial" | "linear"; // distance from origin, or along direction
   origin: [number, number, number]; // in the object's own space
   direction: [number, number, number]; // for linear
@@ -460,7 +469,7 @@ Replace an entity's entire layer stack.
   smooth: boolean; // eased blends between stops
 }
 ```
-It's painted as vertex colours by `utils/depthColors.ts` (in `viewport/entityMaterials.ts` and PathMesh), so exports and published scenes show it as `COLOR_0`. Copy layers with `cloneMaterialLayer`, which copies its arrays.
+Its ramp is painted as vertex colours by `utils/depthColors.ts` (in `viewport/entityMaterials.ts` and PathMesh) and blended with the layers around it in TSL (`viewport/layerNodes.ts`); an export bakes the blend into the vertex colours (`COLOR_0`). Copy layers with `cloneMaterialLayer`, which copies its arrays.
 
 ---
 
@@ -752,8 +761,9 @@ useEditorStore.subscribe(
 - entities, activeProfileId, cameraProfiles
 - sceneSettings, postProcessing, frame
 - animation (object states and events), viewedStates
+- materials (material assets)
 
-**Persisted (localStorage, `persist` v17)** — editor preferences:
+**Persisted (localStorage, `persist` v18)** — editor preferences:
 - activeTransformTool, projectionMode, transformSpace
 - hudOverlay, viewportZoom
 
