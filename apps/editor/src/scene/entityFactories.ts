@@ -20,9 +20,11 @@ import type {
   CameraProfile,
   ColorLayer,
   DepthLayer,
+  DisplaceLayer,
   Entity,
   EntityType,
   FresnelLayer,
+  GlassLayer,
   GradientLayer,
   ImageLayer,
   LightingLayer,
@@ -203,6 +205,40 @@ export const createRainbowLayer = (): RainbowLayer => ({
   offset: [0, 0, 0],
 });
 
+// Spline's defaults (its player, @splinetool/runtime 2.0.178), as its drawer shows them; Glass's Blur
+// starts at 5, not Spline's 10, for a clearer first look (Emily, 2026-11-12).
+export const createGlassLayer = (): GlassLayer => ({
+  id: createEntityId(),
+  type: "glass",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  blur: 5,
+  thickness: 10,
+  ior: 1.5,
+  absorption: "#ffffff",
+  absorbDistance: 0,
+});
+
+export const createDisplaceLayer = (): DisplaceLayer => ({
+  id: createEntityId(),
+  type: "displace",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  displaceType: "simplex",
+  scale: 10,
+  movement: 1,
+  offset: [0, 0, 0],
+  intensity: 8,
+  voronoiStyle: "f1",
+  smoothness: 0.3,
+  seed: 0,
+  lowCut: 0,
+  highCut: 1,
+  quality: "medium",
+});
+
 export const createFresnelLayer = (): FresnelLayer => ({
   id: createEntityId(),
   type: "fresnel",
@@ -229,6 +265,8 @@ export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer => {
       return { ...layer, axes: [...layer.axes] };
     case "rainbow":
       return { ...layer, color: [...layer.color], offset: [...layer.offset] };
+    case "displace":
+      return { ...layer, offset: [...layer.offset] };
     case "noise":
       return {
         ...layer,
@@ -280,7 +318,7 @@ export const createMaterialLayers = (color: string, lighting: Partial<LightingLa
   createColorLayer(color, 1),
 ];
 
-/** A new colour layer of `type` (Color in `color`; Depth reaching `depthFar` when it's above 0). */
+/** A new layer of `type` (Color in `color`; Depth reaching `depthFar` when it's above 0). */
 export const createPaintLayer = (type: PaintLayerType, depthFar?: number, color = "#ffffff"): MaterialLayer => {
   switch (type) {
     case "depth":
@@ -299,13 +337,18 @@ export const createPaintLayer = (type: PaintLayerType, depthFar?: number, color 
       return createMatcapLayer();
     case "rainbow":
       return createRainbowLayer();
+    case "glass":
+      return createGlassLayer();
+    case "displace":
+      return createDisplaceLayer();
     case "color":
     default:
       return createColorLayer(color);
   }
 };
 
-export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow">;
+/** The types a row can be: every type but Lighting (Displace paints nothing, but sits in the same list, as in Spline). */
+export type PaintLayerType = Exclude<MaterialLayerType, "lighting">;
 
 /**
  * A layer of `type` in place of `layer`: the same ID, eye, opacity and blend mode, and its Mode

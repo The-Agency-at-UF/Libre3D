@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { planStack } from "../scene/layerStack";
 import type { ColorLayer, DepthLayer, FresnelLayer, GradientLayer, LightingLayer, MaterialLayer } from "../scene/types";
+import { createDisplaceLayer, createGlassLayer } from "../scene/entityFactories";
 import { applyLayerNodes, syncLayerNodes } from "./layerNodes";
 
 const lighting = (overrides: Partial<LightingLayer> = {}): LightingLayer => ({
@@ -129,5 +130,27 @@ describe("syncLayerNodes", () => {
 
     expect(applyLayerNodes(material, built)).not.toBeNull();
     expect(built.colorNode).toBeNull();
+  });
+
+  it("moves the surface for Displace, and builds again for another kind of noise", () => {
+    const material = new MeshStandardNodeMaterial();
+    const displace = createDisplaceLayer();
+    expect(syncLayerNodes(material, stack(lighting(), displace, color("#ff0000")))).toBe(true);
+    // A value is a number in the shader; another noise is another shader.
+    expect(syncLayerNodes(material, stack(lighting(), { ...displace, intensity: 20, scale: 3 }, color("#ff0000")))).toBe(false);
+    expect(syncLayerNodes(material, stack(lighting(), { ...displace, displaceType: "voronoi" }, color("#ff0000")))).toBe(true);
+    const built = Object.create(material);
+    applyLayerNodes(material, built);
+    expect(built.positionNode).not.toBeNull();
+    expect(material.positionNode).toBeNull();
+  });
+
+  it("adds Glass under Lighting after the shading, so what's behind isn't shaded again", () => {
+    const material = new MeshStandardNodeMaterial();
+    syncLayerNodes(material, stack(lighting(), createGlassLayer(), color("#ff0000")));
+    const built = Object.create(material);
+    // Lighting at full strength with nothing over it would be three's own ending; the glass's light is added to it.
+    expect(applyLayerNodes(material, built)).not.toBeNull();
+    expect(built.colorNode).not.toBeNull();
   });
 });

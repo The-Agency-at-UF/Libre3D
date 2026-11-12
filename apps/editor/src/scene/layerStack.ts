@@ -21,7 +21,9 @@ import type {
   BlendMode,
   ColorLayer,
   DepthLayer,
+  DisplaceLayer,
   FresnelLayer,
+  GlassLayer,
   GradientLayer,
   ImageLayer,
   LightingLayer,
@@ -44,17 +46,23 @@ export interface Paint {
 }
 
 /** A layer that makes colour: it paints, or in Mask mode masks the layer under it. */
-export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | NormalLayer | MatcapLayer | RainbowLayer;
+export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | NormalLayer | MatcapLayer | RainbowLayer | GlassLayer;
 /** A layer that can be put in Mask mode. */
 export type MaskableLayer = DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | MatcapLayer | RainbowLayer;
 
 export const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overlay"];
 
 /** Layer types that make colour. An object keeps one that paints (so Color can go once another is there). */
-export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "image", "depth", "gradient", "noise", "fresnel", "normal", "matcap", "rainbow"];
+export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "image", "depth", "gradient", "noise", "fresnel", "normal", "matcap", "rainbow", "glass"];
 
-/** Layer types a layer's type dropdown can switch it to. "+" adds a Color layer. */
-export const SWITCHABLE_LAYER_TYPES: readonly MaterialLayerType[] = COLOR_LAYER_TYPES;
+/**
+ * Layer types a layer's type dropdown can switch it to: the colour types and Displace (which paints
+ * nothing; only primitives offer it: DISPLACEABLE_ENTITY_TYPES). "+" adds a Color layer.
+ */
+export const SWITCHABLE_LAYER_TYPES: readonly MaterialLayerType[] = [...COLOR_LAYER_TYPES, "displace"];
+
+/** The objects Displace can go on: primitives, which are built finer for it (Emily, 2026-11-12). */
+export const DISPLACEABLE_ENTITY_TYPES: readonly string[] = ["cube", "sphere", "torus", "plane"];
 
 /** Layer types with a Mask mode (Spline's list, of the types Libre3D has). */
 export const MASKABLE_LAYER_TYPES: readonly MaterialLayerType[] = ["image", "matcap", "depth", "gradient", "noise", "fresnel", "rainbow"];
@@ -106,9 +114,11 @@ export const removeBlockedReason = (layers: MaterialLayer[], layer: MaterialLaye
 };
 
 /** Whether `layer` can become a layer of type `to`: colour layers switch among the colour types. */
-export const canSwitchLayerType = (_layers: MaterialLayer[], layer: MaterialLayer, to: MaterialLayerType): boolean => {
+export const canSwitchLayerType = (layers: MaterialLayer[], layer: MaterialLayer, to: MaterialLayerType): boolean => {
   if (layer.type === to) return true;
-  return SWITCHABLE_LAYER_TYPES.includes(layer.type) && SWITCHABLE_LAYER_TYPES.includes(to);
+  if (!SWITCHABLE_LAYER_TYPES.includes(layer.type) || !SWITCHABLE_LAYER_TYPES.includes(to)) return false;
+  // A layer that paints becomes Displace (which doesn't) only while another one paints.
+  return isColorLayerType(to) || !paints(layer) || layers.some((each) => each.id !== layer.id && paints(each));
 };
 
 /** Where a dragged layer may go: anywhere in the stack (Lighting moves too). Returns the index range (inclusive). */
@@ -300,6 +310,7 @@ export const sourceIsOpaque = (layer: PaintLayer): boolean => {
     case "normal":
     case "matcap":
     case "rainbow":
+    case "glass":
       return true;
     case "image":
       // A picture's own see-through parts make the object see-through only with the surface's
@@ -331,6 +342,10 @@ export interface StackPlan {
   opaque: boolean;
   // How much shading shows (Lighting's opacity, 0 with its eye off; 1 without Lighting).
   strength: number;
+  // The Displace layers whose eyes are on, top first: their pushes add up.
+  displace: DisplaceLayer[];
+  // Whether a Glass layer paints: the object then draws after the solid ones, so it sees them.
+  glass: boolean;
 }
 
 /**
@@ -372,11 +387,14 @@ export const planStack = (layers: MaterialLayer[] | undefined): StackPlan => {
   const opaque = folded
     ? folded.alpha >= 1
     : under.some((step) => !step.mask && step.layer.opacity >= 1 && sourceIsOpaque(step.layer));
-  return { under, over, folded, opaque, strength };
+  const displace = all.filter((layer): layer is DisplaceLayer => layer.type === "displace" && layer.enabled);
+  const glass = [...under, ...over].some((step) => step.layer.type === "glass");
+  return { under, over, folded, opaque, strength, displace, glass };
 };
 
 /** Whether the plan can be drawn as the material's own colour: no nodes at all. */
-export const isPlainPlan = (plan: StackPlan): boolean => plan.folded !== null && plan.over.length === 0 && plan.strength >= 1;
+export const isPlainPlan = (plan: StackPlan): boolean =>
+  plan.folded !== null && plan.over.length === 0 && plan.strength >= 1 && plan.displace.length === 0;
 
 /**
  * What the steps add up to at one point, over `base` (NOTHING under Lighting; the shaded colour

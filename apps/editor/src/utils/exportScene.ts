@@ -74,7 +74,7 @@ const trimPathsForExport = (scene: THREE.Scene): (() => void) => {
 //
 // The plain values go by name. The references go by type: a file's extras are JSON, so they can't
 // hold a Three object, and a node of the user's own with an extra called `target` keeps it.
-const EDITOR_USER_DATA_KEYS = new Set(["editorOnly", "entityId", "entityType", "parentEntityId", "locked", "assetId", "loadError"]);
+const EDITOR_USER_DATA_KEYS = new Set(["editorOnly", "entityId", "entityType", "parentEntityId", "locked", "assetId", "loadError", "displaceDetail"]);
 
 const isEditorUserData = (key: string, value: unknown): boolean =>
   EDITOR_USER_DATA_KEYS.has(key) || value instanceof THREE.Object3D;

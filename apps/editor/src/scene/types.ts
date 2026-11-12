@@ -13,7 +13,7 @@ import type { ShapeData } from "../paths/shapeGeometry";
 
 export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
 
-export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow";
+export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow" | "glass" | "displace";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
 
 // How a layer goes over the layers under it. The stack is drawn bottom to top, and
@@ -226,7 +226,64 @@ export interface RainbowLayer extends LayerBase {
   offset: [number, number, number];
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | NormalLayer | MatcapLayer | RainbowLayer;
+// See-through glass, as Spline's Glass layer (its drawer is "Transmission"): it paints what's behind
+// the object, bent by the surface as light through glass of index `ior` (Spline's Refraction) and
+// `thickness` is (in hundredths of the object's own units, as Spline's sizes are a hundred times
+// Libre3D's), and blurred by `blur` (0-10; Spline's roughness × 10). `absorption` tints what comes
+// through the deeper it goes, reaching that colour at `absorbDistance` (same units; 0 = no tint). It's
+// a colour layer like the others: under Lighting the glass still gets highlights, but what's behind
+// isn't shaded again. Its maths: viewport/layerSources.ts.
+export interface GlassLayer extends LayerBase {
+  type: "glass";
+  blur: number;
+  thickness: number;
+  ior: number;
+  absorption: string;
+  absorbDistance: number;
+}
+
+// What moves a Displace layer's surface: one of the Noise layer's noises, or a picture's lightness.
+export type DisplaceType = NoiseType | "image";
+// How fine a displaced primitive is built (viewport/entityGeometry.ts).
+export type DisplaceQuality = "low" | "medium" | "high";
+
+// Pushes the surface in and out along its normals, as Spline's Displace layer: by a 3D noise in the
+// object's own space (`scale` how many bumps, `movement` how fast they drift, `offset` where) or by
+// a picture's lightness over the mesh's UVs, times `intensity` (in hundredths of the object's own
+// units, as Spline's). It paints nothing, so it has no blend mode or mask and its opacity is unused;
+// its row's number is the intensity. Only on primitives, which are built finer while they have one
+// (`quality`). The noise fields are the Noise layer's.
+export interface DisplaceLayer extends LayerBase {
+  type: "displace";
+  displaceType: DisplaceType;
+  scale: number;
+  movement: number;
+  offset: [number, number, number];
+  intensity: number;
+  voronoiStyle: VoronoiStyle;
+  smoothness: number;
+  seed: number;
+  lowCut: number;
+  highCut: number;
+  quality: DisplaceQuality;
+  // The picture, for `displaceType: "image"` ("" or missing while none is picked: no displacement).
+  textureAssetId?: string;
+  name?: string;
+}
+
+export type MaterialLayer =
+  | ColorLayer
+  | LightingLayer
+  | ImageLayer
+  | DepthLayer
+  | GradientLayer
+  | NoiseLayer
+  | FresnelLayer
+  | NormalLayer
+  | MatcapLayer
+  | RainbowLayer
+  | GlassLayer
+  | DisplaceLayer;
 
 /** A reusable material: the scene document's `materials` section, by ID (task D, PR 6). */
 export interface MaterialAsset {
