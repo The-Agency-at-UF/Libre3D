@@ -4,10 +4,26 @@
  * they're made of.
  */
 
-import { useEffect, useState } from "react";
-import { useEditorStore, type ColorLayer, type DepthLayer, type FresnelLayer, type GradientLayer, type ImageLayer, type NoiseLayer, type NoiseType, type VoronoiStyle, type LightingLayer, type LightingModel } from "../../store/useEditorStore";
+import { useEffect, useRef, useState } from "react";
+import {
+  useEditorStore,
+  type ColorLayer,
+  type DepthLayer,
+  type Entity,
+  type FresnelLayer,
+  type GradientLayer,
+  type ImageLayer,
+  type LightingLayer,
+  type LightingMapSlot,
+  type LightingModel,
+  type NoiseLayer,
+  type NoiseType,
+  type TextureRef,
+  type VoronoiStyle,
+} from "../../store/useEditorStore";
 import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../../scene/layers";
 import { loadTextureForScene } from "../../utils/assetTransfers";
+import { importMapFile } from "../../utils/importImage";
 import { editDepth } from "../../viewport/hooks/useViewportDepthGizmo";
 import { ColorField } from "../ui/ColorField";
 import { ColorPicker, type ColorChange } from "../ui/ColorPicker";
@@ -201,57 +217,71 @@ export function ColorSettings({ row }: { row: LayerRowData }) {
   );
 }
 
+// A Lighting layer, as Spline's drawer has it: the type, then what that type has (Phong's
+// specular; Physical's roughness, metalness, reflectivity, clearcoat, sheen, iridescence and IOR),
+// the emissive glow, the maps (pictures for roughness, metalness, normals, AO, emissive light and
+// bumps), and the surface (alpha mode, cutoff, double sided).
 export function LightingSettings({ row }: { row: LayerRowData }) {
   const update = useRowUpdate(row);
   const layers = row.pairs.map(({ layer }) => layer as LightingLayer);
   const first = layers[0];
   const mixed = (read: (layer: LightingLayer) => unknown) => layers.some((layer) => read(layer) !== read(first));
-  const modelMixed = mixed((layer) => layer.model);
+  const model = mixed((layer) => layer.model) ? null : first.model;
+  const lit = model !== null && model !== "none";
+  const physical = model === "physical";
   const alphaMode: AlphaMode = first.alphaMode ?? "OPAQUE";
   const alphaModeMixed = mixed((layer) => layer.alphaMode ?? "OPAQUE");
 
   return (
     <>
       <Select
-        label="Model"
-        options={modelMixed ? [{ label: "Mixed", value: "" }, ...LIGHTING_MODEL_OPTIONS] : LIGHTING_MODEL_OPTIONS}
-        value={modelMixed ? "" : first.model}
+        label="Type"
+        options={model === null ? [{ label: "Mixed", value: "" }, ...LIGHTING_MODEL_OPTIONS] : LIGHTING_MODEL_OPTIONS}
+        value={model ?? ""}
         onChange={(val) => {
           if (val) update({ model: val as LightingModel });
         }}
       />
-
-      {!modelMixed && first.model !== "none" && (
+      {physical && (
         <>
-          {first.model === "physical" && (
-            <>
-              <Slider label="Roughness" min={0} max={1} step={0.01} value={first.roughness ?? DEFAULT_ROUGHNESS} onChange={(roughness) => update({ roughness })} />
-              <Slider label="Metalness" min={0} max={1} step={0.01} value={first.metalness ?? DEFAULT_METALNESS} onChange={(metalness) => update({ metalness })} />
-              <Slider label="Clearcoat" min={0} max={1} step={0.01} value={first.clearcoat ?? 0} onChange={(clearcoat) => update({ clearcoat })} />
-              {(first.clearcoat ?? 0) > 0 && (
-                <Slider
-                  label="Coat Rough."
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={first.clearcoatRoughness ?? 0}
-                  onChange={(clearcoatRoughness) => update({ clearcoatRoughness })}
-                />
-              )}
-            </>
-          )}
-          {first.model === "phong" && (
-            <Slider label="Shininess" min={0} max={100} step={1} value={first.shininess ?? 30} onChange={(shininess) => update({ shininess })} />
-          )}
+          <MapSelect row={row} slot="roughness" label="Rough Map" />
+          <Slider label="Roughness" min={0} max={1} step={0.01} value={first.roughness ?? DEFAULT_ROUGHNESS} onChange={(roughness) => update({ roughness })} />
+          <Slider label="Metalness" min={0} max={1} step={0.01} value={first.metalness ?? DEFAULT_METALNESS} onChange={(metalness) => update({ metalness })} />
+          <Slider label="Reflectivity" min={0} max={1} step={0.01} value={first.reflectivity ?? 1} onChange={(reflectivity) => update({ reflectivity })} />
+          <MapSelect row={row} slot="metalness" label="Metal Map" />
+        </>
+      )}
+      {model === "phong" && (
+        <>
+          <ColorField label="Specular" color={first.specular ?? "#111111"} mixed={mixed((layer) => layer.specular)} onChange={({ color }) => color && update({ specular: color })} />
+          <Slider label="Shininess" min={0} max={100} step={1} value={first.shininess ?? 30} onChange={(shininess) => update({ shininess })} />
+        </>
+      )}
+      {lit && (
+        <>
+          <MapSelect row={row} slot="normal" label="Normal Map" />
+          <MapSelect row={row} slot="ao" label="AO Map" />
           <ColorField label="Emissive" color={first.emissive ?? "#000000"} mixed={mixed((layer) => layer.emissive)} onChange={({ color }) => color && update({ emissive: color })} />
-          <Slider
-            label="Emissive Int."
-            min={0}
-            max={5}
-            step={0.1}
-            value={first.emissiveIntensity ?? 1}
-            onChange={(emissiveIntensity) => update({ emissiveIntensity })}
-          />
+          <MapSelect row={row} slot="emissive" label="Emissive Map" />
+          <Slider label="Emissive Int." min={0} max={5} step={0.1} value={first.emissiveIntensity ?? 1} onChange={(emissiveIntensity) => update({ emissiveIntensity })} />
+        </>
+      )}
+      {physical && (
+        <>
+          <Slider label="Clearcoat" min={0} max={1} step={0.01} value={first.clearcoat ?? 0} onChange={(clearcoat) => update({ clearcoat })} />
+          {(first.clearcoat ?? 0) > 0 && (
+            <Slider label="Coat Rough." min={0} max={1} step={0.01} value={first.clearcoatRoughness ?? 0} onChange={(clearcoatRoughness) => update({ clearcoatRoughness })} />
+          )}
+          <Slider label="Sheen" min={0} max={1} step={0.01} value={first.sheen ?? 0} onChange={(sheen) => update({ sheen })} />
+          <Slider label="Iridescence" min={0} max={1} step={0.01} value={first.iridescence ?? 0} onChange={(iridescence) => update({ iridescence })} />
+          <NumberRow label="IOR" value={first.ior ?? 1.5} min={1} max={2.333} step={0.01} onChange={(ior) => update({ ior })} />
+        </>
+      )}
+      {lit && (
+        <>
+          <div className="mat-drawer-divider" />
+          <MapSelect row={row} slot="bump" label="Bump Map" />
+          {first.maps?.bump && <NumberRow label="Bump Strength" value={first.bumpScale ?? 1} min={0} step={0.1} onChange={(bumpScale) => update({ bumpScale })} />}
         </>
       )}
 
@@ -275,6 +305,91 @@ export function LightingSettings({ row }: { row: LayerRowData }) {
         onChange={(doubleSided) => update({ doubleSided })}
       />
     </>
+  );
+}
+
+// The pictures objects in the scene use (Image layers and Lighting maps), each once, named for the
+// map dropdowns: by its own name (an upload's file name), else the object it's on.
+const scenePictures = (entities: Entity[]): Array<TextureRef & { name: string }> => {
+  const pictures = new Map<string, TextureRef & { name: string }>();
+  for (const entity of entities) {
+    for (const layer of entity.materialLayers ?? []) {
+      if (layer.type === "image" && !pictures.has(layer.textureAssetId)) {
+        pictures.set(layer.textureAssetId, { textureAssetId: layer.textureAssetId, wrapS: layer.wrapS, wrapT: layer.wrapT, name: entity.name });
+      }
+      if (layer.type !== "lighting") continue;
+      for (const [slot, ref] of Object.entries(layer.maps ?? {})) {
+        if (ref && !pictures.has(ref.textureAssetId)) pictures.set(ref.textureAssetId, { ...ref, name: ref.name ?? `${entity.name} (${slot})` });
+      }
+    }
+  }
+  return [...pictures.values()];
+};
+
+const UPLOAD = "upload";
+
+/**
+ * One of a Lighting layer's maps: None, a picture already in the scene, or Upload (a PNG or JPEG
+ * from the computer, kept with the scene). Every selected object gets the same picture.
+ */
+function MapSelect({ row, slot, label }: { row: LayerRowData; slot: LightingMapSlot; label: string }) {
+  const updateMultipleEntityMaterialLayers = useEditorStore((state) => state.updateMultipleEntityMaterialLayers);
+  const entities = useEditorStore((state) => state.entities);
+  const file = useRef<HTMLInputElement>(null);
+  const current = (row.pairs[0].layer as LightingLayer).maps?.[slot];
+  const pictures = scenePictures(entities);
+
+  const setMap = (ref: TextureRef | null) =>
+    updateMultipleEntityMaterialLayers(
+      Object.fromEntries(
+        row.pairs.map(({ entity, layer }) => {
+          const maps = { ...(layer as LightingLayer).maps };
+          if (ref) maps[slot] = ref;
+          else delete maps[slot];
+          return [entity.id, { layerId: layer.id, updates: { maps } }];
+        }),
+      ),
+    );
+
+  return (
+    <div className="prop">
+      <span className="prop-label">{label}</span>
+      <div className="select-wrap" style={{ flex: 1, width: "100%" }}>
+        <select
+          aria-label={label}
+          style={{ width: "100%" }}
+          value={current?.textureAssetId ?? ""}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === UPLOAD) {
+              file.current?.click();
+              return;
+            }
+            const picked = pictures.find((picture) => picture.textureAssetId === value);
+            setMap(picked ? { textureAssetId: picked.textureAssetId, name: picked.name, wrapS: picked.wrapS, wrapT: picked.wrapT, ...(picked.flipY ? { flipY: true } : null) } : null);
+          }}
+        >
+          <option value="">None</option>
+          {pictures.map((picture) => (
+            <option key={picture.textureAssetId} value={picture.textureAssetId}>
+              {picture.name}
+            </option>
+          ))}
+          <option value={UPLOAD}>Upload…</option>
+        </select>
+      </div>
+      <input
+        ref={file}
+        type="file"
+        accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+        hidden
+        onChange={(event) => {
+          const picked = event.target.files?.[0];
+          event.target.value = "";
+          if (picked) void importMapFile(picked).then((ref) => ref && setMap(ref));
+        }}
+      />
+    </div>
   );
 }
 
