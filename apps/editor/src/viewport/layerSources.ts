@@ -1,6 +1,6 @@
 /**
- * PURPOSE: What each colour layer paints at a pixel, as TSL: Color, Depth, Gradient, Noise, Fresnel.
- * viewport/layerNodes.ts blends them into a stack.
+ * PURPOSE: What each colour layer paints at a pixel, as TSL: Color, Image, Depth, Gradient, Noise,
+ * Fresnel. viewport/layerNodes.ts blends them into a stack.
  *
  * INPUT: A layer (scene/types.ts). OUTPUT: A LayerSource: its uniforms, a way to bring them up to
  * date with the layer, and the node for its colour, as sRGB (as picked) plus an alpha.
@@ -16,6 +16,7 @@
 import * as THREE from "three";
 import {
   abs,
+  asin,
   atan,
   cameraPosition,
   clamp,
@@ -31,6 +32,7 @@ import {
   mx_fractal_noise_float,
   mx_noise_float,
   mx_worley_noise_vec2,
+  normalLocal,
   normalView,
   positionView,
   positionViewDirection,
@@ -38,7 +40,9 @@ import {
   pow,
   select,
   smoothstep,
+  sRGBTransferOETF,
   step,
+  texture,
   time,
   uniform,
   uv,
@@ -47,7 +51,7 @@ import {
   vec4,
 } from "three/tsl";
 import { hexToRgb, sortedStops, type PaintLayer } from "../scene/layerStack";
-import type { DepthLayer, FresnelLayer, GradientLayer, NoiseLayer, PaintColor, RampStop } from "../scene/types";
+import type { DepthLayer, FresnelLayer, GradientLayer, ImageLayer, NoiseLayer, PaintColor, RampStop, TextureRef } from "../scene/types";
 
 // TSL's node types are too loose to name usefully here; every node is this.
 type Node = ReturnType<typeof float>;
@@ -70,8 +74,12 @@ export interface SourceContext {
   objectPosition: Node;
 }
 
+/** A picture to draw, as a texture made how `options` say; null while it's loading (viewport/entityMaterials.ts). */
+export type PictureSource = (ref: TextureRef, options: { nearest: boolean }) => THREE.Texture | null;
+
 export interface LayerSource {
-  update(layer: PaintLayer): void;
+  /** Brings the uniforms up to date; true when a texture changed (the shader's bindings must be remade). */
+  update(layer: PaintLayer, pictures: PictureSource): boolean | void;
   node(context: SourceContext): SourceColor;
 }
 
@@ -377,6 +385,100 @@ const noiseSource = (first: NoiseLayer): LayerSource => {
   };
 };
 
+// ─── Image ───────────────────────────────────────────────────────────────────
+
+// What an Image layer with no picture yet (or one still loading) samples: nothing, see-through.
+const NO_PICTURE = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+NO_PICTURE.needsUpdate = true;
+
+// Where a point falls on the picture, before scale, offset and rotation: the mesh's UVs, or the
+// object-space position projected (a unit object covers the picture once). Planar looks along
+// `axis`; spherical goes around Y; cylindrical goes around `axis`.
+const planarUv = (p: Node, axis: "x" | "y" | "z"): Node =>
+  n(axis === "x" ? vec2(p.z.negate(), p.y) : axis === "y" ? vec2(p.x, p.z.negate()) : vec2(p.x, p.y)).add(0.5);
+
+const around = (p: Node, axis: "x" | "y" | "z"): { a: Node; b: Node; along: Node } =>
+  axis === "x" ? { a: n(p.y), b: n(p.z), along: n(p.x) } : axis === "z" ? { a: n(p.x), b: n(p.y), along: n(p.z) } : { a: n(p.x), b: n(p.z), along: n(p.y) };
+
+const projectedUv = (layer: ImageLayer, p: Node): Node => {
+  switch (layer.projection) {
+    case "planar":
+      return planarUv(p, layer.axis);
+    case "spherical": {
+      const direction = n(p.normalize());
+      return n(vec2(n(atan(p.x, p.z)).div(2 * Math.PI).add(0.5), n(asin(clamp(direction.y, -1, 1))).div(Math.PI).add(0.5)));
+    }
+    case "cylindrical": {
+      const { a, b, along } = around(p, layer.axis);
+      return n(vec2(n(atan(a, b)).div(2 * Math.PI).add(0.5), along.add(0.5)));
+    }
+    case "uv":
+    default:
+      return n(uv());
+  }
+};
+
+const imageSource = (first: ImageLayer): LayerSource => {
+  // One texture node per sample (triplanar takes three); all show the same picture.
+  const samplers: Array<ReturnType<typeof texture>> = [];
+  let picture: THREE.Texture = NO_PICTURE;
+  const scale: Vec2Uniform = uniform(new THREE.Vector2(1, 1));
+  const offset: Vec2Uniform = uniform(new THREE.Vector2());
+  const rotation = uniform(0);
+  const crop = uniform(0);
+  const aspect = uniform(1); // the picture's width / height
+  const sample = (at: Node): Node => {
+    const node = texture(picture, at as never);
+    samplers.push(node);
+    return n(node);
+  };
+  // Rotation and repeats about the picture's middle, then the offset; Crop keeps its shape.
+  const place = (at: Node): Node => {
+    const centred = n(at.sub(0.5));
+    const fit = n(mix(vec2(1, 1), vec2(min(1, n(aspect).reciprocal()), min(1, n(aspect))), n(crop)));
+    const cosine = n(n(rotation).cos());
+    const sine = n(n(rotation).sin());
+    const turned = n(vec2(centred.x.mul(cosine).sub(centred.y.mul(sine)), centred.x.mul(sine).add(centred.y.mul(cosine))));
+    return n(turned.mul(fit).mul(n(scale)).add(0.5).add(n(offset)));
+  };
+  return {
+    update(layer, pictures) {
+      if (layer.type !== "image") return false;
+      scale.value.set(...layer.scale);
+      offset.value.set(...layer.offset);
+      rotation.value = (layer.rotation * Math.PI) / 180;
+      crop.value = layer.crop ? 1 : 0;
+      const next = (layer.textureAssetId ? pictures(layer, { nearest: layer.sharpness === "pixelated" }) : null) ?? NO_PICTURE;
+      const image = next.image as { width?: number; height?: number } | undefined;
+      aspect.value = image?.width && image.height ? image.width / image.height : 1;
+      if (next === picture) return false;
+      picture = next;
+      for (const sampler of samplers) sampler.value = next;
+      return true;
+    },
+    node(context) {
+      let color: Node;
+      if (first.projection === "triplanar") {
+        // Planar from each side, weighted by how squarely the surface faces it.
+        const weights = n(pow(abs(n(normalLocal)), vec3(4, 4, 4)));
+        const total = n(max(weights.x.add(weights.y).add(weights.z), 1e-5));
+        const p = context.objectPosition;
+        color = n(
+          sample(place(planarUv(p, "x")))
+            .mul(weights.x)
+            .add(sample(place(planarUv(p, "y"))).mul(weights.y))
+            .add(sample(place(planarUv(p, "z"))).mul(weights.z))
+            .div(total),
+        );
+      } else {
+        color = sample(place(projectedUv(first, context.objectPosition)));
+      }
+      // The texture is decoded to linear values; the stack blends sRGB ones, as the colours are picked.
+      return { rgb: n(sRGBTransferOETF(n(color.rgb))), a: n(color.a) };
+    },
+  };
+};
+
 // ─── Fresnel ─────────────────────────────────────────────────────────────────
 
 const fresnelSource = (): LayerSource => {
@@ -405,7 +507,7 @@ const fresnelSource = (): LayerSource => {
 };
 
 /** A source for `layer`, with its uniforms set from it. Its shader is the one for layerSourceShape(layer). */
-export const createLayerSource = (layer: PaintLayer): LayerSource => {
+export const createLayerSource = (layer: PaintLayer, pictures: PictureSource): LayerSource => {
   const source =
     layer.type === "depth"
       ? depthSource(layer)
@@ -415,8 +517,10 @@ export const createLayerSource = (layer: PaintLayer): LayerSource => {
           ? noiseSource(layer)
           : layer.type === "fresnel"
             ? fresnelSource()
-            : colorSource();
-  source.update(layer);
+            : layer.type === "image"
+              ? imageSource(layer)
+              : colorSource();
+  source.update(layer, pictures);
   return source;
 };
 
@@ -431,6 +535,8 @@ export const layerSourceShape = (layer: PaintLayer): string => {
       return `noise:${layer.noiseType}${layer.noiseType === "voronoi" ? `:${layer.voronoiStyle}` : ""}`;
     case "fresnel":
       return "fresnel";
+    case "image":
+      return `image:${layer.projection}${layer.projection === "planar" || layer.projection === "cylindrical" ? `:${layer.axis}` : ""}`;
     case "color":
     default:
       return "color";

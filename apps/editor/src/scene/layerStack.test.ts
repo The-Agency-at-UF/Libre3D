@@ -130,9 +130,15 @@ const image = (id: string): ImageLayer => ({
   opacity: 1,
   blendMode: "normal",
   textureAssetId: "texture",
-  slot: "color",
   wrapS: 1000,
   wrapT: 1000,
+  projection: "uv",
+  axis: "y",
+  sharpness: "smooth",
+  crop: false,
+  scale: [1, 1],
+  offset: [0, 0],
+  rotation: 0,
 });
 
 const close = (actual: number[], expected: number[]) =>
@@ -281,11 +287,13 @@ describe("masks", () => {
     expect(maskTarget(layers, 1)).toBeNull(); // not a mask
   });
 
-  it("mask nothing over Lighting, another mask, an Image layer or nothing", () => {
-    const layers: MaterialLayer[] = [fresnel({ mask: true }), lighting(), gradient({ id: "g", mask: true }), noise({ mask: true }), image("map")];
+  it("mask nothing over Lighting, another mask or nothing; a picture they do", () => {
+    const layers: MaterialLayer[] = [fresnel({ mask: true }), lighting(), gradient({ id: "g", mask: true }), noise({ mask: true }), image("map"), image("last")];
     expect(maskTarget(layers, 0)).toBeNull();
     expect(maskTarget(layers, 2)).toBeNull();
-    expect(maskTarget(layers, 3)).toBeNull();
+    expect(maskTarget(layers, 3)).toBe(4);
+    expect(maskTarget([image("m"), lighting()].map((layer, i) => (i === 0 ? { ...layer, mask: true } : layer)), 0)).toBeNull();
+    expect(maskTarget([{ ...image("m"), mask: true }], 0)).toBeNull();
   });
 
   it("hide the masked layer where they're dark, and leave it where they're light", () => {
@@ -358,15 +366,17 @@ describe("planStack", () => {
 describe("stack rules", () => {
   const stack: MaterialLayer[] = [lighting(), color("c", "#ffffff"), image("map")];
 
-  it("never removes Lighting or an imported Image layer", () => {
+  it("never removes Lighting; a picture like any painting layer", () => {
     expect(canRemoveLayer(stack, stack[0])).toBe(false);
-    expect(canRemoveLayer(stack, stack[2])).toBe(false);
+    expect(canRemoveLayer(stack, stack[2])).toBe(true);
     expect(removeBlockedReason(stack, stack[0])).toBe("Lighting can't be removed");
   });
 
   it("removes a painting layer only while another one stays; a mask always", () => {
-    expect(canRemoveLayer(stack, stack[1])).toBe(false);
-    expect(removeBlockedReason(stack, stack[1])).toBe("Add another colour layer first");
+    const one: MaterialLayer[] = [lighting(), image("only")];
+    expect(canRemoveLayer(one, one[1])).toBe(false);
+    expect(removeBlockedReason(one, one[1])).toBe("Add another colour layer first");
+    expect(canRemoveLayer(stack, stack[1])).toBe(true); // the picture paints too
     const withNoise: MaterialLayer[] = [lighting(), noise(), color("c", "#ffffff")];
     expect(canRemoveLayer(withNoise, withNoise[2])).toBe(true);
     expect(canRemoveLayer(withNoise, withNoise[1])).toBe(true);
@@ -375,23 +385,23 @@ describe("stack rules", () => {
     expect(canRemoveLayer(withMask, withMask[1])).toBe(true);
   });
 
-  it("switches among the colour types, never Lighting or Image", () => {
+  it("switches among the colour types (Image too), never Lighting", () => {
     const layers: MaterialLayer[] = [lighting(), depth(), color("c", "#ffffff")];
-    for (const type of ["color", "depth", "gradient", "noise", "fresnel"] as const) {
+    for (const type of ["color", "image", "depth", "gradient", "noise", "fresnel"] as const) {
       expect(canSwitchLayerType(layers, layers[2], type)).toBe(true);
     }
     expect(canSwitchLayerType(stack, stack[0], "color")).toBe(false);
-    expect(canSwitchLayerType(stack, stack[2], "color")).toBe(false);
+    expect(canSwitchLayerType(stack, stack[2], "color")).toBe(true);
     expect(canSwitchLayerType(stack, stack[1], "lighting")).toBe(false);
   });
 
-  it("moves any layer above the Image layers, Lighting too", () => {
+  it("moves any layer anywhere, Lighting and pictures too", () => {
     const layers: MaterialLayer[] = [lighting(), color("a", "#ffffff"), depth(), image("map")];
     expect(ids(moveLayer(layers, "a", 2))).toEqual(["lighting", "depth", "a", "map"]);
     expect(ids(moveLayer(layers, "a", 0))).toEqual(["a", "lighting", "depth", "map"]);
-    expect(ids(moveLayer(layers, "a", 9))).toEqual(["lighting", "depth", "a", "map"]);
+    expect(ids(moveLayer(layers, "a", 9))).toEqual(["lighting", "depth", "map", "a"]);
     expect(ids(moveLayer(layers, "lighting", 2))).toEqual(["a", "depth", "lighting", "map"]);
-    expect(moveLayer(layers, "map", 1)).toBe(layers);
+    expect(ids(moveLayer(layers, "map", 1))).toEqual(["lighting", "map", "a", "depth"]);
   });
 
   it("adds new layers just under Lighting", () => {

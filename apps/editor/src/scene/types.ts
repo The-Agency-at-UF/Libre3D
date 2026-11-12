@@ -16,12 +16,6 @@ export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape
 export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
 
-// Which glTF texture channel an ImageLayer feeds. "metallicRoughness" is a
-// single packed map (green = roughness, blue = metalness) that Three assigns to
-// both material.roughnessMap and material.metalnessMap — one layer covers both,
-// never split into two.
-export type ImageSlot = "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
-
 // How a layer goes over the layers under it. The stack is drawn bottom to top, and
 // `materialLayers[0]` is the top, as the panel lists it. The formulas are the W3C compositing ones,
 // on sRGB values (scene/layerStack.ts).
@@ -109,20 +103,26 @@ export interface LightingLayer extends LayerBase {
   bumpScale?: number;
 }
 
-// A picture layer: an imported glTF material's colour map, or an image plane's picture. The pixel
-// data is never stored here (materialLayers is saved in the scene document) — it
-// lives in the OPFS texture asset store, referenced by textureAssetId. wrapS/wrapT
-// are the THREE wrap constants copied straight off the source texture.
-// It fills the material's colour map, so its opacity and blend mode aren't used yet (a full Image
-// layer is task D's PR 4b). Before PR 4 an imported model's other pictures (normal, roughness,
-// emissive, AO) were Image layers too: they're the Lighting layer's `maps` now, and older documents
-// are folded so on load (utils/sceneDocument.ts).
-export interface ImageLayer extends LayerBase {
+export type ImageProjection = "uv" | "planar" | "spherical" | "cylindrical" | "triplanar";
+
+// A picture painted on the object, as Spline's Texture layer: a colour layer like the others (its
+// alpha is the picture's). It's an image plane's picture, an imported model's colour map, or one
+// uploaded or picked in its drawer. The bytes live in the texture store under `textureAssetId`
+// ("" while none is picked: it paints nothing). Placed by `projection` (the mesh's UVs, or straight
+// along `axis` (planar), around the object (spherical, cylindrical), or from all three sides
+// (triplanar)), then `scale` (repeats), `offset` and `rotation` (degrees). `crop` keeps the
+// picture's shape instead of stretching it; `sharpness` "pixelated" draws its pixels sharp.
+// Before PR 4b an Image layer only filled the material's colour map (and had a `slot`); those are
+// converted when a document is read (utils/sceneDocument.ts).
+export interface ImageLayer extends LayerBase, TextureRef {
   type: "image";
-  textureAssetId: string;
-  slot: ImageSlot;
-  wrapS: number;
-  wrapT: number;
+  projection: ImageProjection;
+  axis: "x" | "y" | "z"; // for planar and cylindrical
+  sharpness: "smooth" | "pixelated";
+  crop: boolean;
+  scale: [number, number];
+  offset: [number, number];
+  rotation: number;
 }
 
 // Colours the object by distance, as Spline's Depth layer: each point's distance from the origin,

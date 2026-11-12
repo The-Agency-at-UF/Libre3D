@@ -36,7 +36,7 @@ const sceneWithAssets = async () => {
     entity("image-1", {
       type: "image",
       name: "Logo",
-      materialLayers: [{ id: "layer-1", type: "image", enabled: true, opacity: 1, blendMode: "normal", textureAssetId: picture.hash, slot: "color", wrapS: 1001, wrapT: 1001 }],
+      materialLayers: [{ id: "layer-1", type: "image", enabled: true, opacity: 1, blendMode: "normal", textureAssetId: picture.hash, wrapS: 1001, wrapT: 1001, projection: "uv", axis: "y", sharpness: "smooth", crop: false, scale: [1, 1], offset: [0, 0], rotation: 0 }],
     }),
   ];
   return { name: "My scene", document: sceneDocument(entities), assets: [model, picture] };

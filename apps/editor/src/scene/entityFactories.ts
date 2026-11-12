@@ -24,6 +24,7 @@ import type {
   EntityType,
   FresnelLayer,
   GradientLayer,
+  ImageLayer,
   LightingLayer,
   MaterialLayer,
   MaterialLayerType,
@@ -146,6 +147,26 @@ export const createNoiseLayer = (): NoiseLayer => ({
   highCut: 1,
 });
 
+/** A picture layer (`picture` names it; none picked paints nothing yet), placed by the mesh's UVs once. */
+export const createImageLayer = (picture: Partial<ImageLayer> = {}): ImageLayer => ({
+  id: createEntityId(),
+  type: "image",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  textureAssetId: "",
+  wrapS: 1000, // THREE.RepeatWrapping
+  wrapT: 1000,
+  projection: "uv",
+  axis: "y",
+  sharpness: "smooth",
+  crop: false,
+  scale: [1, 1],
+  offset: [0, 0],
+  rotation: 0,
+  ...picture,
+});
+
 export const createFresnelLayer = (): FresnelLayer => ({
   id: createEntityId(),
   type: "fresnel",
@@ -166,6 +187,8 @@ export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer => {
       return { ...layer, origin: cloneVector(layer.origin), direction: cloneVector(layer.direction), stops: layer.stops.map((stop) => ({ ...stop })) };
     case "gradient":
       return { ...layer, stops: layer.stops.map((stop) => ({ ...stop })), offset: [...layer.offset], morph: [...layer.morph] };
+    case "image":
+      return { ...layer, scale: [...layer.scale], offset: [...layer.offset] };
     case "noise":
       return {
         ...layer,
@@ -228,13 +251,15 @@ export const createPaintLayer = (type: PaintLayerType, depthFar?: number, color 
       return createNoiseLayer();
     case "fresnel":
       return createFresnelLayer();
+    case "image":
+      return createImageLayer();
     case "color":
     default:
       return createColorLayer(color);
   }
 };
 
-export type PaintLayerType = Extract<MaterialLayerType, "color" | "depth" | "gradient" | "noise" | "fresnel">;
+export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel">;
 
 /**
  * A layer of `type` in place of `layer`: the same ID, eye, opacity and blend mode, and its Mode

@@ -214,6 +214,41 @@ const foldImageMapsIntoLighting = (entity: unknown): unknown => {
   };
 };
 
+/**
+ * Before task D's PR 4b an Image layer only filled the material's colour map, which three multiplied
+ * with the colour of the Color layer above it (white for an image plane, glTF's base colour for an
+ * import). It's a colour layer of its own now, drawn over what's under it, at the mesh's UVs. So an
+ * old one gets its placing (UV, once), and the Color layer over it, which would now cover it, goes
+ * when it's white or becomes Multiply when it isn't, which is how they were combined. (Inside
+ * schema v5, as foldImageMapsIntoLighting; a picture layer that already has its placing is left as
+ * it is.)
+ */
+const convertColorMapLayers = (entity: unknown): unknown => {
+  if (!isPlainObject(entity) || !Array.isArray(entity.materialLayers)) return entity;
+  const layers = entity.materialLayers as unknown[];
+  const isOldPicture = (layer: unknown): layer is Record<string, unknown> =>
+    isPlainObject(layer) && layer.type === "image" && layer.projection === undefined;
+  if (!layers.some(isOldPicture)) return entity;
+
+  const converted: unknown[] = [];
+  for (const layer of layers) {
+    if (!isOldPicture(layer)) {
+      converted.push(layer);
+      continue;
+    }
+    const { slot: _slot, ...picture } = layer;
+    converted.push({ ...picture, projection: "uv", axis: "y", sharpness: "smooth", crop: false, scale: [1, 1], offset: [0, 0], rotation: 0 });
+  }
+  // The Color layers that tinted the picture: every Color layer (v4's colour) over the pictures.
+  const firstPicture = converted.findIndex((layer) => isPlainObject(layer) && layer.type === "image");
+  const result = converted.flatMap((layer, index) => {
+    if (index > firstPicture || !isPlainObject(layer) || layer.type !== "color") return [layer];
+    const white = typeof layer.color === "string" && layer.color.toLowerCase() === "#ffffff";
+    return white ? [] : [{ ...layer, blendMode: "multiply" }];
+  });
+  return { ...entity, materialLayers: result };
+};
+
 export const toSceneDocument = (content: SceneContent): SceneDocument => ({
   format: SCENE_DOCUMENT_FORMAT,
   schemaVersion: CURRENT_SCENE_SCHEMA_VERSION,
@@ -265,7 +300,7 @@ export const parseSceneDocument = (raw: unknown): ParsedSceneDocument => {
   return {
     ok: true,
     content: {
-      entities: scene.entities.map(foldImageMapsIntoLighting) as Entity[],
+      entities: scene.entities.map((entity) => convertColorMapLayers(foldImageMapsIntoLighting(entity))) as Entity[],
       sceneSettings: isPlainObject(scene.sceneSettings) ? scene.sceneSettings : undefined,
       postProcessing: isPlainObject(scene.postProcessing) ? scene.postProcessing : undefined,
       frame: isPlainObject(scene.frame) ? scene.frame : undefined,

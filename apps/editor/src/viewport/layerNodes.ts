@@ -28,7 +28,7 @@ import type { NodeMaterial } from "three/webgpu";
 import { diffuseColor, dot, float, materialColor, max, mix, output, positionLocal, positionWorld, sRGBTransferEOTF, sRGBTransferOETF, step, uniform, vec3, vec4 } from "three/tsl";
 import { isPlainPlan, type PlanStep, type StackPlan } from "../scene/layerStack";
 import type { BlendMode } from "../scene/types";
-import { createLayerSource, layerSourceShape, type LayerSource, type SourceContext } from "./layerSources";
+import { createLayerSource, layerSourceShape, type LayerSource, type PictureSource, type SourceContext } from "./layerSources";
 
 type Node = ReturnType<typeof float>;
 type FloatUniform = ReturnType<typeof uniform<number>>;
@@ -78,29 +78,39 @@ const shapeOf = (plan: StackPlan, space: THREE.Object3D | null): string | null =
   ].join("|");
 };
 
-const stepNodes = (step: PlanStep): StepNodes => ({
+const stepNodes = (step: PlanStep, pictures: PictureSource): StepNodes => ({
   layerId: step.layer.id,
-  source: createLayerSource(step.layer),
-  mask: step.mask ? { layerId: step.mask.id, source: createLayerSource(step.mask), opacity: uniform(1) } : null,
+  source: createLayerSource(step.layer, pictures),
+  mask: step.mask ? { layerId: step.mask.id, source: createLayerSource(step.mask, pictures), opacity: uniform(1) } : null,
   opacity: uniform(1),
   mode: step.layer.blendMode,
 });
 
-const updateStep = (nodes: StepNodes, step: PlanStep): void => {
-  nodes.source.update(step.layer);
+// True when a picture changed (an Image layer's): its shader's bindings must be remade.
+const updateStep = (nodes: StepNodes, step: PlanStep, pictures: PictureSource): boolean => {
+  let pictureChanged = nodes.source.update(step.layer, pictures) === true;
   nodes.opacity.value = Math.min(1, Math.max(0, step.layer.opacity));
   if (nodes.mask && step.mask) {
-    nodes.mask.source.update(step.mask);
+    pictureChanged = nodes.mask.source.update(step.mask, pictures) === true || pictureChanged;
     nodes.mask.opacity.value = Math.min(1, Math.max(0, step.mask.opacity));
   }
+  return pictureChanged;
 };
+
+const NO_PICTURES: PictureSource = () => null;
 
 /**
  * Brings `material`'s stack record up to date with `plan`. `space` is the object whose own space
- * Depth and Noise use when it isn't the mesh drawn (a path, for its end caps). Returns true when the
- * shader must be rebuilt (the caller sets `needsUpdate`).
+ * Depth and Noise use when it isn't the mesh drawn (a path, for its end caps); `pictures` gives
+ * Image layers their textures. Returns true when the shader must be rebuilt, or a picture changed
+ * (the caller sets `needsUpdate`).
  */
-export const syncLayerNodes = (material: Material, plan: StackPlan, space: THREE.Object3D | null = null): boolean => {
+export const syncLayerNodes = (
+  material: Material,
+  plan: StackPlan,
+  space: THREE.Object3D | null = null,
+  pictures: PictureSource = NO_PICTURES,
+): boolean => {
   const shape = shapeOf(plan, space);
   const existing = records.get(material);
   const keyed = material as unknown as Record<string, unknown>;
@@ -118,8 +128,8 @@ export const syncLayerNodes = (material: Material, plan: StackPlan, space: THREE
     const inverse = new THREE.Matrix4();
     record = {
       shape,
-      under: plan.folded ? null : plan.under.map(stepNodes),
-      over: plan.over.map(stepNodes),
+      under: plan.folded ? null : plan.under.map((step) => stepNodes(step, pictures)),
+      over: plan.over.map((step) => stepNodes(step, pictures)),
       strength: plan.strength < 1 ? uniform(1) : null,
       space: space ? { object: space, inverse: uniform(inverse).onRenderUpdate(() => inverse.copy(space.matrixWorld).invert()) } : null,
     };
@@ -127,10 +137,11 @@ export const syncLayerNodes = (material: Material, plan: StackPlan, space: THREE
     keyed[SHAPE_KEY] = shape;
   }
 
-  if (record.under) plan.under.forEach((step, index) => updateStep(record.under![index], step));
-  plan.over.forEach((step, index) => updateStep(record.over[index], step));
+  let pictureChanged = false;
+  if (record.under) plan.under.forEach((step, index) => (pictureChanged = updateStep(record.under![index], step, pictures) || pictureChanged));
+  plan.over.forEach((step, index) => (pictureChanged = updateStep(record.over[index], step, pictures) || pictureChanged));
   if (record.strength) record.strength.value = plan.strength;
-  return rebuilt;
+  return rebuilt || pictureChanged;
 };
 
 /** Forgets a material's record (it's being thrown away). */

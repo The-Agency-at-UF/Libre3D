@@ -10,8 +10,7 @@
  * its opacity, by the W3C compositing formulas (Compositing and Blending Level 1), on sRGB values as
  * the colours are picked. Lighting shades what's under it; what's over it is drawn on the shaded
  * result as it is (as in Spline). A layer in Mask mode paints nothing: its lightness shows the one
- * layer right under it (Spline's Layer Masking). Image layers only fill the colour map for now (an
- * image plane's picture, an imported model's), so they take no part here.
+ * layer right under it (Spline's Layer Masking).
  *
  * The viewport draws the plan in TSL (viewport/layerNodes.ts, viewport/layerSources.ts); the CPU
  * twins here (the ramp, Depth's and Gradient's positions, Fresnel's amount) are what Vitest checks
@@ -24,6 +23,7 @@ import type {
   DepthLayer,
   FresnelLayer,
   GradientLayer,
+  ImageLayer,
   LightingLayer,
   MaterialLayer,
   MaterialLayerType,
@@ -41,20 +41,20 @@ export interface Paint {
 }
 
 /** A layer that makes colour: it paints, or in Mask mode masks the layer under it. */
-export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer;
+export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer;
 /** A layer that can be put in Mask mode. */
-export type MaskableLayer = DepthLayer | GradientLayer | NoiseLayer | FresnelLayer;
+export type MaskableLayer = DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer;
 
 export const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overlay"];
 
 /** Layer types that make colour. An object keeps one that paints (so Color can go once another is there). */
-export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "depth", "gradient", "noise", "fresnel"];
+export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "image", "depth", "gradient", "noise", "fresnel"];
 
 /** Layer types a layer's type dropdown can switch it to. "+" adds a Color layer. */
 export const SWITCHABLE_LAYER_TYPES: readonly MaterialLayerType[] = COLOR_LAYER_TYPES;
 
 /** Layer types with a Mask mode (Spline's list, of the types Libre3D has). */
-export const MASKABLE_LAYER_TYPES: readonly MaterialLayerType[] = ["depth", "gradient", "noise", "fresnel"];
+export const MASKABLE_LAYER_TYPES: readonly MaterialLayerType[] = ["image", "depth", "gradient", "noise", "fresnel"];
 
 /** A ramp holds 2 to this many stops. */
 export const MAX_RAMP_STOPS = 10;
@@ -75,8 +75,8 @@ const NOTHING: Paint = { rgb: [0, 0, 0], alpha: 0 };
 
 /**
  * The index of the layer a mask at `index` masks: the one right under it, when that one paints.
- * Null when it masks nothing (it isn't a mask, or under it is Lighting, an Image layer, another
- * mask, or nothing). Eyes don't count here: the row shows the pairing either way.
+ * Null when it masks nothing (it isn't a mask, or under it is Lighting, another mask, or nothing).
+ * Eyes don't count here: the row shows the pairing either way.
  */
 export const maskTarget = (layers: MaterialLayer[], index: number): number | null => {
   const layer = layers[index];
@@ -86,11 +86,11 @@ export const maskTarget = (layers: MaterialLayer[], index: number): number | nul
 };
 
 /**
- * Whether `layer` can be removed from `layers`: never Lighting or an Image layer; a layer that
- * paints only while another one that paints stays. A mask can always go.
+ * Whether `layer` can be removed from `layers`: never Lighting; a layer that paints only while
+ * another one that paints stays. A mask can always go.
  */
 export const canRemoveLayer = (layers: MaterialLayer[], layer: MaterialLayer): boolean => {
-  if (layer.type === "lighting" || layer.type === "image") return false;
+  if (layer.type === "lighting") return false;
   if (!paints(layer)) return true;
   return layers.some((each) => each.id !== layer.id && paints(each));
 };
@@ -99,7 +99,6 @@ export const canRemoveLayer = (layers: MaterialLayer[], layer: MaterialLayer): b
 export const removeBlockedReason = (layers: MaterialLayer[], layer: MaterialLayer): string | null => {
   if (canRemoveLayer(layers, layer)) return null;
   if (layer.type === "lighting") return "Lighting can't be removed";
-  if (layer.type === "image") return "Comes with the imported model";
   return "Add another colour layer first";
 };
 
@@ -109,12 +108,8 @@ export const canSwitchLayerType = (_layers: MaterialLayer[], layer: MaterialLaye
   return SWITCHABLE_LAYER_TYPES.includes(layer.type) && SWITCHABLE_LAYER_TYPES.includes(to);
 };
 
-/** Where a dragged layer may go: anywhere above the Image layers (Lighting moves too). Returns the index range (inclusive). */
-export const movableRange = (layers: MaterialLayer[]): [number, number] => {
-  let last = layers.length - 1;
-  while (last >= 0 && layers[last].type === "image") last -= 1;
-  return [0, last];
-};
+/** Where a dragged layer may go: anywhere in the stack (Lighting moves too). Returns the index range (inclusive). */
+export const movableRange = (layers: MaterialLayer[]): [number, number] => [0, layers.length - 1];
 
 /** Moves the layer `layerId` to `toIndex`, kept inside movableRange. The same array when nothing moves. */
 export const moveLayer = (layers: MaterialLayer[], layerId: string, toIndex: number): MaterialLayer[] => {
@@ -298,6 +293,10 @@ export const sourceIsOpaque = (layer: PaintLayer): boolean => {
       return layer.colors.every((color) => (color.alpha ?? 1) >= 1);
     case "fresnel":
       return false;
+    case "image":
+      // A picture's own see-through parts make the object see-through only with the surface's
+      // alpha mode Blend or Mask, as a glTF colour map's do; they still blend over the layers under it.
+      return layer.textureAssetId !== "";
   }
 };
 

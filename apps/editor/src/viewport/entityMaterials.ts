@@ -38,6 +38,7 @@ import { lightingLayerOf, surfaceOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, type 
 import { planStack, type StackPlan } from "../scene/layerStack";
 import { buildTexture } from "../utils/materialLayers";
 import { syncLayerNodes } from "./layerNodes";
+import type { PictureSource } from "./layerSources";
 import { PathMesh } from "../paths/PathMesh";
 import { toNodeMaterial } from "./nodeMaterials";
 import type { SceneSource } from "./sceneSource";
@@ -109,24 +110,22 @@ const MAP_PROPS: Record<LightingMapSlot, { prop: string; srgb: boolean }> = {
 /** Every material property a picture can fill here. */
 const TEXTURE_PROPS = ["map", ...Object.values(MAP_PROPS).map(({ prop }) => prop)];
 
-/** A picture a material property should have. */
+/** A picture a material property (or an Image layer) should have. `nearest`: drawn with sharp pixels. */
 interface TextureBinding {
   ref: TextureRef;
   srgb: boolean;
+  nearest?: boolean;
 }
 
 // What a stored picture is turned into: the same bytes made two ways (a colour map and a normal
 // map, say) are two textures.
 const textureKey = (binding: TextureBinding): string =>
-  `${binding.ref.textureAssetId}|${binding.ref.wrapS}|${binding.ref.wrapT}|${binding.ref.flipY ? 1 : 0}|${binding.srgb ? 1 : 0}`;
+  `${binding.ref.textureAssetId}|${binding.ref.wrapS}|${binding.ref.wrapT}|${binding.ref.flipY ? 1 : 0}|${binding.srgb ? 1 : 0}|${binding.nearest ? 1 : 0}`;
 
-/** The pictures `layers` put on a material, by property: an Image layer's colour map, and the Lighting layer's maps. */
+/** The pictures the Lighting layer's maps put on a material, by property. (Image layers are drawn by their nodes: layerSources.ts.) */
 const textureBindings = (layers: MaterialLayer[] | undefined): Map<string, TextureBinding> => {
   const bindings = new Map<string, TextureBinding>();
   for (const layer of layers ?? []) {
-    if (layer.type === "image" && layer.enabled && layer.slot === "color" && !bindings.has("map")) {
-      bindings.set("map", { ref: layer, srgb: true });
-    }
     if (layer.type === "lighting" && layer.maps) {
       for (const [slot, ref] of Object.entries(layer.maps) as Array<[LightingMapSlot, TextureRef | undefined]>) {
         if (ref) bindings.set(MAP_PROPS[slot].prop, { ref, srgb: MAP_PROPS[slot].srgb });
@@ -212,7 +211,7 @@ export class EntityMaterials {
     material.transparent = alphaState.transparent;
     material.alphaTest = alphaState.alphaTest;
     material.depthWrite = alphaState.depthWrite;
-    syncLayerNodes(material, plan);
+    syncLayerNodes(material, plan, null, this.pictures);
 
     this.applyLightingProperties(material, lightingLayer, model);
     this.applyTextures(material, layers);
@@ -226,7 +225,7 @@ export class EntityMaterials {
    */
   public bindMesh(mesh: THREE.Mesh, entity: Entity): void {
     const space = spaceOf(mesh);
-    if (space && syncLayerNodes(mesh.material as THREE.Material, planStack(entity.materialLayers), space)) {
+    if (space && syncLayerNodes(mesh.material as THREE.Material, planStack(entity.materialLayers), space, this.pictures)) {
       (mesh.material as THREE.Material).needsUpdate = true;
     }
   }
@@ -245,7 +244,7 @@ export class EntityMaterials {
         .loadTexture(id)
         .then(async (blob) => {
           if (!blob) return;
-          this.textureCache.set(key, await buildTexture(blob, { ...binding.ref, srgb: binding.srgb }));
+          this.textureCache.set(key, await buildTexture(blob, { ...binding.ref, srgb: binding.srgb, nearest: binding.nearest }));
           this.assignLoadedTexture(key);
         })
         .catch((error) => console.error(`[Libre3D] Failed to load texture asset "${id}":`, error))
@@ -254,15 +253,27 @@ export class EntityMaterials {
     return null;
   }
 
-  // After a picture finishes loading, every mesh whose layers want it gets it.
+  // An Image layer's picture (layerSources.ts): the texture, or null while it loads in the background.
+  private readonly pictures: PictureSource = (ref, { nearest }) => {
+    const texture = this.getTexture({ ref, srgb: true, nearest });
+    if (!texture) this.textureWasMissing = true;
+    return texture;
+  };
+
+  // After a picture finishes loading, every mesh whose layers want it gets it: Lighting's maps on
+  // the material, an Image layer's in its nodes.
   private assignLoadedTexture(key: string): void {
     const { byId } = getEntityIndex(this.source.getEntities());
     for (const [entityId, obj] of this.meshMap) {
       if (!(obj instanceof THREE.Mesh)) continue;
       const layers = byId.get(entityId)?.materialLayers;
-      if (layers && [...textureBindings(layers).values()].some((binding) => textureKey(binding) === key)) {
-        this.applyTextures(obj.material as THREE.Material, layers);
-      }
+      if (!layers) continue;
+      const material = obj.material as THREE.Material;
+      if ([...textureBindings(layers).values()].some((binding) => textureKey(binding) === key)) this.applyTextures(material, layers);
+      const usesPicture = layers.some(
+        (layer) => layer.type === "image" && textureKey({ ref: layer, srgb: true, nearest: layer.sharpness === "pixelated" }) === key,
+      );
+      if (usesPicture && syncLayerNodes(material, planStack(layers), spaceOf(obj), this.pictures)) material.needsUpdate = true;
     }
   }
 
@@ -277,6 +288,12 @@ export class EntityMaterials {
     const keys: Record<string, string> = (material.userData.textureKeys ??= {});
     const bindings = textureBindings(layers);
     let changed = false;
+    // An imported model's parsed colour map is its Image layer now, drawn by the stack's nodes:
+    // three mustn't multiply it in as well.
+    if (target.map && layers?.some((layer) => layer.type === "image")) {
+      target.map = null;
+      changed = true;
+    }
     for (const prop of TEXTURE_PROPS) {
       if (!(prop in material)) continue;
       const binding = bindings.get(prop);
@@ -399,7 +416,7 @@ export class EntityMaterials {
       const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque);
       const newSide = surface.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
       // A change to the stack's shape (a type, a blend mode, an eye, the order) builds another shader.
-      const stackReshaped = syncLayerNodes(material, plan, spaceOf(obj));
+      const stackReshaped = syncLayerNodes(material, plan, spaceOf(obj), this.pictures);
       // Only transparent/alphaTest/side changes force a shader recompile; color,
       // opacity, roughness, etc. do not. This runs for the gizmo's object on every
       // frame of a drag (and ran for every entity on every store change before

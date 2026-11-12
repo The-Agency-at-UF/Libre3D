@@ -32,7 +32,7 @@ import { Select } from "../ui/Select";
 import { Slider } from "../ui/Slider";
 import { Switch } from "../ui/Switch";
 import { RampEditor } from "./RampEditor";
-import { IMAGE_SLOT_LABELS, useRowUpdate, type LayerRowData } from "./materialRows";
+import { useRowUpdate, type LayerRowData } from "./materialRows";
 
 const LIGHTING_MODEL_OPTIONS: { label: string; value: LightingModel }[] = [
   { label: "None", value: "none" },
@@ -585,7 +585,7 @@ export function ImageSettings({ layer }: { layer: ImageLayer }) {
     <>
       <div className="mat-drawer-thumb" style={{ backgroundImage: thumbUrl ? `url(${thumbUrl})` : undefined }} />
       <p className="mat-drawer-note">
-        From the imported model: fills its {IMAGE_SLOT_LABELS[layer.slot]} map. Its eye shows or hides the map.
+        A picture, at the object's UVs.
       </p>
     </>
   );

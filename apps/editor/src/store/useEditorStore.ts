@@ -59,6 +59,7 @@ import {
   createEntity,
   createEntityId,
   createFlatMaterialLayers,
+  createImageLayer,
   createLightingLayer,
   createPaintLayer,
   createStartingEntities,
@@ -106,7 +107,7 @@ export type {
   FrameSettingsConfig,
   FrameSizePreset,
   ImageLayer,
-  ImageSlot,
+  ImageProjection,
   ImportNodeSpec,
   LightingLayer,
   LightingModel,
@@ -1019,27 +1020,15 @@ export const useEditorStore = create<EditorState>()(
           addImagePlane: (name, textureAssetId, aspect, transparent) => {
             let newId = "";
             set((state) => {
-              const image: ImageLayer = {
-                id: createEntityId(),
-                type: "image",
-                enabled: true,
-                opacity: 1,
-                blendMode: "normal",
-                textureAssetId,
-                slot: "color",
-                // The picture covers the plane once; clamping keeps its edges from bleeding into each other.
-                wrapS: ClampToEdgeWrapping,
-                wrapT: ClampToEdgeWrapping,
-              };
+              // The picture covers the plane once; clamping keeps its edges from bleeding into each other.
+              const image = createImageLayer({ textureAssetId, name, wrapS: ClampToEdgeWrapping, wrapT: ClampToEdgeWrapping });
               const entity: Entity = {
                 ...createEntity("image"),
                 name,
                 imageAspect: aspect,
-                // White, so the picture shows in its own colours (the Color layer tints it), whatever the lights.
-                materialLayers: [
-                  ...createFlatMaterialLayers(ENTITY_DEFAULTS.image.color, transparent ? { alphaMode: "BLEND" } : {}),
-                  image,
-                ],
+                // Unlit, so the picture shows in its own colours whatever the lights; a see-through
+                // one blends (its alpha mode).
+                materialLayers: [createLightingLayer({ model: "none", doubleSided: true, ...(transparent ? { alphaMode: "BLEND" } : {}) }), image],
               };
               newId = entity.id;
               return { entities: [...state.entities, entity], selectedEntityIds: [entity.id], penTool: null };
