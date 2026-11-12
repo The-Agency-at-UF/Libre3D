@@ -20,13 +20,19 @@ import { createId } from "../utils/createId";
 import type { EntityTRS } from "../utils/entityTransforms";
 import type { SceneEvent } from "./events";
 
-/** What a state can set: transform, and a path's trim (0–1, see paths/). Colour and opacity may follow. */
+/**
+ * What a state can set: transform, a path's trim (0–1, see paths/), and the object's colour ("#rrggbb")
+ * and opacity (0–1). The document holds colour and opacity since schema v5; Play uses them from
+ * task D's PR 7 on, and nothing sets them yet.
+ */
 export interface StateValues {
   position?: [number, number, number];
   rotation?: [number, number, number];
   scale?: [number, number, number];
   trimStart?: number;
   trimEnd?: number;
+  color?: string;
+  opacity?: number;
 }
 
 export type StateValueKey = keyof StateValues;
@@ -67,6 +73,8 @@ export const cloneStateValues = (values: StateValues): StateValues => ({
   ...(values.scale ? { scale: cloneVector(values.scale) } : null),
   ...(typeof values.trimStart === "number" ? { trimStart: values.trimStart } : null),
   ...(typeof values.trimEnd === "number" ? { trimEnd: values.trimEnd } : null),
+  ...(typeof values.color === "string" ? { color: values.color } : null),
+  ...(typeof values.opacity === "number" ? { opacity: values.opacity } : null),
 });
 
 const cloneObjectState = (state: ObjectState): ObjectState => ({

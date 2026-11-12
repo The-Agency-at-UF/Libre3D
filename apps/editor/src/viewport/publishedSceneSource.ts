@@ -30,8 +30,10 @@ export const createPublishedSceneSource = (entities: Entity[], assetUrls: Record
     saveTexture: async (assetId, blob) => {
       derivedTextures.set(assetId, blob);
     },
-    setMaterialLayers: (entityId, layers) => {
-      current = current.map((entity) => (entity.id === entityId ? { ...entity, materialLayers: layers } : entity));
+    setMaterialLayers: (entityId, layers, opacity) => {
+      current = current.map((entity) =>
+        entity.id === entityId ? { ...entity, materialLayers: layers, ...(opacity !== 1 ? { opacity } : null) } : entity,
+      );
     },
   };
 };

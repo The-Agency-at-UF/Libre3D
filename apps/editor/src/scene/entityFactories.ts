@@ -67,6 +67,7 @@ export const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
   type: "color",
   enabled: true,
   opacity,
+  blendMode: "normal",
   color,
 });
 
@@ -76,6 +77,7 @@ export const createDepthLayer = (far = 2): DepthLayer => ({
   type: "depth",
   enabled: true,
   opacity: 1,
+  blendMode: "normal",
   gradientType: "radial",
   origin: [0, 0, 0],
   direction: [1, 0, 0],
@@ -100,6 +102,7 @@ export const createLightingLayer = (overrides: Partial<LightingLayer> = {}): Lig
   type: "lighting",
   enabled: true,
   opacity: 1,
+  blendMode: "normal",
   model: "physical",
   roughness: DEFAULT_ROUGHNESS,
   metalness: DEFAULT_METALNESS,
@@ -111,10 +114,21 @@ export const createLightingLayer = (overrides: Partial<LightingLayer> = {}): Lig
   ...overrides,
 });
 
-const createDefaultMaterialLayers = (color: string): MaterialLayer[] => [
+/**
+ * A new object's layers, top first: Lighting, then a Color layer. `lighting` sets the Lighting
+ * layer's model and the surface (a flat object's `doubleSided`, a picture's `alphaMode`).
+ */
+export const createMaterialLayers = (color: string, lighting: Partial<LightingLayer> = {}): MaterialLayer[] => [
+  createLightingLayer(lighting),
   createColorLayer(color, 1),
-  createLightingLayer(),
 ];
+
+/** A layer of `type` in place of `layer`: the same ID, eye, opacity and blend mode, the type's defaults otherwise. */
+export const switchLayerType = (layer: MaterialLayer, type: "color" | "depth", depthFar?: number, color = "#ffffff"): MaterialLayer => {
+  const shared = { id: layer.id, enabled: layer.enabled, opacity: layer.opacity, blendMode: layer.blendMode };
+  if (type === "depth") return { ...createDepthLayer(depthFar !== undefined && depthFar > 0 ? depthFar : undefined), ...shared };
+  return { ...createColorLayer(color), ...shared };
+};
 
 const ZERO_VECTOR: [number, number, number] = [0, 0, 0];
 const UNIT_VECTOR: [number, number, number] = [1, 1, 1];
@@ -134,8 +148,8 @@ export const createEntity = (type: EntityType): Entity => ({
       ? null // groups are pure transform pivots — no material, no color
       : type === "plane"
         ? // flat, so shown from both sides, like a shape or an image
-          { materialLayers: [{ ...createColorLayer(ENTITY_DEFAULTS.plane.color, 1), doubleSided: true }, createLightingLayer()] }
-        : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
+          { materialLayers: createMaterialLayers(ENTITY_DEFAULTS.plane.color, { doubleSided: true }) }
+        : { materialLayers: createMaterialLayers(ENTITY_DEFAULTS[type].color) }),
   // The Add menu's path is a sample curve; the Path pen draws its own (addPath).
   ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
   visible: true,

@@ -6,6 +6,7 @@ import { depthAxis, distanceAlongAxis, dragFar, dragNear, dragStop, pointOnAxis,
 const depth = (overrides: Partial<DepthLayer> = {}): DepthLayer => ({
   id: "depth",
   type: "depth",
+  blendMode: "normal",
   enabled: true,
   opacity: 1,
   gradientType: "radial",

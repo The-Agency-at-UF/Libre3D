@@ -6,6 +6,7 @@ import { clearDepthColors, depthPaintOf, depthRampHex, depthReach, depthRampPosi
 const depth = (overrides: Partial<DepthLayer> = {}): DepthLayer => ({
   id: "depth",
   type: "depth",
+  blendMode: "normal",
   enabled: true,
   opacity: 1,
   gradientType: "radial",
@@ -90,9 +91,9 @@ describe("depthReach", () => {
 });
 
 describe("depthPaintOf", () => {
-  it("is the enabled Depth layer over the Color layer's colour", () => {
-    const layers: MaterialLayer[] = [{ id: "c", type: "color", enabled: true, opacity: 1, color: "#123456" }, depth()];
-    expect(depthPaintOf(layers)).toEqual({ layer: layers[1], base: "#123456" });
+  it("is the enabled Depth layer", () => {
+    const layers: MaterialLayer[] = [{ id: "c", type: "color", enabled: true, opacity: 1, blendMode: "normal", color: "#123456" }, depth()];
+    expect(depthPaintOf(layers)).toEqual({ layer: layers[1] });
     expect(depthPaintOf([depth({ enabled: false })])).toBeNull();
     expect(depthPaintOf(undefined)).toBeNull();
   });
@@ -102,21 +103,21 @@ describe("painting a geometry", () => {
   const line = () =>
     new THREE.BufferGeometry().setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 2, 0, 0], 3));
 
-  it("writes each vertex's ramp colour, over the base colour by the layer's opacity", () => {
+  it("writes each vertex's ramp colour alone; the shader blends it by the layer's opacity", () => {
     const geometry = line();
-    paintDepthColors(geometry, { layer: depth({ stops: [{ color: "#ff0000", position: 0 }, { color: "#0000ff", position: 1 }] }), base: "#ffffff" });
+    paintDepthColors(geometry, { layer: depth({ stops: [{ color: "#ff0000", position: 0 }, { color: "#0000ff", position: 1 }] }) });
     const colors = geometry.getAttribute("color") as THREE.BufferAttribute;
     expect(colorAt(colors, 0)).toBe("ff0000");
     expect(colorAt(colors, 1)).toBe("800080");
     expect(colorAt(colors, 2)).toBe("0000ff");
 
-    paintDepthColors(geometry, { layer: depth({ opacity: 0.5 }), base: "#ffffff" });
-    expect(colorAt(geometry.getAttribute("color") as THREE.BufferAttribute, 0)).toBe("808080"); // half black over white
+    paintDepthColors(geometry, { layer: depth({ opacity: 0.5 }) });
+    expect(colorAt(geometry.getAttribute("color") as THREE.BufferAttribute, 0)).toBe("000000");
   });
 
   it("places positions with the given matrix first", () => {
     const geometry = line();
-    paintDepthColors(geometry, { layer: depth(), base: "#ffffff" }, new THREE.Matrix4().makeTranslation(2, 0, 0));
+    paintDepthColors(geometry, { layer: depth() }, new THREE.Matrix4().makeTranslation(2, 0, 0));
     expect(colorAt(geometry.getAttribute("color") as THREE.BufferAttribute, 0)).toBe("ffffff"); // at 2: the last stop
   });
 
@@ -124,20 +125,20 @@ describe("painting a geometry", () => {
     const geometry = line();
     const own = new THREE.Float32BufferAttribute([1, 0, 0, 1, 0, 0, 1, 0, 0], 3);
     geometry.setAttribute("color", own);
-    paintDepthColors(geometry, { layer: depth(), base: "#ffffff" });
+    paintDepthColors(geometry, { layer: depth() });
     expect(geometry.getAttribute("color")).not.toBe(own);
     clearDepthColors(geometry);
     expect(geometry.getAttribute("color")).toBe(own);
 
     const plain = line();
-    paintDepthColors(plain, { layer: depth(), base: "#ffffff" });
+    paintDepthColors(plain, { layer: depth() });
     clearDepthColors(plain);
     expect(plain.getAttribute("color")).toBeUndefined();
   });
 
   it("skips painting again with the same key", () => {
     const geometry = line();
-    const paint = { layer: depth(), base: "#ffffff" };
+    const paint = { layer: depth() };
     syncDepthColors(geometry, paint, "a");
     const colors = geometry.getAttribute("color") as THREE.BufferAttribute;
     colors.setXYZ(0, 0.5, 0.5, 0.5);

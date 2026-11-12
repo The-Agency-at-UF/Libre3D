@@ -216,11 +216,11 @@ export class ImportedModels {
       const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
       if (!material) continue;
       try {
-        const layers = await deriveMaterialLayers(material, cache, this.host.source.saveTexture);
+        const { layers, opacity } = await deriveMaterialLayers(material, cache, this.host.source.saveTexture);
         // Written through the source at the time: this runs async, after the
         // hydrate's initial set(), and the editor's setEntityMaterialLayers
         // no-ops if the entity was removed meanwhile.
-        this.host.source.setMaterialLayers(entityId, layers);
+        this.host.source.setMaterialLayers(entityId, layers, opacity);
       } catch (error) {
         console.error(`[Libre3D] Failed to derive material layers for imported node "${entityId}":`, error);
       }

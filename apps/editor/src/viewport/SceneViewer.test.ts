@@ -89,9 +89,9 @@ describe("a published scene's source", () => {
 
   it("keeps what's derived for imported meshes in memory, never draws wireframe, and saves nothing", () => {
     const source = createPublishedSceneSource([entity("cube-1"), entity("cube-2")], {});
-    const layers: MaterialLayer[] = [{ id: "c", type: "color", enabled: true, opacity: 1, color: "#123456" }];
+    const layers: MaterialLayer[] = [{ id: "c", type: "color", enabled: true, opacity: 1, blendMode: "normal", color: "#123456" }];
 
-    source.setMaterialLayers("cube-2", layers);
+    source.setMaterialLayers("cube-2", layers, 1);
 
     expect(source.getEntities().map((each) => each.materialLayers)).toEqual([undefined, layers]);
     expect(source.isWireframe()).toBe(false);

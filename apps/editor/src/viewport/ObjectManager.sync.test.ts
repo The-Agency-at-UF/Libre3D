@@ -267,7 +267,7 @@ describe("ObjectManager.syncMeshes: what it must not skip", () => {
   });
 
   it("asks again for a texture that couldn't be had, on every sync, as before", async () => {
-    const image: ImageLayer = { id: "image-layer", type: "image", enabled: true, opacity: 1, textureAssetId: "c".repeat(64), slot: "color", wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping };
+    const image: ImageLayer = { id: "image-layer", type: "image", enabled: true, opacity: 1, blendMode: "normal", textureAssetId: "c".repeat(64), slot: "color", wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping };
     const picture = make("plane", "picture");
     const scene = createScene([{ ...picture, materialLayers: [...picture.materialLayers!, image] }, make("cube", "a")]);
     const { manager } = createManager(scene.source);

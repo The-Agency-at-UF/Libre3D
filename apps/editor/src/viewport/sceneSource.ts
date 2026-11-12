@@ -22,6 +22,9 @@ export interface SceneSource {
    * `loadTexture` can return it. The editor writes it to this browser's storage; the viewer must not.
    */
   saveTexture(assetId: string, blob: Blob): Promise<void>;
-  /** Editable layers derived from an imported mesh's own material, for a mesh that had none. */
-  setMaterialLayers(entityId: string, layers: MaterialLayer[]): void;
+  /**
+   * Editable layers derived from an imported mesh's own material, for a mesh that had none, and the
+   * object's opacity from the material's.
+   */
+  setMaterialLayers(entityId: string, layers: MaterialLayer[], opacity: number): void;
 }

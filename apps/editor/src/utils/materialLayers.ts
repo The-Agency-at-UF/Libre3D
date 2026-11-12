@@ -12,8 +12,8 @@ import type {
 } from "../scene/types";
 
 // Turns a parsed glTF THREE.Material into the editable layer stack this codebase
-// already uses for primitives (Color + Lighting, plus an Image layer per texture
-// map). It's the reverse of materialClassForLayer (viewport/entityMaterials.ts): read a material,
+// already uses for primitives (Lighting + Color, plus an Image layer per texture
+// map), and the object's opacity. It's the reverse of materialClassForLayer (viewport/entityMaterials.ts): read a material,
 // emit layers; that function reads layers, builds a material.
 //
 // TEXTURE EXTRACTION — approach chosen: (A) canvas re-encode.
@@ -54,22 +54,26 @@ function colorLayerFromMaterial(material: THREE.Material): ColorLayer {
     ? (material as THREE.MeshStandardMaterial).color.getHexString()
     : "ffffff";
 
-  // GLTFLoader already resolves alphaMode into these two THREE properties
-  // correctly at parse time (transparent=true for BLEND, alphaTest>0 for
-  // MASK) -- reconstruct the effective alphaMode from them rather than
-  // needing the raw glTF JSON here.
-  const alphaMode: NonNullable<ColorLayer["alphaMode"]> = material.transparent
-    ? "BLEND"
-    : material.alphaTest > 0
-      ? "MASK"
-      : "OPAQUE";
-
   return {
     id: createLayerId(),
     type: "color",
     enabled: true,
-    opacity: typeof material.opacity === "number" ? material.opacity : 1,
+    opacity: 1,
+    blendMode: "normal",
     color: `#${color}`,
+  };
+}
+
+// The surface, kept on the Lighting layer. GLTFLoader already resolves alphaMode into these two
+// THREE properties at parse time (transparent=true for BLEND, alphaTest>0 for MASK), so the effective
+// alphaMode is read back from them rather than from the raw glTF JSON.
+function surfaceFromMaterial(material: THREE.Material): Pick<LightingLayer, "alphaMode" | "alphaCutoff" | "doubleSided"> {
+  const alphaMode: NonNullable<LightingLayer["alphaMode"]> = material.transparent
+    ? "BLEND"
+    : material.alphaTest > 0
+      ? "MASK"
+      : "OPAQUE";
+  return {
     alphaMode,
     ...(alphaMode === "MASK" ? { alphaCutoff: material.alphaTest } : {}),
     doubleSided: material.side === THREE.DoubleSide,
@@ -88,6 +92,7 @@ function lightingLayerFromMaterial(material: THREE.Material, model: LightingMode
     type: "lighting",
     enabled: true,
     opacity: 1,
+    blendMode: "normal",
     model,
     roughness: typeof std.roughness === "number" ? std.roughness : DEFAULT_ROUGHNESS,
     metalness: typeof std.metalness === "number" ? std.metalness : DEFAULT_METALNESS,
@@ -99,6 +104,7 @@ function lightingLayerFromMaterial(material: THREE.Material, model: LightingMode
       typeof (material as THREE.MeshStandardMaterial).emissiveIntensity === "number"
         ? (material as THREE.MeshStandardMaterial).emissiveIntensity
         : 1,
+    ...surfaceFromMaterial(material),
   };
 }
 
@@ -178,6 +184,7 @@ async function imageLayersFromMaterial(material: THREE.Material, cache: TextureD
       type: "image",
       enabled: true,
       opacity: 1,
+      blendMode: "normal",
       textureAssetId,
       slot,
       wrapS: texture.wrapS,
@@ -196,13 +203,23 @@ async function imageLayersFromMaterial(material: THREE.Material, cache: TextureD
   return layers;
 }
 
-// Builds the full editable layer stack (Color + Lighting + Image layers) for one
-// imported mesh's material. Pass a shared cache across every mesh in the same
-// import so reused images are extracted once. Each image goes to `saveTexture` under its hash.
-export async function deriveMaterialLayers(material: THREE.Material, cache: TextureDedupCache, saveTexture: SaveTexture): Promise<MaterialLayer[]> {
+/** An imported mesh's editable material: its layer stack, top first, and the object's opacity. */
+export interface DerivedMaterial {
+  layers: MaterialLayer[];
+  opacity: number;
+}
+
+// Builds the full editable layer stack (Lighting, Color, then the Image layers) for one imported
+// mesh's material, and the object's opacity from the material's. Pass a shared cache across every
+// mesh in the same import so reused images are extracted once. Each image goes to `saveTexture`
+// under its hash.
+export async function deriveMaterialLayers(material: THREE.Material, cache: TextureDedupCache, saveTexture: SaveTexture): Promise<DerivedMaterial> {
   const model = lightingModelForMaterial(material);
   const imageLayers = await imageLayersFromMaterial(material, cache, saveTexture);
-  return [colorLayerFromMaterial(material), lightingLayerFromMaterial(material, model), ...imageLayers];
+  return {
+    layers: [lightingLayerFromMaterial(material, model), colorLayerFromMaterial(material), ...imageLayers],
+    opacity: typeof material.opacity === "number" ? material.opacity : 1,
+  };
 }
 
 // Whether stored image bytes are a JPEG, by their first bytes (FF D8 FF): a

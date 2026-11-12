@@ -470,7 +470,7 @@ const LIGHTING_MODEL_OPTIONS: { label: string; value: LightingModel }[] = [
   { label: "Toon", value: "toon" },
 ];
 
-type AlphaMode = NonNullable<ColorLayer["alphaMode"]>;
+type AlphaMode = NonNullable<LightingLayer["alphaMode"]>;
 
 // Mirrors glTF's alphaMode. Opaque ignores alpha; Mask is a hard alpha-tested
 // cutout (writes depth, so it sorts correctly); Blend is true translucency
@@ -540,10 +540,10 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
 
   // alphaMode/doubleSided are optional (primitives predate them) -- fall back to
   // the glTF defaults (OPAQUE / single-sided) so the controls always show a value.
-  const firstAlphaMode: AlphaMode = firstColor?.alphaMode ?? "OPAQUE";
-  const firstDoubleSided = firstColor?.doubleSided ?? false;
-  const alphaModeMixed = colorLayers.some(({ layer }) => ((layer as ColorLayer).alphaMode ?? "OPAQUE") !== firstAlphaMode);
-  const doubleSidedMixed = colorLayers.some(({ layer }) => ((layer as ColorLayer).doubleSided ?? false) !== firstDoubleSided);
+  const firstAlphaMode: AlphaMode = firstLighting?.alphaMode ?? "OPAQUE";
+  const firstDoubleSided = firstLighting?.doubleSided ?? false;
+  const alphaModeMixed = lightingLayers.some(({ layer }) => ((layer as LightingLayer).alphaMode ?? "OPAQUE") !== firstAlphaMode);
+  const doubleSidedMixed = lightingLayers.some(({ layer }) => ((layer as LightingLayer).doubleSided ?? false) !== firstDoubleSided);
 
   const applyColorUpdate = (updates: Partial<ColorLayer>) => {
     const updatesMap: Record<string, { layerId: string; updates: Partial<MaterialLayerData> }> = {};
@@ -593,11 +593,11 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
                 if (!val) return;
                 // Seed a sensible cutoff when entering Mask so an alpha-tested
                 // cutout has something to test against immediately.
-                const updates: Partial<ColorLayer> =
+                const updates: Partial<LightingLayer> =
                   val === "MASK"
-                    ? { alphaMode: "MASK", alphaCutoff: firstColor.alphaCutoff ?? 0.5 }
+                    ? { alphaMode: "MASK", alphaCutoff: firstLighting?.alphaCutoff ?? 0.5 }
                     : { alphaMode: val as AlphaMode };
-                applyColorUpdate(updates);
+                applyLightingUpdate(updates);
               }}
             />
             {!alphaModeMixed && firstAlphaMode === "MASK" && (
@@ -606,14 +606,14 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities }: Materi
                 min={0}
                 max={1}
                 step={0.01}
-                value={firstColor.alphaCutoff ?? 0.5}
-                onChange={(val) => applyColorUpdate({ alphaCutoff: val })}
+                value={firstLighting?.alphaCutoff ?? 0.5}
+                onChange={(val) => applyLightingUpdate({ alphaCutoff: val })}
               />
             )}
             <Switch
               label="Double Sided"
               checked={doubleSidedMixed ? false : firstDoubleSided}
-              onChange={(val) => applyColorUpdate({ doubleSided: val })}
+              onChange={(val) => applyLightingUpdate({ doubleSided: val })}
             />
           </MaterialLayer>
         )}
