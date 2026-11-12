@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useMemo } from "react";
 import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
 import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore";
@@ -17,6 +17,7 @@ import { useViewportGizmo } from "../viewport/hooks/useViewportGizmo";
 import { useViewportPlay } from "../viewport/hooks/useViewportPlay";
 import { useViewportPenTool } from "../viewport/hooks/useViewportPenTool";
 import { useViewportDepthGizmo } from "../viewport/hooks/useViewportDepthGizmo";
+import { useFrameAutoScale } from "../viewport/hooks/useFrameAutoScale";
 
 export function ViewportCanvas() {
   const wrapperRef   = useRef<HTMLDivElement | null>(null);
@@ -39,7 +40,7 @@ export function ViewportCanvas() {
   const viewedStates    = useEditorStore((state) => state.viewedStates);
   const objectStates    = useEditorStore((state) => state.animation.states);
 
-  const [autoScaleFactor, setAutoScaleFactor] = useState(1);
+  const autoScaleFactor = useFrameAutoScale(wrapperRef, frame, isPreviewMode);
 
   // Initialize Managers synchronously so scene and camera are never undefined
   const managers = useMemo(() => {
@@ -432,43 +433,6 @@ export function ViewportCanvas() {
     resizeObserver.observe(container);
     return () => resizeObserver.disconnect();
   }, [cameraManager, rendererRef, gizmoRef]);
-
-  // -- Auto Scale Logic (Fixed Frame Mode) --
-  useEffect(() => {
-    const wrapper      = wrapperRef.current;
-    const viewportHost = wrapper?.parentElement;
-    if (!wrapper || !viewportHost) {
-      setAutoScaleFactor(1);
-      return;
-    }
-
-    const updateScale = () => {
-      if (frame.mode !== "fixed") {
-        setAutoScaleFactor(1);
-        return;
-      }
-      const viewportRect   = viewportHost.getBoundingClientRect();
-      const leftSidebar    = document.querySelector<HTMLElement>(".left-sidebar");
-      const rightSidebar   = document.querySelector<HTMLElement>(".right-sidebar");
-      const floatingToolbar = document.querySelector<HTMLElement>(".floating-toolbar");
-
-      // Play hides the sidebars and the toolbar, so the frame gets the whole viewport.
-      const leftInset  = isPreviewMode ? 0 : leftSidebar    ? Math.max(0, leftSidebar.getBoundingClientRect().right    - viewportRect.left)  : 280;
-      const rightInset = isPreviewMode ? 0 : rightSidebar   ? Math.max(0, viewportRect.right - rightSidebar.getBoundingClientRect().left)    : 320;
-      const topInset   = isPreviewMode ? 0 : floatingToolbar ? Math.max(0, floatingToolbar.getBoundingClientRect().bottom - viewportRect.top) : 0;
-
-      const availableWidth  = Math.max(1, viewportRect.width  - leftInset - rightInset);
-      const availableHeight = Math.max(1, viewportRect.height - topInset);
-      const nextScale = Math.min(1, availableWidth / frame.width, availableHeight / frame.height);
-      setAutoScaleFactor(Number.isFinite(nextScale) ? Math.max(nextScale, 0.1) : 1);
-    };
-
-    updateScale();
-    const observer = new ResizeObserver(updateScale);
-    observer.observe(viewportHost);
-    return () => observer.disconnect();
-  }, [frame.mode, frame.width, frame.height, isPreviewMode]);
-
 
   // -- Viewport centering events --
   useEffect(() => {
