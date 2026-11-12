@@ -3409,3 +3409,15 @@ input[type="range"]::-moz-range-thumb {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
+
+.mat-toggles {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+}
+
+.mat-toggles .seg-btn {
+  flex: 1;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}

@@ -19,6 +19,7 @@ import {
   type LightingModel,
   type NoiseLayer,
   type NoiseType,
+  type NormalLayer,
   type TextureRef,
   type VoronoiStyle,
 } from "../../store/useEditorStore";
@@ -538,6 +539,31 @@ export function NoiseSettings({ row }: { row: LayerRowData }) {
       <NumberRow label="Low Cut" value={layer.lowCut} min={0} max={1} step={0.05} onChange={(lowCut) => update({ lowCut })} />
       <NumberRow label="High Cut" value={layer.highCut} min={0} max={1} step={0.05} onChange={(highCut) => update({ highCut })} />
     </>
+  );
+}
+
+// A Normal layer, as Spline's: which of the surface direction's X, Y and Z colour it (red, green, blue).
+export function NormalSettings({ row }: { row: LayerRowData }) {
+  const update = useRowUpdate(row);
+  const layer = row.pairs[0].layer as NormalLayer;
+  return (
+    <div className="prop">
+      <span className="prop-label">Direction</span>
+      <div className="mat-toggles">
+        {["X", "Y", "Z"].map((axis, index) => (
+          <button
+            key={axis}
+            type="button"
+            className={`seg-btn ${layer.axes[index] ? "on" : ""}`}
+            aria-pressed={layer.axes[index]}
+            title={`${layer.axes[index] ? "Leave out" : "Use"} the surface's ${axis} direction (${["red", "green", "blue"][index]})`}
+            onClick={() => update({ axes: layer.axes.map((on, i) => (i === index ? !on : on)) as NormalLayer["axes"] })}
+          >
+            {axis}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

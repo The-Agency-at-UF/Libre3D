@@ -34,6 +34,7 @@ import {
   mx_worley_noise_vec2,
   normalLocal,
   normalView,
+  normalWorld,
   positionView,
   positionViewDirection,
   positionWorld,
@@ -479,6 +480,22 @@ const imageSource = (first: ImageLayer): LayerSource => {
   };
 };
 
+// ─── Normal ──────────────────────────────────────────────────────────────────
+
+const normalSource = (): LayerSource => {
+  const axes: Vec3Uniform = uniform(new THREE.Vector3(1, 1, 1));
+  return {
+    update(layer) {
+      if (layer.type !== "normal") return;
+      axes.value.set(...(layer.axes.map((on) => (on ? 1 : 0)) as [number, number, number]));
+    },
+    node() {
+      // The way the surface faces, in the scene's space, -1 to 1 as 0 to 1 (scene/types.ts, NormalLayer).
+      return { rgb: n(n(normalWorld).mul(0.5).add(0.5).mul(n(axes))), a: float(1) };
+    },
+  };
+};
+
 // ─── Fresnel ─────────────────────────────────────────────────────────────────
 
 const fresnelSource = (): LayerSource => {
@@ -519,7 +536,9 @@ export const createLayerSource = (layer: PaintLayer, pictures: PictureSource): L
             ? fresnelSource()
             : layer.type === "image"
               ? imageSource(layer)
-              : colorSource();
+              : layer.type === "normal"
+                ? normalSource()
+                : colorSource();
   source.update(layer, pictures);
   return source;
 };
@@ -535,6 +554,8 @@ export const layerSourceShape = (layer: PaintLayer): string => {
       return `noise:${layer.noiseType}${layer.noiseType === "voronoi" ? `:${layer.voronoiStyle}` : ""}`;
     case "fresnel":
       return "fresnel";
+    case "normal":
+      return "normal";
     case "image":
       return `image:${layer.projection}${layer.projection === "planar" || layer.projection === "cylindrical" ? `:${layer.axis}` : ""}`;
     case "color":

@@ -20,6 +20,7 @@ export const LAYER_TYPE_NAMES: Record<MaterialLayerType, string> = {
   gradient: "Gradient",
   noise: "Noise",
   fresnel: "Fresnel",
+  normal: "Normal",
 };
 
 export const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
@@ -30,6 +31,7 @@ export const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
   gradient: "ti-color-filter",
   noise: "ti-grain",
   fresnel: "ti-circle-dot",
+  normal: "ti-compass",
 };
 
 export const BLEND_MODE_NAMES: Record<BlendMode, string> = {

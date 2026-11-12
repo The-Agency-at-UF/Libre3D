@@ -13,7 +13,7 @@ import type { ShapeData } from "../paths/shapeGeometry";
 
 export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
 
-export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel";
+export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
 
 // How a layer goes over the layers under it. The stack is drawn bottom to top, and
@@ -191,7 +191,15 @@ export interface FresnelLayer extends LayerBase, PaintColor {
   factor: number;
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer;
+// Colours each point by the way the surface faces there, as Spline's Normal layer: red, green and
+// blue from the normal's X, Y and Z in the scene's space (-1 to 1 as 0 to 1), so the colours stay
+// put as the camera orbits. An axis turned off gives 0 in its channel (Spline's Direction X Y Z).
+export interface NormalLayer extends LayerBase {
+  type: "normal";
+  axes: [boolean, boolean, boolean];
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | NormalLayer;
 
 /** A reusable material: the scene document's `materials` section, by ID (task D, PR 6). */
 export interface MaterialAsset {

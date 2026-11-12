@@ -98,6 +98,7 @@ export type {
   LightingMapSlot,
   NoiseLayer,
   NoiseType,
+  NormalLayer,
   PaintColor,
   RampStop,
   TextureRef,

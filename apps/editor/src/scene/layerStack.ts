@@ -28,6 +28,7 @@ import type {
   MaterialLayer,
   MaterialLayerType,
   NoiseLayer,
+  NormalLayer,
   PaintColor,
   RampStop,
 } from "./types";
@@ -41,14 +42,14 @@ export interface Paint {
 }
 
 /** A layer that makes colour: it paints, or in Mask mode masks the layer under it. */
-export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer;
+export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | NormalLayer;
 /** A layer that can be put in Mask mode. */
 export type MaskableLayer = DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer;
 
 export const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overlay"];
 
 /** Layer types that make colour. An object keeps one that paints (so Color can go once another is there). */
-export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "image", "depth", "gradient", "noise", "fresnel"];
+export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "image", "depth", "gradient", "noise", "fresnel", "normal"];
 
 /** Layer types a layer's type dropdown can switch it to. "+" adds a Color layer. */
 export const SWITCHABLE_LAYER_TYPES: readonly MaterialLayerType[] = COLOR_LAYER_TYPES;
@@ -293,6 +294,8 @@ export const sourceIsOpaque = (layer: PaintLayer): boolean => {
       return layer.colors.every((color) => (color.alpha ?? 1) >= 1);
     case "fresnel":
       return false;
+    case "normal":
+      return true;
     case "image":
       // A picture's own see-through parts make the object see-through only with the surface's
       // alpha mode Blend or Mask, as a glTF colour map's do; they still blend over the layers under it.

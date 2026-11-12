@@ -29,6 +29,7 @@ import type {
   MaterialLayer,
   MaterialLayerType,
   NoiseLayer,
+  NormalLayer,
 } from "./types";
 import { cloneVector } from "./vec3";
 
@@ -167,6 +168,15 @@ export const createImageLayer = (picture: Partial<ImageLayer> = {}): ImageLayer 
   ...picture,
 });
 
+export const createNormalLayer = (): NormalLayer => ({
+  id: createEntityId(),
+  type: "normal",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  axes: [true, true, true],
+});
+
 export const createFresnelLayer = (): FresnelLayer => ({
   id: createEntityId(),
   type: "fresnel",
@@ -189,6 +199,8 @@ export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer => {
       return { ...layer, stops: layer.stops.map((stop) => ({ ...stop })), offset: [...layer.offset], morph: [...layer.morph] };
     case "image":
       return { ...layer, scale: [...layer.scale], offset: [...layer.offset] };
+    case "normal":
+      return { ...layer, axes: [...layer.axes] };
     case "noise":
       return {
         ...layer,
@@ -253,13 +265,15 @@ export const createPaintLayer = (type: PaintLayerType, depthFar?: number, color 
       return createFresnelLayer();
     case "image":
       return createImageLayer();
+    case "normal":
+      return createNormalLayer();
     case "color":
     default:
       return createColorLayer(color);
   }
 };
 
-export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel">;
+export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal">;
 
 /**
  * A layer of `type` in place of `layer`: the same ID, eye, opacity and blend mode, and its Mode
