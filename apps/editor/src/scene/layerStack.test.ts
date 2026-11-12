@@ -11,6 +11,7 @@ import {
   hexToRgb,
   isPlainPlan,
   lightingStrength,
+  MASKABLE_LAYER_TYPES,
   maskTarget,
   maskValue,
   moveLayer,
@@ -387,12 +388,18 @@ describe("stack rules", () => {
 
   it("switches among the colour types (Image too), never Lighting", () => {
     const layers: MaterialLayer[] = [lighting(), depth(), color("c", "#ffffff")];
-    for (const type of ["color", "image", "depth", "gradient", "noise", "fresnel"] as const) {
+    for (const type of ["color", "image", "depth", "gradient", "noise", "fresnel", "normal", "matcap", "rainbow"] as const) {
       expect(canSwitchLayerType(layers, layers[2], type)).toBe(true);
     }
     expect(canSwitchLayerType(stack, stack[0], "color")).toBe(false);
     expect(canSwitchLayerType(stack, stack[2], "color")).toBe(true);
     expect(canSwitchLayerType(stack, stack[1], "lighting")).toBe(false);
+  });
+
+  it("puts pictures, matcaps, rainbows and the gradient kinds in Mask mode, but not Color or Normal", () => {
+    for (const type of ["image", "matcap", "rainbow", "depth", "gradient", "noise", "fresnel"]) expect(MASKABLE_LAYER_TYPES).toContain(type);
+    expect(MASKABLE_LAYER_TYPES).not.toContain("color");
+    expect(MASKABLE_LAYER_TYPES).not.toContain("normal");
   });
 
   it("moves any layer anywhere, Lighting and pictures too", () => {
