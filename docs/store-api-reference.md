@@ -368,10 +368,11 @@ updatePostProcessing({
 
 An object's material is a stack of layers, **top first** (`materialLayers[0]` is the top, as the Materials panel lists it), plus the object's own `opacity`. The stack's rules live in `scene/layerStack.ts`:
 
-- **Drawn bottom to top.** Each layer goes over what's under it with its `blendMode` (`"normal" | "multiply" | "screen" | "overlay"`, the W3C compositing formulas on sRGB values) and its `opacity` (0–1, how strongly it shows). Its `enabled` is the row's eye.
-- **Lighting sits on top** and shades everything under it. Its opacity is how much shading shows (0 looks unlit, as with its eye off); its blend mode stays `"normal"`. It can't be removed, so it also holds the surface settings (`alphaMode`, `alphaCutoff`, `doubleSided`).
-- **Colour layers** are Color and Depth (more come with task D's later PRs). An object keeps at least one: a Color layer can be removed only while another colour layer stays. An object has at most one Depth layer.
-- **Image layers** come from imported models and fill the material's texture slots; they stay at the bottom, their opacity and blend mode unused (until Image is a layer type of its own, task D PR 4).
+- **Drawn bottom to top.** Each layer goes over what's under it with its `blendMode` (`"normal" | "multiply" | "screen" | "overlay"`, the W3C compositing formulas on sRGB values) and its `opacity` (0–1, how strongly it shows). Its `enabled` is the row's eye. Every layer is drawn per pixel (`viewport/layerSources.ts`); a stack of Color layers under Lighting is just the material's colour.
+- **Lighting** shades the layers under it; the layers over it are drawn on the shaded colour as they are (a Fresnel there glows, as in Spline). Its opacity is how much shading shows (0 looks unlit, as with its eye off); its blend mode stays `"normal"`. It can't be removed, so it also holds the surface settings (`alphaMode`, `alphaCutoff`, `doubleSided`) and the maps.
+- **Colour layers** are Color, Depth, Gradient, Noise and Fresnel; a row's type dropdown switches among them. An object keeps one that paints: a layer that paints can be removed only while another one stays.
+- **Mask mode** (`mask: true`, on Depth, Gradient, Noise and Fresnel; Spline's Layer Masking): the layer paints nothing and shows the one painting layer right under it only where it's light (`maskTarget`). Over Lighting, another mask or nothing, it masks nothing.
+- **Image layers** (an image plane's picture, an imported model's colour map) fill the material's colour map and stay at the bottom, their opacity and blend mode unused (a full Image layer is task D PR 4b).
 - New 3D objects start with Lighting (Phong) over a white Color layer; flat ones (`FLAT_ENTITY_TYPES`: plane, shape, image) start unlit and shown from both sides (`createFlatMaterialLayers`).
 
 Every action below edits one object (or, in a batch, several), records one undo step, and records none when the rules refuse it. Refused in view only.
@@ -379,27 +380,27 @@ Every action below edits one object (or, in a batch, several), records one undo 
 ### Adding Layers
 
 #### `addMaterialLayer(entityId: string, layerType: MaterialLayerType, depthFar?: number) → void`
-Adds a Color or Depth layer just under Lighting (a new Color layer starts in the colour of the one it goes over), or a Lighting layer on top when the object has none. A second Depth layer, a second Lighting layer and an Image layer are refused.
-- **Depth**: radial from the object's origin, near 0; its far is `depthFar` when given (above 0), else 2. The Materials panel passes the object's reach (`depthReach` in `utils/depthColors.ts`, its mesh's farthest vertex from its origin), so the ramp ends on the object rather than past it.
+Adds a colour layer just under Lighting (a new Color layer starts in the colour of the top Color layer), a Fresnel layer over Lighting (where it glows), or a Lighting layer on top when the object has none. Each starts with Spline's defaults (`createPaintLayer`). An Image layer and a second Lighting layer are refused.
+- **Depth**: radial from the object's origin in its own space, near 0; its far is `depthFar` when given (above 0), else 2. The Materials panel passes the object's reach (`depthReach` in `utils/depthColors.ts`, its mesh's farthest vertex from its origin), so the ramp ends on the object rather than past it.
 
 ### Removing Layers
 
 #### `removeMaterialLayer(entityId: string, layerId: string) → void`
-Removes a layer the rules allow removing (`canRemoveLayer`): never Lighting or an Image layer; a colour layer while another stays.
+Removes a layer the rules allow removing (`canRemoveLayer`): never Lighting or an Image layer; a painting layer while another stays; a mask always.
 
 ### Changing a Layer's Type or Place
 
-#### `switchMaterialLayerType(entityId: string, layerId: string, type: "color" | "depth", depthFar?: number) → void`
-Turns a Color layer into a Depth layer or back (the row's type dropdown), keeping its ID, eye, opacity and blend mode; the rest is the new type's defaults (a Color layer takes the colour of the next Color layer in the stack). Refused for Lighting and Image layers, and for a second Depth layer.
+#### `switchMaterialLayerType(entityId: string, layerId: string, type: PaintLayerType, depthFar?: number) → void`
+Turns a colour layer into another colour type (the row's type dropdown), keeping its ID, eye, opacity, blend mode and Mode (Color has no Mask mode, so it drops it); the rest is the new type's defaults (a Color layer takes the colour of the next Color layer in the stack). Refused for Lighting and Image layers.
 
 #### `moveMaterialLayer(entityId: string, layerId: string, toIndex: number) → void`
-Moves a layer to `toIndex` (0 = top), kept between Lighting and the Image layers (`movableRange`). Lighting and Image layers don't move.
+Moves a layer to `toIndex` (0 = top), anywhere above the Image layers (`movableRange`): over or under Lighting, and Lighting itself. Image layers don't move.
 
 ### Updating Layers
 
 #### `updateMaterialLayer(entityId: string, layerId: string, updates: Partial<MaterialLayer>) → void`
 Update a single layer's properties.
-- **Partial updates**: Only changed fields are merged
+- **Partial updates**: Only changed fields are merged (a field that is an object, like `maps` or `colors`, is replaced whole).
 
 #### `updateMultipleEntityMaterialLayers(updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) → void`
 Batch update layers across multiple entities.
@@ -417,13 +418,13 @@ Replaces an entity's whole layer stack (copied), and sets its opacity when `opac
 #### `materials: Record<string, MaterialAsset>`
 Reusable materials by ID (`{ id, name, layers }`, layers top first), saved with the scene as the document's `materials` section and undoable. Empty until material assets arrive (task D PR 6); an entity's `materialAssetId` will point at one.
 
-**Layer interfaces** (every layer also has `id`, `enabled`, `opacity` and `blendMode`):
+**Layer interfaces** (every layer also has `id`, `enabled`, `opacity`, `blendMode`, and the maskable ones `mask?`). Colours are `"#rrggbb"`, sRGB as picked; a `PaintColor` is `{ color, alpha? }` (alpha missing = 1) and a ramp stop a `PaintColor` with a `position` (0–1).
 
 **ColorLayer**:
 ```typescript
 {
   type: "color";
-  color: string; // hex color
+  color: string;
 }
 ```
 
@@ -432,44 +433,102 @@ Reusable materials by ID (`{ id, name, layers }`, layers top first), saved with 
 {
   type: "lighting";
   model: "none" | "lambert" | "phong" | "physical" | "toon";
-  roughness: number; // 0-1, for physical
-  metalness: number; // 0-1, for physical
-  clearcoat?: number; // 0-1, for physical: above 0 builds a MeshPhysicalMaterial (KHR_materials_clearcoat in a GLB)
+  roughness: number; // 0-1, physical
+  metalness: number; // 0-1, physical
+  reflectivity?: number; // 0-1, physical (three's specularIntensity)
+  clearcoat?: number; // 0-1, physical
   clearcoatRoughness?: number; // 0-1
-  shininess: number; // for phong
-  emissive: string; // hex color
+  sheen?: number; // 0-1, physical
+  iridescence?: number; // 0-1, physical
+  ior?: number; // 1-2.333, physical
+  // Off their defaults (0, or 1.5 for ior, 1 for reflectivity), the physical values build a MeshPhysicalMaterial.
+  shininess: number; // phong
+  specular?: string; // phong's highlight colour (#111111 when missing)
+  emissive: string;
   emissiveIntensity: number;
-  alphaMode?: "OPAQUE" | "MASK" | "BLEND"; // the surface; from an imported material
+  maps?: Partial<Record<"roughness" | "metalness" | "normal" | "ao" | "emissive" | "bump", TextureRef>>;
+  bumpScale?: number; // the bump map's strength (1 when missing)
+  alphaMode?: "OPAQUE" | "MASK" | "BLEND"; // the surface
   alphaCutoff?: number; // for MASK mode
   doubleSided?: boolean;
 }
+// TextureRef: { textureAssetId: string; name?: string; wrapS: number; wrapT: number; flipY?: boolean }
+// (a picture in the texture store; flipY for one uploaded in the editor)
 ```
 
-**ImageLayer** (texture):
+**ImageLayer** (a picture):
 ```typescript
 {
   type: "image";
-  textureAssetId: string; // SHA-256 of the stored PNG (local storage and S3)
-  slot: "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
+  textureAssetId: string; // SHA-256 of the stored picture (local storage and S3)
+  slot: "color"; // the other slots (normal, metallicRoughness, emissive, ao) are folded into Lighting's maps on load
   wrapS: number; // THREE.js wrap constant
-  wrapT: number; // THREE.js wrap constant
+  wrapT: number;
 }
 ```
 
-**DepthLayer** (colour by distance, like Spline's Depth layer with a Vector origin in Local space):
+**DepthLayer** (colour by distance, as Spline's Depth layer):
 ```typescript
 {
   type: "depth";
-  gradientType: "radial" | "linear"; // distance from origin, or along direction
-  origin: [number, number, number]; // in the object's own space
+  gradientType: "radial" | "linear"; // distance from the origin, or along direction
+  originType?: "vector" | "camera"; // missing = vector
+  space?: "local" | "world"; // missing = local; for a vector origin
+  origin: [number, number, number];
   direction: [number, number, number]; // for linear
   near: number; // distance at the ramp's start
   far: number; // distance at its end
-  stops: { color: string; position: number }[]; // 2-10, position 0-1
+  stops: RampStop[]; // 2-10
   smooth: boolean; // eased blends between stops
 }
 ```
-Its ramp is painted as vertex colours by `utils/depthColors.ts` (in `viewport/entityMaterials.ts` and PathMesh) and blended with the layers around it in TSL (`viewport/layerNodes.ts`); an export bakes the blend into the vertex colours (`COLOR_0`). Copy layers with `cloneMaterialLayer`, which copies its arrays.
+
+**GradientLayer** (a ramp over the UVs, Spline's maths: `gradientPosition`):
+```typescript
+{
+  type: "gradient";
+  gradientType: "linear" | "radial" | "polar";
+  stops: RampStop[]; // 2-10
+  smooth: boolean;
+  angle: number; // degrees
+  offset: [number, number];
+  morph: [number, number];
+}
+```
+
+**NoiseLayer** (warped 3D noise in object space between four colours):
+```typescript
+{
+  type: "noise";
+  noiseType: "simplex" | "simplexFractal" | "perlin" | "fbm" | "voronoi";
+  size: [number, number, number]; // stretch per axis
+  scale: number;
+  movement: number; // 0 = still
+  colors: [PaintColor, PaintColor, PaintColor, PaintColor];
+  distortion: [number, number]; // how far each of the two warps pushes
+  factorA: [number, number]; // the warps' offsets (Spline's defaults 1.7, 9.2 and 8.3, 2.8)
+  factorB: [number, number];
+  voronoiStyle: "f1" | "f2" | "f2MinusF1" | "smoothBlend" | "edge";
+  smoothness: number; // voronoi
+  seed: number;
+  lowCut: number; // 0-1: the noise's value remapped from low to high
+  highCut: number;
+}
+```
+
+**FresnelLayer** (a glow where the surface turns from the camera):
+```typescript
+{
+  type: "fresnel";
+  color: string;
+  alpha?: number;
+  bias: number; // clamp(bias + scale * (1 - |N·V|)^intensity) * factor
+  scale: number;
+  intensity: number;
+  factor: number;
+}
+```
+Copy layers with `cloneMaterialLayer`, which copies their arrays and objects.
 
 ---
 
