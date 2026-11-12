@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import type { SceneSettingsConfig } from "../scene/types";
 import { getSafeColor } from "../utils/sceneColor";
-import { canvasColor } from "./canvasOutput";
+import { AMBIENT_FILL_KEY, canvasColor } from "./canvasOutput";
 import { InfiniteGrid } from "./InfiniteGrid";
 
 export class SceneManager {
@@ -103,10 +103,14 @@ export class SceneManager {
 
   // The environment replaces the ambient light: it already fills the shadows (unevenly, as a room
   // does), and both together wash out dark materials. Only Physical materials take environment
-  // light, so Lambert, Phong and Toon are lit by the directional lights alone while it's on.
+  // light: Lambert, Phong and Toon don't, so they get the ambient light's fill on their own then.
   private applyLighting() {
     this.scene.environment = this.environmentEnabled ? this.environmentMap : null;
-    this.ambientLight.intensity = this.scene.environment ? 0 : this.lightIntensity * 1.5;
+    const ambient = this.lightIntensity * 1.5;
+    this.ambientLight.intensity = this.scene.environment ? 0 : ambient;
+    // Lambert, Phong and Toon don't take environment light: with the ambient light off they'd lose
+    // their fill and go darker, so they get it on their own (canvasOutput.ts).
+    this.scene.userData[AMBIENT_FILL_KEY] = this.scene.environment ? ambient : 0;
   }
 
   public updateGridVisibility(visible: boolean) {

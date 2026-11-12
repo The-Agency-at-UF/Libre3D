@@ -21,7 +21,7 @@
 import * as THREE from "three";
 import type { Material } from "three";
 import type { NodeMaterial, Renderer } from "three/webgpu";
-import { Fn, float, mix, output, positionView, select, smoothstep, sRGBTransferOETF, toneMapping, uniform, vec4 } from "three/tsl";
+import { diffuseColor, Fn, float, materialEmissive, mix, output, positionView, select, smoothstep, sRGBTransferOETF, toneMapping, uniform, vec4 } from "three/tsl";
 import { applyLayerNodes } from "./layerNodes";
 
 // The exposure the scene is tone-mapped with. It was read off <model-viewer> 4.0.0 when that played
@@ -50,6 +50,18 @@ const fogColor = uniform(new THREE.Color()).onRenderUpdate(({ scene, renderer })
   fogColorValue.copy(fog.color);
   return renderer?.getRenderTarget() === null ? fogColorValue.convertLinearToSRGB() : fogColorValue;
 });
+// The ambient fill Lambert, Phong and Toon materials miss while the scene's environment light is on
+// (SceneManager turns the ambient light off then, as Physical materials take their fill from the
+// environment, and these three don't take environment light). SceneManager keeps it on the scene;
+// 0 while the environment is off, when the ambient light gives it. Added as three adds ambient
+// light to them: the light times the base colour over π.
+export const AMBIENT_FILL_KEY = "libre3dAmbientFill";
+const ambientFill = uniform(0).onRenderUpdate(({ scene }) => (scene?.userData[AMBIENT_FILL_KEY] as number | undefined) ?? 0);
+const takesAmbientFill = (material: Material): boolean => {
+  const flags = material as unknown as Record<string, unknown>;
+  return flags.isMeshPhongMaterial === true || flags.isMeshLambertMaterial === true || flags.isMeshToonMaterial === true;
+};
+
 const fogDensity = uniform(0).onRenderUpdate(({ scene }) => (scene?.fog instanceof THREE.FogExp2 ? scene.fog.density : 0));
 const fogNear = uniform(0).onRenderUpdate(({ scene }) => (scene?.fog instanceof THREE.Fog ? scene.fog.near : 0));
 const fogFar = uniform(1).onRenderUpdate(({ scene }) => (scene?.fog instanceof THREE.Fog ? scene.fog.far : 1));
@@ -102,6 +114,10 @@ export const installCanvasOutput = (renderer: Renderer): void => {
       ? canvasOutput(toneMapped, fogged, shaded as unknown as typeof output)
       : endings[toneMapped ? "toneMapped" : "plain"][fogged ? "fogged" : "clear"];
     built.fog = false;
+    const lit = built as NodeMaterial & { emissiveNode: unknown };
+    if (takesAmbientFill(material) && !lit.emissiveNode) {
+      lit.emissiveNode = materialEmissive.add(diffuseColor.rgb.mul(ambientFill).mul(1 / Math.PI)) as never;
+    }
     return built;
   };
 };
