@@ -1,6 +1,6 @@
 /**
  * PURPOSE: Vercel serverless entry point for `POST /api/publish` (publish one of the signed-in
- *          user's scenes: `{ sceneId }` → `{ publishId, uploadUrl }`).
+ *          user's scenes: `{ sceneId }` → `{ publishId }`).
  *
  * A thin adapter: auth, ownership, and validation live in `handlePublishRequest`
  * (`src/utils/awsPublishHandler.ts`), which the Vite dev middleware in `vite.config.ts` also calls,

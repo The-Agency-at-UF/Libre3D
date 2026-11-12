@@ -61,7 +61,7 @@ export interface LightingLayer {
 }
 
 // A texture map layer, derived from an imported glTF material's maps. The pixel
-// data is never stored here (materialLayers is persisted to localStorage) — it
+// data is never stored here (materialLayers is saved in the scene document) — it
 // lives in the OPFS texture asset store, referenced by textureAssetId. wrapS/wrapT
 // are the THREE wrap constants copied straight off the source texture.
 export interface ImageLayer {
@@ -171,6 +171,10 @@ export type DeepPartial<T> = T extends object ? {
   [P in keyof T]?: DeepPartial<T[P]>;
 } : T;
 
+/**
+ * Saved with every scene, not rendered yet: nothing reads it, and nothing calls updatePostProcessing.
+ * It stays so saved documents keep their shape; post-processing will build on it.
+ */
 export interface PostProcessingConfig {
   enabled: boolean;
   toneMap: string;
@@ -220,7 +224,7 @@ export interface PostProcessingConfig {
 
 export interface SceneSettingsConfig {
   bgColor: string;
-  bgAlpha: string;
+  bgAlpha: string; // not read yet
   showGrid: boolean;
   wireframe: boolean;
   fogEnabled: boolean;
@@ -234,11 +238,14 @@ export interface SceneSettingsConfig {
   };
   lights: {
     intensity: number;
+    // Not read yet: color, ambientEnabled, directionalEnabled and shadow. They are in every saved
+    // document, so they stay until a document change takes them out or something uses them.
     color: string;
     ambientEnabled: boolean;
     directionalEnabled: boolean;
     shadow: string;
   };
+  // Not read yet (there is no physics), kept for the same reason as the lights' unread fields.
   physics: {
     enabled: boolean;
     gravityY: number;

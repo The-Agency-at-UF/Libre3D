@@ -63,14 +63,14 @@ type AssetBody = ArrayBuffer | Blob;
 const sizeOf = (body: AssetBody): number => (body instanceof Blob ? body.size : body.byteLength);
 
 /** An asset's bytes from this browser's storage, or null if they aren't here. */
-export const readLocalAsset = (ref: AssetRef): Promise<AssetBody | null> =>
+const readLocalAsset = (ref: AssetRef): Promise<AssetBody | null> =>
   ref.kind === "model" ? loadModelAsset(ref.id) : loadTextureAsset(ref.id);
 
 /**
  * PUTs an asset to its presigned URL, sending the headers it was signed with. XMLHttpRequest rather
  * than fetch because only XHR reports upload progress.
  */
-export const putAsset = (ticket: AssetUploadTicket, body: AssetBody, onProgress: (loaded: number) => void): Promise<void> =>
+const putAsset = (ticket: AssetUploadTicket, body: AssetBody, onProgress: (loaded: number) => void): Promise<void> =>
   new Promise((resolve, reject) => {
     const request = new XMLHttpRequest();
     request.open("PUT", ticket.url);
@@ -227,7 +227,7 @@ const saveLocalAsset = async (ref: AssetRef, blob: Blob): Promise<void> =>
   ref.kind === "model" ? saveModelAsset(ref.id, await blob.arrayBuffer()) : saveTextureAsset(ref.id, blob);
 
 /** GETs a presigned URL, reporting bytes as they arrive. */
-export const fetchAssetBlob = async (url: string, onProgress: (loaded: number) => void): Promise<Blob> => {
+const fetchAssetBlob = async (url: string, onProgress: (loaded: number) => void): Promise<Blob> => {
   let response: Response;
 
   try {

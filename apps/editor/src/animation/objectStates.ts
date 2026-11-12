@@ -151,7 +151,7 @@ export const createObjectState = (states: Record<string, ObjectState>, entityId:
 };
 
 /** The angle equal to `angle` (in radians, give or take whole turns) nearest `reference`. */
-export const unwrapAngle = (angle: number, reference: number): number =>
+const unwrapAngle = (angle: number, reference: number): number =>
   angle + FULL_TURN * Math.round((reference - angle) / FULL_TURN);
 
 /**

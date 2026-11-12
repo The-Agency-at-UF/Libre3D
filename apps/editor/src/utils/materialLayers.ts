@@ -36,7 +36,7 @@ const createLayerId = (): string => createId("layer");
 // materialClassForLayer (viewport/entityMaterials.ts) in reverse. MeshPhysicalMaterial extends
 // MeshStandardMaterial and both map to "physical" (clearcoat is read into the
 // lighting layer; other physical-only features like sheen aren't surfaced yet).
-export function lightingModelForMaterial(material: THREE.Material): LightingModel {
+function lightingModelForMaterial(material: THREE.Material): LightingModel {
   if (material instanceof THREE.MeshStandardMaterial) return "physical"; // incl. MeshPhysicalMaterial
   if (material instanceof THREE.MeshPhongMaterial) return "phong";
   if (material instanceof THREE.MeshToonMaterial) return "toon";

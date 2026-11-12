@@ -31,7 +31,3 @@ export function loadTextureAsset(textureAssetId: string): Promise<Blob | null> {
 export function hasTextureAsset(textureAssetId: string): Promise<boolean> {
   return store.has(textureAssetId);
 }
-
-export function deleteTextureAsset(textureAssetId: string): Promise<void> {
-  return store.remove(textureAssetId);
-}

@@ -226,7 +226,7 @@ Open the same scene in two tabs of one browser (or two browsers signed in as the
 
 ### Imported Assets (Cloud)
 
-Use a GLB with textures. "Clean storage" means another browser or profile, or deleting the scene's assets in the console: `(await import("/src/utils/modelAssetStore.ts")).deleteModelAsset(id)` (and `textureAssetStore`'s `deleteTextureAsset`).
+Use a GLB with textures. "Clean storage" means another browser or profile, or clearing the site's storage in DevTools (Application → Storage → Clear site data), which removes everything else this browser keeps for the site too.
 
 **In addition to smoke test**:
 

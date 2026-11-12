@@ -28,7 +28,7 @@ export interface ShapeSolid {
   bevel: number;
 }
 
-export const DEFAULT_SOLID: ShapeSolid = { extrusion: 0, bevel: 0 };
+const DEFAULT_SOLID: ShapeSolid = { extrusion: 0, bevel: 0 };
 
 const CURVE_SEGMENTS = 12; // per Bézier segment
 const BEVEL_SEGMENTS = 4;
@@ -106,7 +106,7 @@ const contourToPath = <T extends THREE.Path>(contour: PathData, target: T): T =>
 };
 
 /** The shape as Three shapes (outline + holes), for ShapeGeometry and ExtrudeGeometry. */
-export const toThreeShapes = (shape: ShapeData): THREE.Shape[] =>
+const toThreeShapes = (shape: ShapeData): THREE.Shape[] =>
   shape.regions
     .filter((region) => region.outline.points.length >= 3)
     .map((region) => {
