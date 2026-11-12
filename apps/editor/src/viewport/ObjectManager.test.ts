@@ -171,3 +171,62 @@ describe("ObjectManager image planes", () => {
     vi.doUnmock("../utils/assetTransfers");
   });
 });
+
+describe("ObjectManager lighting (task D, PR 4)", () => {
+  it("builds a physical material for sheen, iridescence, IOR or reflectivity, and sets them", async () => {
+    const { sync } = await buildCube();
+
+    expect(sync({})).not.toBeInstanceOf(MeshPhysicalNodeMaterial);
+    const material = sync({ sheen: 0.5, iridescence: 0.25, ior: 1.8, reflectivity: 0.4 }) as MeshPhysicalNodeMaterial;
+
+    expect(material).toBeInstanceOf(MeshPhysicalNodeMaterial);
+    expect(material).toMatchObject({ sheen: 0.5, iridescence: 0.25, specularIntensity: 0.4 });
+    expect(material.ior).toBeCloseTo(1.8, 6);
+    expect(sync({ ior: 2 })).toBeInstanceOf(MeshPhysicalNodeMaterial);
+  });
+
+  it("sets Phong's specular colour", async () => {
+    const { sync } = await buildCube();
+
+    const material = sync({ model: "phong", specular: "#ff0000" }) as unknown as { specular: THREE.Color };
+
+    expect(material.specular.getHexString()).toBe("ff0000");
+  });
+
+  it("loads a Lighting map's picture for its slot", async () => {
+    vi.resetModules();
+    const loadTextureForScene = vi.fn(() => new Promise<Blob | null>(() => {}));
+    vi.doMock("../utils/assetTransfers", () => ({ loadTextureForScene, loadModelForScene: vi.fn() }));
+    const [{ useEditorStore }, { ObjectManager }, { editorSceneSource }] = await Promise.all([
+      import("../store/useEditorStore"),
+      import("./ObjectManager"),
+      import("./editorSceneSource"),
+    ]);
+    const meshMap = new Map<string, THREE.Object3D>();
+    const manager = new ObjectManager(new THREE.Scene(), meshMap, editorSceneSource, { getRenderer: () => null });
+    const cube = useEditorStore.getState().entities.find((entity) => entity.type === "cube")!;
+    const lighting = cube.materialLayers!.find((layer) => layer.type === "lighting")!;
+    const hash = "c".repeat(64);
+
+    useEditorStore.getState().updateMaterialLayer(cube.id, lighting.id, { maps: { normal: { textureAssetId: hash, wrapS: 1000, wrapT: 1000, flipY: true } } });
+    manager.syncMeshes(useEditorStore.getState().entities, null, false);
+
+    expect(loadTextureForScene).toHaveBeenCalledWith(hash);
+    vi.doUnmock("../utils/assetTransfers");
+  });
+
+  it("draws an object see-through where its layers leave it uncovered", async () => {
+    const { useEditorStore, createObjectManager } = await loadModules();
+    const meshMap = new Map<string, THREE.Object3D>();
+    const manager = createObjectManager(meshMap);
+    const cube = useEditorStore.getState().entities.find((entity) => entity.type === "cube")!;
+    const color = cube.materialLayers!.find((layer) => layer.type === "color")!;
+
+    useEditorStore.getState().switchMaterialLayerType(cube.id, color.id, "fresnel");
+    manager.syncMeshes(useEditorStore.getState().entities, null, false);
+    const material = (meshMap.get(cube.id) as THREE.Mesh).material as THREE.Material;
+
+    expect(material.transparent).toBe(true);
+    expect(material).toHaveProperty("libre3dLayerStack");
+  });
+});

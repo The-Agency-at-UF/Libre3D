@@ -65,6 +65,15 @@ describe("collectAssetRefs", () => {
     ]);
   });
 
+  it("lists a Lighting layer's maps' pictures too", () => {
+    const entities = [{ id: "mesh", materialLayers: [{ type: "lighting", maps: { normal: { textureAssetId: TEXTURE }, roughness: { textureAssetId: MODEL } } }] }];
+
+    expect(collectAssetRefs(entities)).toEqual([
+      { id: TEXTURE, kind: "texture" },
+      { id: MODEL, kind: "texture" },
+    ]);
+  });
+
   it("includes the random IDs of assets imported before cloud assets", () => {
     expect(collectAssetRefs([{ assetId: "asset-old" }])).toEqual([{ id: "asset-old", kind: "model" }]);
   });
