@@ -21,7 +21,7 @@ import type { PaintLayerType } from "../../scene/entityFactories";
 import { BLEND_MODES, canSwitchLayerType, maskTarget, movableRange, removeBlockedReason, SWITCHABLE_LAYER_TYPES } from "../../scene/layerStack";
 import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
-import { ColorSettings, DepthSettings, ImageSettings, LightingSettings } from "./LayerSettings";
+import { ColorSettings, DepthSettings, GradientSettings, ImageSettings, LightingSettings } from "./LayerSettings";
 import {
   asOneUndoStep,
   BLEND_MODE_ICONS,
@@ -332,6 +332,7 @@ function LayerDrawer({ row, anchor, onClose }: { row: LayerRowData; anchor: HTML
         {row.type === "color" && <ColorSettings row={row} />}
         {row.type === "lighting" && <LightingSettings row={row} />}
         {row.type === "depth" && <DepthSettings row={row} />}
+        {row.type === "gradient" && <GradientSettings row={row} />}
         {row.type === "image" && <ImageSettings layer={row.pairs[0].layer as ImageLayer} />}
       </fieldset>
     </div>,
