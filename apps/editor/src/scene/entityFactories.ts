@@ -212,7 +212,7 @@ export const createGlassLayer = (): GlassLayer => ({
   enabled: true,
   opacity: 1,
   blendMode: "normal",
-  blur: 10,
+  blur: 5,
   thickness: 10,
   ior: 1.5,
   absorption: "#ffffff",
