@@ -316,7 +316,8 @@ export function ViewportCanvas() {
       const entity     = byId.get(id);
       const isSelected = selectedIdSet.has(id);
       if (obj.userData.selectionOutline) {
-        (obj.userData.selectionOutline as THREE.LineSegments).visible = isSelected && (entity?.visible ?? true);
+        // Hidden while a Depth layer is edited (as Spline does), so the box doesn't hide the gradient.
+        (obj.userData.selectionOutline as THREE.LineSegments).visible = isSelected && !isEditingDepth && (entity?.visible ?? true);
       }
       if (obj.userData.helper) {
         const helper = obj.userData.helper as THREE.DirectionalLightHelper;
