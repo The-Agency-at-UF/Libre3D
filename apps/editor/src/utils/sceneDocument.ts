@@ -179,6 +179,41 @@ const migrateLayersToV5 = (entity: unknown): unknown => {
   };
 };
 
+// The Lighting maps an imported model's Image layers filled before task D's PR 4 (glTF's packed
+// metallic-roughness picture fills both roughness and metalness, as three does).
+const IMAGE_SLOT_MAPS: Record<string, string[]> = {
+  normal: ["normal"],
+  metallicRoughness: ["roughness", "metalness"],
+  emissive: ["emissive"],
+  ao: ["ao"],
+};
+
+/**
+ * Before task D's PR 4 an imported model's normal, metallic-roughness, emissive and AO pictures were
+ * Image layers; they're its Lighting layer's maps now. (Inside schema v5, which only `dev` had: a
+ * document saved since is left as it is.) One whose eye was off was showing nothing, so it goes.
+ */
+const foldImageMapsIntoLighting = (entity: unknown): unknown => {
+  if (!isPlainObject(entity) || !Array.isArray(entity.materialLayers)) return entity;
+  const layers = entity.materialLayers as unknown[];
+  const isMapLayer = (layer: unknown): layer is Record<string, unknown> =>
+    isPlainObject(layer) && layer.type === "image" && typeof layer.slot === "string" && layer.slot in IMAGE_SLOT_MAPS;
+  const lighting = layers.find((layer): layer is Record<string, unknown> => isPlainObject(layer) && layer.type === "lighting");
+  if (!lighting || !layers.some(isMapLayer)) return entity;
+
+  const maps: Record<string, unknown> = isPlainObject(lighting.maps) ? { ...lighting.maps } : {};
+  for (const layer of layers.filter(isMapLayer)) {
+    if (layer.enabled === false || typeof layer.textureAssetId !== "string") continue;
+    for (const slot of IMAGE_SLOT_MAPS[layer.slot as string]) {
+      maps[slot] ??= { textureAssetId: layer.textureAssetId, wrapS: layer.wrapS, wrapT: layer.wrapT };
+    }
+  }
+  return {
+    ...entity,
+    materialLayers: layers.filter((layer) => !isMapLayer(layer)).map((layer) => (layer === lighting ? { ...lighting, maps } : layer)),
+  };
+};
+
 export const toSceneDocument = (content: SceneContent): SceneDocument => ({
   format: SCENE_DOCUMENT_FORMAT,
   schemaVersion: CURRENT_SCENE_SCHEMA_VERSION,
@@ -230,7 +265,7 @@ export const parseSceneDocument = (raw: unknown): ParsedSceneDocument => {
   return {
     ok: true,
     content: {
-      entities: scene.entities as Entity[],
+      entities: scene.entities.map(foldImageMapsIntoLighting) as Entity[],
       sceneSettings: isPlainObject(scene.sceneSettings) ? scene.sceneSettings : undefined,
       postProcessing: isPlainObject(scene.postProcessing) ? scene.postProcessing : undefined,
       frame: isPlainObject(scene.frame) ? scene.frame : undefined,

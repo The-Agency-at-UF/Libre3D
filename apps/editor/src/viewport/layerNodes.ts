@@ -1,21 +1,23 @@
 /**
- * PURPOSE: Draws an object's material layer stack (scene/layerStack.ts) where one colour won't do:
- * a Depth layer's ramp with layers blended under and over it, and Lighting's opacity (how much
- * shading shows). Also bakes that blend into the vertex colours for a glTF export.
+ * PURPOSE: Draws an object's material layer stack (scene/layerStack.ts) where the material's own
+ * colour won't do: layers that paint per pixel (Depth, Gradient, Noise, Fresnel), masks, layers over
+ * Lighting, and Lighting's opacity (how much shading shows).
  *
  * INPUT: An entity material (viewport/entityMaterials.ts) and its object's planned stack.
  * OUTPUT: TSL nodes for the node material three builds the material's shader from.
  *
  * The nodes never go on the material itself: three refreshes every uniform of a material that holds
  * a node on every frame (NodeMaterialObserver), which cost 3 ms a frame for 400 objects. So the
- * material only gets a record here; the canvas-output hook (canvasOutput.ts) asks for the nodes
- * when three builds a shader, and puts them on the stand-in it builds from. Colours and opacities
- * are uniforms, so dragging one changes a number; a change to the stack's shape (a blend mode, an
- * eye, the order) rebuilds the shader once.
+ * material only gets a record here; the canvas-output hook (canvasOutput.ts) asks for the nodes when
+ * three builds a shader, and puts them on the stand-in it builds from. Colours, opacities and every
+ * setting are uniforms, so dragging one changes a number; a change to the stack's shape (a type, a
+ * blend mode, an eye, a mask, the order, a ramp's stop count) rebuilds the shader once.
  *
- * The blend runs per vertex, in the vertex shader, as the Depth layer's paint did before task D:
- * the ramp is the mesh's vertex colours, and the W3C formulas run on sRGB values. A stack that adds
- * up to one colour needs none of this: entityMaterials.ts sets that colour on the material.
+ * Each layer's colour is worked out per pixel (layerSources.ts) and blended over the layers under
+ * it with the W3C formulas on sRGB values, as picked. The layers under Lighting are the material's
+ * colour node and get shaded; the layers over it go on the shaded colour before the canvas ending
+ * tone-maps it, as an unlit object's colour does. A stack that is only Color layers under Lighting
+ * needs none of this: entityMaterials.ts sets that colour on the material.
  *
  * No store, React or DOM here: the share-link viewer draws with this too.
  */
@@ -23,23 +25,35 @@
 import * as THREE from "three";
 import type { Material } from "three";
 import type { NodeMaterial } from "three/webgpu";
-import { diffuseColor, float, materialColor, max, mix, output, sRGBTransferEOTF, sRGBTransferOETF, step, uniform, varying, vec4, vertexColor } from "three/tsl";
-import { evaluatePlan, hexToRgb, type RGB, type StackPlan } from "../scene/layerStack";
+import { diffuseColor, dot, float, materialColor, max, mix, output, positionLocal, positionWorld, sRGBTransferEOTF, sRGBTransferOETF, step, uniform, vec3, vec4 } from "three/tsl";
+import { isPlainPlan, type PlanStep, type StackPlan } from "../scene/layerStack";
 import type { BlendMode } from "../scene/types";
+import { createLayerSource, layerSourceShape, type LayerSource, type SourceContext } from "./layerSources";
 
 type Node = ReturnType<typeof float>;
-type Vec3Uniform = ReturnType<typeof uniform<THREE.Vector3>>;
 type FloatUniform = ReturnType<typeof uniform<number>>;
+
+const n = (node: unknown): Node => node as Node;
+
+interface StepNodes {
+  layerId: string;
+  source: LayerSource;
+  mask: { layerId: string; source: LayerSource; opacity: FloatUniform } | null;
+  opacity: FloatUniform;
+  mode: BlendMode;
+}
 
 interface LayerStackRecord {
   // The stack's shape, which the shader is built for: a change rebuilds it.
   shape: string;
-  plan: StackPlan;
-  under: { color: Vec3Uniform; alpha: FloatUniform };
-  depth: { mode: BlendMode; opacity: FloatUniform } | null;
-  over: Array<{ mode: BlendMode; color: Vec3Uniform; opacity: FloatUniform }>;
+  // Null when the layers under Lighting are the material's own colour (Color layers alone).
+  under: StepNodes[] | null;
+  over: StepNodes[];
   // Lighting's opacity, while it's under 1; null at 1 (three's own lit result).
   strength: FloatUniform | null;
+  // The object whose own space Depth and Noise work in, when it isn't the mesh's: a path, whose end
+  // caps are meshes of their own inside it.
+  space: { object: THREE.Object3D; inverse: ReturnType<typeof uniform<THREE.Matrix4>> } | null;
   // Built once per record, on the first shader build.
   colorNode?: Node;
 }
@@ -51,21 +65,43 @@ const records = new WeakMap<Material, LayerStackRecord>();
 // the key: two shapes never share a shader.
 const SHAPE_KEY = "libre3dLayerStack";
 
-const shapeOf = (plan: StackPlan, strength: number): string | null => {
-  if (!plan.depth && strength >= 1) return null;
-  return [plan.depth ? `depth:${plan.depth.blendMode}` : "", ...plan.over.map((layer) => layer.blendMode), strength < 1 ? "lit" : ""].join("|");
+const stepShape = (step: PlanStep): string =>
+  `${layerSourceShape(step.layer)}/${step.layer.blendMode}${step.mask ? `/mask:${layerSourceShape(step.mask)}` : ""}`;
+
+const shapeOf = (plan: StackPlan, space: THREE.Object3D | null): string | null => {
+  if (isPlainPlan(plan)) return null;
+  return [
+    plan.folded ? "under:plain" : `under:${plan.under.map(stepShape).join(",")}`,
+    `over:${plan.over.map(stepShape).join(",")}`,
+    plan.strength < 1 ? "lit" : "",
+    space ? "space" : "",
+  ].join("|");
 };
 
-const setVec3 = (target: Vec3Uniform, rgb: RGB): void => {
-  target.value.set(rgb[0], rgb[1], rgb[2]);
+const stepNodes = (step: PlanStep): StepNodes => ({
+  layerId: step.layer.id,
+  source: createLayerSource(step.layer),
+  mask: step.mask ? { layerId: step.mask.id, source: createLayerSource(step.mask), opacity: uniform(1) } : null,
+  opacity: uniform(1),
+  mode: step.layer.blendMode,
+});
+
+const updateStep = (nodes: StepNodes, step: PlanStep): void => {
+  nodes.source.update(step.layer);
+  nodes.opacity.value = Math.min(1, Math.max(0, step.layer.opacity));
+  if (nodes.mask && step.mask) {
+    nodes.mask.source.update(step.mask);
+    nodes.mask.opacity.value = Math.min(1, Math.max(0, step.mask.opacity));
+  }
 };
 
 /**
- * Brings `material`'s stack record up to date with `plan` and the shading strength (Lighting's
- * opacity). Returns true when the shader must be rebuilt (the caller sets `needsUpdate`).
+ * Brings `material`'s stack record up to date with `plan`. `space` is the object whose own space
+ * Depth and Noise use when it isn't the mesh drawn (a path, for its end caps). Returns true when the
+ * shader must be rebuilt (the caller sets `needsUpdate`).
  */
-export const syncLayerNodes = (material: Material, plan: StackPlan, strength: number): boolean => {
-  const shape = shapeOf(plan, strength);
+export const syncLayerNodes = (material: Material, plan: StackPlan, space: THREE.Object3D | null = null): boolean => {
+  const shape = shapeOf(plan, space);
   const existing = records.get(material);
   const keyed = material as unknown as Record<string, unknown>;
 
@@ -77,29 +113,23 @@ export const syncLayerNodes = (material: Material, plan: StackPlan, strength: nu
   }
 
   let record = existing;
-  const rebuilt = !record || record.shape !== shape;
+  const rebuilt = !record || record.shape !== shape || record.space?.object !== (space ?? undefined);
   if (!record || rebuilt) {
+    const inverse = new THREE.Matrix4();
     record = {
       shape,
-      plan,
-      under: { color: uniform(new THREE.Vector3()), alpha: uniform(0) },
-      depth: plan.depth ? { mode: plan.depth.blendMode, opacity: uniform(1) } : null,
-      over: plan.over.map((layer) => ({ mode: layer.blendMode, color: uniform(new THREE.Vector3()), opacity: uniform(1) })),
-      strength: strength < 1 ? uniform(1) : null,
+      under: plan.folded ? null : plan.under.map(stepNodes),
+      over: plan.over.map(stepNodes),
+      strength: plan.strength < 1 ? uniform(1) : null,
+      space: space ? { object: space, inverse: uniform(inverse).onRenderUpdate(() => inverse.copy(space.matrixWorld).invert()) } : null,
     };
     records.set(material, record);
     keyed[SHAPE_KEY] = shape;
   }
 
-  record.plan = plan;
-  setVec3(record.under.color, plan.under.rgb);
-  record.under.alpha.value = plan.under.alpha;
-  if (record.depth && plan.depth) record.depth.opacity.value = plan.depth.opacity;
-  plan.over.forEach((layer, index) => {
-    setVec3(record.over[index].color, hexToRgb(layer.color));
-    record.over[index].opacity.value = layer.opacity;
-  });
-  if (record.strength) record.strength.value = strength;
+  if (record.under) plan.under.forEach((step, index) => updateStep(record.under![index], step));
+  plan.over.forEach((step, index) => updateStep(record.over[index], step));
+  if (record.strength) record.strength.value = plan.strength;
   return rebuilt;
 };
 
@@ -112,14 +142,14 @@ export const dropLayerNodes = (material: Material): void => {
 const blend = (mode: BlendMode, backdrop: Node, source: Node): Node => {
   switch (mode) {
     case "multiply":
-      return backdrop.mul(source);
+      return n(backdrop.mul(source));
     case "screen":
-      return backdrop.add(source).sub(backdrop.mul(source));
+      return n(backdrop.add(source).sub(backdrop.mul(source)));
     case "overlay": {
       const dark = backdrop.mul(source).mul(2);
       const light = float(1).sub(backdrop.oneMinus().mul(source.oneMinus()).mul(2));
       // step(0.5, b) is 1 from 0.5 up; at exactly 0.5 both formulas give the source.
-      return mix(dark, light, step(0.5, backdrop));
+      return n(mix(dark, light, step(0.5, backdrop)));
     }
     case "normal":
     default:
@@ -127,81 +157,76 @@ const blend = (mode: BlendMode, backdrop: Node, source: Node): Node => {
   }
 };
 
-// `source` (alpha `as`) over `backdrop` (alpha `ab`) with `mode` (layerStack.ts, compositeOver).
-const compositeOver = (backdrop: Node, ab: Node, source: Node, as: Node, mode: BlendMode): { color: Node; alpha: Node } => {
-  const mixed = source.mul(ab.oneMinus()).add(blend(mode, backdrop, source).mul(ab));
-  const alpha = as.add(ab.mul(as.oneMinus()));
-  const color = mixed.mul(as).add(backdrop.mul(ab).mul(as.oneMinus())).div(max(alpha, 1e-6));
-  return { color, alpha };
+interface Paint {
+  rgb: Node;
+  a: Node;
+}
+
+// `source` (alpha `as`) over `backdrop` with `mode` (layerStack.ts, compositeOver).
+const compositeOver = (backdrop: Paint, source: Node, as: Node, mode: BlendMode): Paint => {
+  const ab = backdrop.a;
+  const mixed = source.mul(ab.oneMinus()).add(blend(mode, backdrop.rgb, source).mul(ab));
+  const a = n(as.add(ab.mul(as.oneMinus())));
+  const rgb = n(mixed.mul(as).add(backdrop.rgb.mul(ab).mul(as.oneMinus())).div(max(a, 1e-6)));
+  return { rgb, a };
 };
 
-// The stack's colour as the material's colour node: per vertex, linear, times the material's own
-// colour (white) and map, as three would have multiplied them.
-const buildColorNode = (record: LayerStackRecord): Node => {
-  let color: Node = record.under.color as unknown as Node;
-  let alpha: Node = record.under.alpha as unknown as Node;
-  if (record.depth) {
-    // The vertex colours hold the ramp in linear values; the blend works on sRGB ones.
-    const ramp = sRGBTransferOETF(vertexColor().rgb) as unknown as Node;
-    ({ color, alpha } = compositeOver(color, alpha, ramp, record.depth.opacity as unknown as Node, record.depth.mode));
+// How light a mask is (layerStack.ts, maskValue): Rec. 709 weights on sRGB, times its alpha.
+const maskValue = (paint: { rgb: Node; a: Node }): Node => n(dot(paint.rgb, vec3(0.2126, 0.7152, 0.0722)).mul(paint.a).clamp(0, 1));
+
+// The steps blended over `base`, bottom first (layerStack.ts, evaluateSteps).
+const blendSteps = (steps: StepNodes[], base: Paint, context: SourceContext): Paint => {
+  let result = base;
+  for (const step of steps) {
+    const source = step.source.node(context);
+    let alpha = n(source.a.mul(n(step.opacity)));
+    if (step.mask) {
+      const shown = maskValue(step.mask.source.node(context));
+      alpha = n(alpha.mul(float(1).sub(n(step.mask.opacity).mul(shown.oneMinus()))));
+    }
+    result = compositeOver(result, source.rgb, alpha, step.mode);
   }
-  for (const layer of record.over) {
-    ({ color, alpha } = compositeOver(color, alpha, layer.color as unknown as Node, layer.opacity as unknown as Node, layer.mode));
-  }
-  const linear = varying(sRGBTransferEOTF(color as never)) as unknown as Node;
+  return result;
+};
+
+const contextOf = (record: LayerStackRecord): SourceContext => ({
+  objectPosition: record.space ? n(n(record.space.inverse).mul(vec4(positionWorld, 1)).xyz) : n(positionLocal),
+});
+
+// The layers under Lighting as the material's colour node: linear, times the material's own colour
+// (white while it has one of these) and map, as three would have multiplied them. Where nothing
+// paints, the object is see-through (the stack's alpha).
+const buildColorNode = (record: LayerStackRecord, steps: StepNodes[]): Node => {
+  const nothing: Paint = { rgb: n(vec3(0, 0, 0)), a: float(0) };
+  const white: Paint = { rgb: n(vec3(1, 1, 1)), a: float(1) };
+  const painted = steps.length > 0 ? blendSteps(steps, nothing, contextOf(record)) : white;
   // Without a colour node three takes the material's colour times its map (materialColor); with one
-  // it doesn't, so that's multiplied in here. The material's colour is white while it has a record,
-  // so this is the map, or white.
-  return vec4(linear, 1).mul(vec4(materialColor as never)) as unknown as Node;
+  // it doesn't, so that's multiplied in here.
+  return n(vec4(sRGBTransferEOTF(n(painted.rgb.clamp(0, 1))), painted.a).mul(vec4(materialColor as never)));
 };
 
 /**
  * Puts `material`'s stack nodes on `built`, the node material three builds its shader from
  * (canvasOutput.ts's hook), and returns what the canvas ending should start from: three's lit
- * colour mixed back toward the unlit one by Lighting's opacity, or null for three's own.
+ * colour mixed back toward the unlit one by Lighting's opacity, with the layers over Lighting on it;
+ * or null for three's own.
  */
 export const applyLayerNodes = (material: Material, built: NodeMaterial): Node | null => {
   const record = records.get(material);
   if (!record) return null;
-  if (record.depth) {
-    record.colorNode ??= buildColorNode(record);
+  if (record.under) {
+    record.colorNode ??= buildColorNode(record, record.under);
     built.colorNode = record.colorNode as never;
-    // The ramp is read in the colour node; three mustn't multiply it in again.
-    built.vertexColors = false;
   }
-  if (!record.strength) return null;
-  return vec4(mix(diffuseColor.rgb, output.rgb, record.strength), output.a) as unknown as Node;
-};
+  if (!record.strength && record.over.length === 0) return null;
 
-/**
- * For a glTF export, which can't blend layers: each mesh drawn with a Depth stack gets vertex
- * colours with the whole stack baked in (the CPU twin of the shader above) for the length of the
- * export. Its material's colour is already white, so the file shows what the editor does. Returns
- * the undo.
- */
-export const bakeLayerStacksForExport = (scene: THREE.Object3D): (() => void) => {
-  const restores: Array<() => void> = [];
-  const baked = new Set<THREE.BufferGeometry>();
-  const linear = new THREE.Color();
-
-  scene.traverse((object) => {
-    if (!(object instanceof THREE.Mesh) || Array.isArray(object.material)) return;
-    const record = records.get(object.material);
-    const geometry = object.geometry as THREE.BufferGeometry;
-    const ramp = geometry.getAttribute("color");
-    if (!record?.depth || !ramp || baked.has(geometry)) return;
-    baked.add(geometry);
-
-    const colors = new THREE.BufferAttribute(new Float32Array(ramp.count * 3), 3);
-    for (let i = 0; i < ramp.count; i += 1) {
-      linear.setRGB(ramp.getX(i), ramp.getY(i), ramp.getZ(i)).convertLinearToSRGB();
-      const paint = evaluatePlan(record.plan, [linear.r, linear.g, linear.b]);
-      linear.setRGB(paint.rgb[0], paint.rgb[1], paint.rgb[2], THREE.SRGBColorSpace);
-      colors.setXYZ(i, linear.r, linear.g, linear.b);
-    }
-    geometry.setAttribute("color", colors);
-    restores.push(() => geometry.setAttribute("color", ramp));
-  });
-
-  return () => restores.forEach((restore) => restore());
+  let lit: Paint = { rgb: n(output.rgb), a: n(output.a) };
+  if (record.strength) lit = { rgb: n(mix(diffuseColor.rgb, output.rgb, record.strength)), a: lit.a };
+  if (record.over.length > 0) {
+    // On sRGB values, as the colours are picked; a lit colour can be over 1, which tone mapping brings back.
+    const shaded: Paint = { rgb: n(sRGBTransferOETF(n(max(lit.rgb, vec3(0, 0, 0))))), a: lit.a };
+    const painted = blendSteps(record.over, shaded, contextOf(record));
+    lit = { rgb: n(sRGBTransferEOTF(painted.rgb)), a: painted.a };
+  }
+  return n(vec4(lit.rgb, lit.a));
 };

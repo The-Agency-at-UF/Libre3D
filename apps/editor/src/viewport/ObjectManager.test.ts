@@ -133,19 +133,15 @@ describe("ObjectManager planes", () => {
     expect(mesh.material.side).toBe(THREE.DoubleSide);
   });
 
-  it("has enough vertices for a Depth layer to blend across it", async () => {
+  it("draws a Depth layer per pixel, not as vertex colours", async () => {
     const { useEditorStore, id, sync } = await buildPlane();
     useEditorStore.getState().addMaterialLayer(id, "depth");
 
     const mesh = sync();
-    const colors = mesh.geometry.getAttribute("color");
 
-    expect(mesh.geometry.getAttribute("position").count).toBeGreaterThanOrEqual(33 * 33);
-    expect(colors.count).toBe(mesh.geometry.getAttribute("position").count);
-    // The corners, farther from the centre, sit further along the ramp than the middle does.
-    const middle = Math.floor(colors.count / 2);
-    expect([colors.getX(0), colors.getY(0), colors.getZ(0)]).not.toEqual([colors.getX(middle), colors.getY(middle), colors.getZ(middle)]);
-    expect(mesh.material.vertexColors).toBe(true);
+    expect(mesh.geometry.getAttribute("color")).toBeUndefined();
+    expect(mesh.material.vertexColors).toBe(false);
+    expect(mesh.material).toHaveProperty("libre3dLayerStack");
   });
 });
 

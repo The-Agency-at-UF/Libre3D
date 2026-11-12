@@ -1,6 +1,6 @@
 import { useRef } from "react";
-import { useEditorStore, type DepthLayer, type DepthStop } from "../../store/useEditorStore";
-import { depthRampHex, MAX_DEPTH_STOPS } from "../../utils/depthColors";
+import { useEditorStore, type DepthLayer, type RampStop } from "../../store/useEditorStore";
+import { MAX_RAMP_STOPS as MAX_DEPTH_STOPS, rampStopAt } from "../../scene/layerStack";
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
@@ -20,7 +20,7 @@ export function DepthRamp({
   layer: DepthLayer;
   selected: number;
   onSelect: (index: number) => void;
-  onChange: (stops: DepthStop[]) => void;
+  onChange: (stops: RampStop[]) => void;
 }) {
   const barRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ index: number; historyPaused: boolean } | null>(null);
@@ -37,7 +37,7 @@ export function DepthRamp({
   const addStop = (event: React.PointerEvent) => {
     if (stops.length >= MAX_DEPTH_STOPS) return;
     const position = positionAt(event.clientX);
-    onChange([...stops, { color: depthRampHex(layer, position), position }]);
+    onChange([...stops, rampStopAt(stops, layer.smooth, position)]);
     onSelect(stops.length);
   };
 

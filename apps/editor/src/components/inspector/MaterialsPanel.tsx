@@ -29,6 +29,7 @@ import {
   type DepthLayer,
 } from "../../store/useEditorStore";
 import { colorLayerOf, lightingLayerOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../../scene/layers";
+import type { PaintLayerType } from "../../scene/entityFactories";
 import { BLEND_MODES, canSwitchLayerType, movableRange, removeBlockedReason, SWITCHABLE_LAYER_TYPES } from "../../scene/layerStack";
 import { loadTextureForScene } from "../../utils/assetTransfers";
 import { depthReach } from "../../utils/depthColors";
@@ -49,6 +50,9 @@ const LAYER_TYPE_NAMES: Record<MaterialLayerType, string> = {
   lighting: "Lighting",
   image: "Image",
   depth: "Depth",
+  gradient: "Gradient",
+  noise: "Noise",
+  fresnel: "Fresnel",
 };
 
 const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
@@ -56,6 +60,9 @@ const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
   lighting: "ti-bulb",
   image: "ti-photo",
   depth: "ti-circles",
+  gradient: "ti-color-filter",
+  noise: "ti-grain",
+  fresnel: "ti-circle-dot",
 };
 
 const BLEND_MODE_NAMES: Record<BlendMode, string> = {
@@ -503,7 +510,7 @@ function LayerRow({
           onSelect={(type) =>
             asOneUndoStep(
               row.pairs.map(({ entity, layer }) => () =>
-                switchMaterialLayerType(entity.id, layer.id, type as "color" | "depth", type === "depth" ? liveDepthReach(entity.id) : undefined),
+                switchMaterialLayerType(entity.id, layer.id, type as PaintLayerType, type === "depth" ? liveDepthReach(entity.id) : undefined),
               ),
             )
           }

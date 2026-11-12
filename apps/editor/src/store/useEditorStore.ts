@@ -56,18 +56,18 @@ import {
   cloneEntity,
   cloneMaterialLayer,
   createCameraProfile,
-  createColorLayer,
-  createDepthLayer,
   createEntity,
   createEntityId,
   createFlatMaterialLayers,
   createLightingLayer,
+  createPaintLayer,
   createStartingEntities,
   ENTITY_DEFAULTS,
   initialEntities,
   switchLayerType,
+  type PaintLayerType,
 } from "../scene/entityFactories";
-import { canRemoveLayer, canSwitchLayerType, moveLayer, newLayerIndex } from "../scene/layerStack";
+import { canRemoveLayer, canSwitchLayerType, isColorLayerType, moveLayer, newLayerIndex } from "../scene/layerStack";
 import type {
   CameraProfile,
   ColorLayer,
@@ -92,8 +92,16 @@ export type {
   ColorLayer,
   DeepPartial,
   DepthLayer,
-  DepthStop,
   Entity,
+  FresnelLayer,
+  GradientLayer,
+  LightingMapSlot,
+  NoiseLayer,
+  NoiseType,
+  PaintColor,
+  RampStop,
+  TextureRef,
+  VoronoiStyle,
   EntityType,
   FrameMode,
   FrameSettingsConfig,
@@ -310,16 +318,16 @@ export interface EditorState {
    */
   materials: Record<string, MaterialAsset>;
   /**
-   * Adds a layer to an object's stack (scene/layerStack.ts): a Color or Depth layer just under
-   * Lighting (Depth one per object), or a Lighting layer on top when it has none. `depthFar`: where
-   * a new Depth layer's ramp ends (its object's reach); 2 when not given.
+   * Adds a layer to an object's stack (scene/layerStack.ts): a colour layer just under Lighting (a
+   * Fresnel layer over it, where it glows), or a Lighting layer on top when it has none. `depthFar`:
+   * where a new Depth layer's ramp ends (its object's reach); 2 when not given.
    */
   addMaterialLayer: (entityId: string, layerType: MaterialLayerType, depthFar?: number) => void;
-  /** Removes a layer the stack rules allow removing (never Lighting; Color only while another colour layer stays). */
+  /** Removes a layer the stack rules allow removing (never Lighting; a painting layer only while another one stays). */
   removeMaterialLayer: (entityId: string, layerId: string) => void;
-  /** Turns a layer into another type (Color ↔ Depth), keeping its ID, eye, opacity and blend mode. */
-  switchMaterialLayerType: (entityId: string, layerId: string, type: "color" | "depth", depthFar?: number) => void;
-  /** Moves a layer to `toIndex` in the stack (top = 0), between Lighting and the Image layers. */
+  /** Turns a colour layer into another colour type, keeping its ID, eye, opacity, blend mode and Mode. */
+  switchMaterialLayerType: (entityId: string, layerId: string, type: PaintLayerType, depthFar?: number) => void;
+  /** Moves a layer to `toIndex` in the stack (top = 0), above the Image layers. */
   moveMaterialLayer: (entityId: string, layerId: string, toIndex: number) => void;
   updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
@@ -1257,14 +1265,10 @@ export const useEditorStore = create<EditorState>()(
                 if (layerType === "lighting") {
                   return layers.some((layer) => layer.type === "lighting") ? layers : [createLightingLayer(), ...layers];
                 }
-                if (layerType === "depth" && layers.some((layer) => layer.type === "depth")) return layers;
-                if (layerType !== "color" && layerType !== "depth") return layers;
+                if (!isColorLayerType(layerType)) return layers;
                 // A new Color layer starts as the colour of the one it goes over, so adding one changes nothing yet.
-                const newLayer: MaterialLayer =
-                  layerType === "color"
-                    ? createColorLayer(colorLayerOf(layers)?.color ?? "#ffffff")
-                    : createDepthLayer(depthFar !== undefined && depthFar > 0 ? depthFar : undefined);
-                const index = newLayerIndex(layers);
+                const newLayer = createPaintLayer(layerType as PaintLayerType, depthFar, colorLayerOf(layers)?.color ?? "#ffffff");
+                const index = layerType === "fresnel" ? 0 : newLayerIndex(layers);
                 return [...layers.slice(0, index), newLayer, ...layers.slice(index)];
               }),
             ),

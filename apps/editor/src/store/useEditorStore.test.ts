@@ -1339,18 +1339,19 @@ describe("depth layers", () => {
     return { useEditorStore, createDepthLayer, cubeId, cube, depthOf };
   };
 
-  it("adds one Depth layer per object, removable, in one undo step each", async () => {
+  it("adds Depth layers (as many as wanted), removable, in one undo step each", async () => {
     const { useEditorStore, cubeId, cube, depthOf } = await storeWithCube();
 
     useEditorStore.getState().addMaterialLayer(cubeId, "depth");
     useEditorStore.getState().addMaterialLayer(cubeId, "depth");
 
-    expect(cube().materialLayers!.filter((layer) => layer.type === "depth")).toHaveLength(1);
-    expect(depthOf()).toMatchObject({ type: "depth", enabled: true, gradientType: "radial", near: 0, far: 2 });
+    expect(cube().materialLayers!.filter((layer) => layer.type === "depth")).toHaveLength(2);
+    expect(depthOf()).toMatchObject({ type: "depth", enabled: true, gradientType: "radial", originType: "vector", space: "local", near: 0, far: 2 });
+    useEditorStore.getState().removeMaterialLayer(cubeId, depthOf()!.id);
     useEditorStore.getState().removeMaterialLayer(cubeId, depthOf()!.id);
     expect(depthOf()).toBeUndefined();
     useEditorStore.temporal.getState().undo();
-    expect(depthOf()).toBeDefined();
+    expect(cube().materialLayers!.filter((layer) => layer.type === "depth")).toHaveLength(1);
   });
 
   it("ends a new layer's ramp at the object's reach when it's measured, and at 2 otherwise", async () => {
@@ -1454,7 +1455,7 @@ describe("the material layer stack", () => {
     expect(types()).toEqual(["lighting", "depth"]);
   });
 
-  it("switches a layer's type, keeping its ID, eye, opacity and blend mode, one Depth at most", async () => {
+  it("switches a layer's type, keeping its ID, eye, opacity, blend mode and Mode", async () => {
     const { useEditorStore, cubeId, cube, types, idOf } = await storeWithCube();
     const colorId = idOf("color");
     useEditorStore.getState().updateMaterialLayer(cubeId, colorId, { opacity: 0.5, blendMode: "screen" });
@@ -1462,24 +1463,38 @@ describe("the material layer stack", () => {
     useEditorStore.getState().switchMaterialLayerType(cubeId, colorId, "depth", 1.5);
     expect(cube().materialLayers![1]).toMatchObject({ id: colorId, type: "depth", opacity: 0.5, blendMode: "screen", far: 1.5 });
 
+    useEditorStore.getState().updateMaterialLayer(cubeId, colorId, { mask: true });
+    useEditorStore.getState().switchMaterialLayerType(cubeId, colorId, "noise");
+    expect(cube().materialLayers![1]).toMatchObject({ id: colorId, type: "noise", mask: true, opacity: 0.5 });
+    useEditorStore.getState().switchMaterialLayerType(cubeId, colorId, "color"); // Color has no Mask mode
+    expect(cube().materialLayers![1]).not.toHaveProperty("mask");
+
     useEditorStore.getState().addMaterialLayer(cubeId, "color");
-    useEditorStore.getState().switchMaterialLayerType(cubeId, idOf("color"), "depth");
-    expect(types()).toEqual(["lighting", "color", "depth"]);
+    useEditorStore.getState().switchMaterialLayerType(cubeId, idOf("color"), "gradient");
+    expect(types()).toEqual(["lighting", "gradient", "color"]);
 
     useEditorStore.getState().switchMaterialLayerType(cubeId, idOf("lighting"), "color");
-    expect(types()).toEqual(["lighting", "color", "depth"]);
+    expect(types()).toEqual(["lighting", "gradient", "color"]);
   });
 
-  it("moves layers below Lighting only, as one undo step", async () => {
+  it("adds a Fresnel layer over Lighting, where it glows", async () => {
+    const { useEditorStore, cubeId, types } = await storeWithCube();
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "fresnel");
+    useEditorStore.getState().addMaterialLayer(cubeId, "noise");
+    expect(types()).toEqual(["fresnel", "lighting", "noise", "color"]);
+  });
+
+  it("moves layers over and under Lighting, as one undo step", async () => {
     const { useEditorStore, cubeId, types, idOf } = await storeWithCube();
     useEditorStore.getState().addMaterialLayer(cubeId, "depth");
 
     useEditorStore.getState().moveMaterialLayer(cubeId, idOf("depth"), 2);
     expect(types()).toEqual(["lighting", "color", "depth"]);
     useEditorStore.getState().moveMaterialLayer(cubeId, idOf("color"), 0);
-    expect(types()).toEqual(["lighting", "color", "depth"]);
+    expect(types()).toEqual(["color", "lighting", "depth"]);
     useEditorStore.temporal.getState().undo();
-    expect(types()).toEqual(["lighting", "depth", "color"]);
+    expect(types()).toEqual(["lighting", "color", "depth"]);
   });
 
   it("sets the object's opacity, leaving it off the object at 1", async () => {

@@ -112,7 +112,7 @@ const v4Depth = (overrides: Record<string, unknown> = {}) => ({
   smooth: false,
   ...overrides,
 });
-const v4Image = (id: string, slot: string) => ({ id, type: "image", enabled: true, opacity: 0.3, textureAssetId: `t-${id}`, slot, wrapS: 1000, wrapT: 1000 });
+const v4Image = (id: string, slot: string, extra: Record<string, unknown> = {}) => ({ id, type: "image", enabled: true, opacity: 0.3, textureAssetId: `t-${id}`, slot, wrapS: 1000, wrapT: 1000, ...extra });
 
 // Opens a v4 document holding one cube with `layers` (and `extra` on it) and returns that cube.
 const openV4 = (layers: unknown[], extra: Record<string, unknown> = {}) => {
@@ -303,11 +303,24 @@ describe("schema v5: the material layer stack", () => {
     expect(color).not.toHaveProperty("doubleSided");
   });
 
-  it("keeps an imported mesh's Image layers at the bottom, in their order and as they were", () => {
-    const { cube } = openV4([v4Color({ alphaMode: "BLEND" }), v4Lighting(), v4Image("map", "color"), v4Image("normal", "normal")]);
+  it("keeps an imported mesh's colour picture at the bottom, and makes its other pictures Lighting's maps", () => {
+    const { cube } = openV4([
+      v4Color({ alphaMode: "BLEND" }),
+      v4Lighting(),
+      v4Image("map", "color"),
+      v4Image("normal", "normal"),
+      v4Image("mr", "metallicRoughness"),
+      v4Image("hidden", "ao", { enabled: false }),
+    ]);
 
-    expect(cube.materialLayers?.map((layer) => layer.id)).toEqual(["l", "c", "map", "normal"]);
+    expect(cube.materialLayers?.map((layer) => layer.id)).toEqual(["l", "c", "map"]);
     expect(cube.materialLayers?.[2]).toEqual({ ...v4Image("map", "color"), blendMode: "normal" });
+    const lighting = cube.materialLayers?.[0];
+    expect(lighting?.type === "lighting" && lighting.maps).toEqual({
+      normal: { textureAssetId: "t-normal", wrapS: 1000, wrapT: 1000 },
+      roughness: { textureAssetId: "t-mr", wrapS: 1000, wrapT: 1000 },
+      metalness: { textureAssetId: "t-mr", wrapS: 1000, wrapT: 1000 },
+    });
   });
 
   it("gives a stack without a Lighting layer the physical one v4 drew it with", () => {

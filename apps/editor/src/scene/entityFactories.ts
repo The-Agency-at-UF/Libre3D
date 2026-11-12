@@ -16,7 +16,19 @@ import { cloneShape } from "../paths/shapeGeometry";
 import { createId } from "../utils/createId";
 import { DEFAULT_CAMERA_PROFILE } from "./defaults";
 import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "./layers";
-import type { CameraProfile, ColorLayer, DepthLayer, Entity, EntityType, LightingLayer, MaterialLayer } from "./types";
+import type {
+  CameraProfile,
+  ColorLayer,
+  DepthLayer,
+  Entity,
+  EntityType,
+  FresnelLayer,
+  GradientLayer,
+  LightingLayer,
+  MaterialLayer,
+  MaterialLayerType,
+  NoiseLayer,
+} from "./types";
 import { cloneVector } from "./vec3";
 
 // A new object's name and colour. 3D objects start white and lit (task D2); the flat ones keep a
@@ -73,6 +85,8 @@ export const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
   color,
 });
 
+// The new layer types start as Spline's do (its player's defaults), in Libre3D's units.
+
 // `far` is fitted to the object when the panel can measure it (utils/depthColors.ts, depthReach).
 export const createDepthLayer = (far = 2): DepthLayer => ({
   id: createEntityId(),
@@ -81,23 +95,94 @@ export const createDepthLayer = (far = 2): DepthLayer => ({
   opacity: 1,
   blendMode: "normal",
   gradientType: "radial",
+  originType: "vector",
+  space: "local",
   origin: [0, 0, 0],
   direction: [1, 0, 0],
   near: 0,
   far,
   stops: [
-    { color: "#ff3b30", position: 0 },
-    { color: "#ffcc00", position: 0.5 },
-    { color: "#af52de", position: 1 },
+    { color: "#ffffff", position: 0 },
+    { color: "#000000", position: 1 },
   ],
   smooth: false,
 });
 
-// A copy that shares nothing with `layer` (a Depth layer holds arrays).
-export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer =>
-  layer.type === "depth"
-    ? { ...layer, origin: cloneVector(layer.origin), direction: cloneVector(layer.direction), stops: layer.stops.map((stop) => ({ ...stop })) }
-    : { ...layer };
+export const createGradientLayer = (): GradientLayer => ({
+  id: createEntityId(),
+  type: "gradient",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  gradientType: "linear",
+  stops: [
+    { color: "#000000", position: 0 },
+    { color: "#ffffff", position: 1 },
+  ],
+  smooth: false,
+  angle: 0,
+  offset: [0, 0],
+  morph: [0, 0],
+});
+
+export const createNoiseLayer = (): NoiseLayer => ({
+  id: createEntityId(),
+  type: "noise",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  noiseType: "simplex",
+  size: [1, 1, 1],
+  scale: 1,
+  movement: 1,
+  colors: [{ color: "#666666" }, { color: "#666666" }, { color: "#ffffff" }, { color: "#ffffff" }],
+  distortion: [1, 1],
+  factorA: [1.7, 9.2],
+  factorB: [8.3, 2.8],
+  voronoiStyle: "f1",
+  smoothness: 0.3,
+  seed: 0,
+  lowCut: 0,
+  highCut: 1,
+});
+
+export const createFresnelLayer = (): FresnelLayer => ({
+  id: createEntityId(),
+  type: "fresnel",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  color: "#ffffff",
+  bias: 0.1,
+  scale: 1,
+  intensity: 2,
+  factor: 1,
+});
+
+// A copy that shares nothing with `layer` (some layers hold arrays and objects).
+export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer => {
+  switch (layer.type) {
+    case "depth":
+      return { ...layer, origin: cloneVector(layer.origin), direction: cloneVector(layer.direction), stops: layer.stops.map((stop) => ({ ...stop })) };
+    case "gradient":
+      return { ...layer, stops: layer.stops.map((stop) => ({ ...stop })), offset: [...layer.offset], morph: [...layer.morph] };
+    case "noise":
+      return {
+        ...layer,
+        size: cloneVector(layer.size),
+        colors: layer.colors.map((color) => ({ ...color })) as NoiseLayer["colors"],
+        distortion: [...layer.distortion],
+        factorA: [...layer.factorA],
+        factorB: [...layer.factorB],
+      };
+    case "lighting":
+      return layer.maps
+        ? { ...layer, maps: Object.fromEntries(Object.entries(layer.maps).map(([slot, ref]) => [slot, { ...ref }])) }
+        : { ...layer };
+    default:
+      return { ...layer };
+  }
+};
 
 export const createLightingLayer = (overrides: Partial<LightingLayer> = {}): LightingLayer => ({
   id: createEntityId(),
@@ -132,11 +217,33 @@ export const createMaterialLayers = (color: string, lighting: Partial<LightingLa
   createColorLayer(color, 1),
 ];
 
-/** A layer of `type` in place of `layer`: the same ID, eye, opacity and blend mode, the type's defaults otherwise. */
-export const switchLayerType = (layer: MaterialLayer, type: "color" | "depth", depthFar?: number, color = "#ffffff"): MaterialLayer => {
+/** A new colour layer of `type` (Color in `color`; Depth reaching `depthFar` when it's above 0). */
+export const createPaintLayer = (type: PaintLayerType, depthFar?: number, color = "#ffffff"): MaterialLayer => {
+  switch (type) {
+    case "depth":
+      return createDepthLayer(depthFar !== undefined && depthFar > 0 ? depthFar : undefined);
+    case "gradient":
+      return createGradientLayer();
+    case "noise":
+      return createNoiseLayer();
+    case "fresnel":
+      return createFresnelLayer();
+    case "color":
+    default:
+      return createColorLayer(color);
+  }
+};
+
+export type PaintLayerType = Extract<MaterialLayerType, "color" | "depth" | "gradient" | "noise" | "fresnel">;
+
+/**
+ * A layer of `type` in place of `layer`: the same ID, eye, opacity and blend mode, and its Mode
+ * (Mask or Color) when the new type has one; the type's defaults otherwise.
+ */
+export const switchLayerType = (layer: MaterialLayer, type: PaintLayerType, depthFar?: number, color = "#ffffff"): MaterialLayer => {
   const shared = { id: layer.id, enabled: layer.enabled, opacity: layer.opacity, blendMode: layer.blendMode };
-  if (type === "depth") return { ...createDepthLayer(depthFar !== undefined && depthFar > 0 ? depthFar : undefined), ...shared };
-  return { ...createColorLayer(color), ...shared };
+  const mask = type !== "color" && layer.mask ? { mask: true } : null;
+  return { ...createPaintLayer(type, depthFar, color), ...shared, ...mask };
 };
 
 const ZERO_VECTOR: [number, number, number] = [0, 0, 0];
