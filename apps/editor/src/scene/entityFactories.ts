@@ -31,6 +31,7 @@ import type {
   MatcapLayer,
   NoiseLayer,
   NormalLayer,
+  RainbowLayer,
 } from "./types";
 import { cloneVector } from "./vec3";
 
@@ -188,6 +189,20 @@ export const createMatcapLayer = (): MatcapLayer => ({
   rotation: 0,
 });
 
+export const createRainbowLayer = (): RainbowLayer => ({
+  id: createEntityId(),
+  type: "rainbow",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  frequency: 30,
+  movement: 0,
+  color: [0, 0, 0],
+  noise: 0,
+  noiseScale: 1,
+  offset: [0, 0, 0],
+});
+
 export const createFresnelLayer = (): FresnelLayer => ({
   id: createEntityId(),
   type: "fresnel",
@@ -212,6 +227,8 @@ export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer => {
       return { ...layer, scale: [...layer.scale], offset: [...layer.offset] };
     case "normal":
       return { ...layer, axes: [...layer.axes] };
+    case "rainbow":
+      return { ...layer, color: [...layer.color], offset: [...layer.offset] };
     case "noise":
       return {
         ...layer,
@@ -280,13 +297,15 @@ export const createPaintLayer = (type: PaintLayerType, depthFar?: number, color 
       return createNormalLayer();
     case "matcap":
       return createMatcapLayer();
+    case "rainbow":
+      return createRainbowLayer();
     case "color":
     default:
       return createColorLayer(color);
   }
 };
 
-export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap">;
+export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow">;
 
 /**
  * A layer of `type` in place of `layer`: the same ID, eye, opacity and blend mode, and its Mode

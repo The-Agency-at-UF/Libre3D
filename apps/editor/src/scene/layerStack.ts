@@ -31,6 +31,7 @@ import type {
   NoiseLayer,
   NormalLayer,
   PaintColor,
+  RainbowLayer,
   RampStop,
 } from "./types";
 
@@ -43,20 +44,20 @@ export interface Paint {
 }
 
 /** A layer that makes colour: it paints, or in Mask mode masks the layer under it. */
-export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | NormalLayer | MatcapLayer;
+export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | NormalLayer | MatcapLayer | RainbowLayer;
 /** A layer that can be put in Mask mode. */
-export type MaskableLayer = DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | MatcapLayer;
+export type MaskableLayer = DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | MatcapLayer | RainbowLayer;
 
 export const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overlay"];
 
 /** Layer types that make colour. An object keeps one that paints (so Color can go once another is there). */
-export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "image", "depth", "gradient", "noise", "fresnel", "normal", "matcap"];
+export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "image", "depth", "gradient", "noise", "fresnel", "normal", "matcap", "rainbow"];
 
 /** Layer types a layer's type dropdown can switch it to. "+" adds a Color layer. */
 export const SWITCHABLE_LAYER_TYPES: readonly MaterialLayerType[] = COLOR_LAYER_TYPES;
 
 /** Layer types with a Mask mode (Spline's list, of the types Libre3D has). */
-export const MASKABLE_LAYER_TYPES: readonly MaterialLayerType[] = ["image", "matcap", "depth", "gradient", "noise", "fresnel"];
+export const MASKABLE_LAYER_TYPES: readonly MaterialLayerType[] = ["image", "matcap", "depth", "gradient", "noise", "fresnel", "rainbow"];
 
 /** A ramp holds 2 to this many stops. */
 export const MAX_RAMP_STOPS = 10;
@@ -297,6 +298,7 @@ export const sourceIsOpaque = (layer: PaintLayer): boolean => {
       return false;
     case "normal":
     case "matcap":
+    case "rainbow":
       return true;
     case "image":
       // A picture's own see-through parts make the object see-through only with the surface's

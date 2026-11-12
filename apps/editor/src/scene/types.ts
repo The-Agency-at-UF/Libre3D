@@ -13,7 +13,7 @@ import type { ShapeData } from "../paths/shapeGeometry";
 
 export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
 
-export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap";
+export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
 
 // How a layer goes over the layers under it. The stack is drawn bottom to top, and
@@ -212,7 +212,21 @@ export interface MatcapLayer extends LayerBase {
   rotation: number;
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | NormalLayer | MatcapLayer;
+// A soap-bubble shimmer, as Spline's Rainbow layer: bands of hue that shift with the angle the
+// surface is seen at (more bands with a higher `frequency`), drift with `movement` (0 = still), and
+// wobble by a 3D noise (`noise` how much, `noiseScale` how fine, `offset` where). `color` shifts
+// the red, green and blue bands (0-1 each). Its maths: viewport/layerSources.ts.
+export interface RainbowLayer extends LayerBase {
+  type: "rainbow";
+  frequency: number;
+  movement: number;
+  color: [number, number, number];
+  noise: number;
+  noiseScale: number;
+  offset: [number, number, number];
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | NormalLayer | MatcapLayer | RainbowLayer;
 
 /** A reusable material: the scene document's `materials` section, by ID (task D, PR 6). */
 export interface MaterialAsset {

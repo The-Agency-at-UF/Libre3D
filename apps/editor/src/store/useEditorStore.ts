@@ -101,6 +101,7 @@ export type {
   NoiseType,
   NormalLayer,
   PaintColor,
+  RainbowLayer,
   RampStop,
   TextureRef,
   VoronoiStyle,

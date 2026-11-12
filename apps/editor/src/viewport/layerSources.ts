@@ -521,6 +521,45 @@ const matcapSource = (): LayerSource => {
   };
 };
 
+// ─── Rainbow ─────────────────────────────────────────────────────────────────
+
+const rainbowSource = (): LayerSource => {
+  const frequency = objectUniform(30);
+  const movement = objectUniform(0);
+  const shift: Vec3Uniform = objectUniform(new THREE.Vector3());
+  const wobble = objectUniform(0);
+  const wobbleScale = objectUniform(1);
+  const offset: Vec3Uniform = objectUniform(new THREE.Vector3());
+  return {
+    update(layer) {
+      if (layer.type !== "rainbow") return;
+      frequency.value = layer.frequency;
+      movement.value = layer.movement;
+      shift.value.set(...layer.color);
+      wobble.value = layer.noise;
+      wobbleScale.value = layer.noiseScale;
+      offset.value.set(...layer.offset);
+    },
+    node(context) {
+      // Where along the bands: how far the surface turns from the view (Frequency 30: one round of
+      // hues from facing it to edge-on), drifting with time, wobbled by noise. (Spline's shader isn't
+      // in its player; this is a reconstruction of what it draws.)
+      const facing = n(clamp(abs(dot(n(normalView), n(positionViewDirection))), 0, 1));
+      const noisy = simplexNode(n(context.objectPosition.mul(n(wobbleScale)).add(n(offset))));
+      const band = n(
+        float(1)
+          .sub(facing)
+          .mul(n(frequency).div(30))
+          .add(n(time).mul(n(movement)).mul(0.1))
+          .add(noisy.mul(n(wobble))),
+      );
+      const phases = n(vec3(0, 1 / 3, 2 / 3).add(n(shift)));
+      const rgb = n(n(band).add(phases).mul(2 * Math.PI).cos().mul(0.5).add(0.5));
+      return { rgb, a: float(1) };
+    },
+  };
+};
+
 // ─── Fresnel ─────────────────────────────────────────────────────────────────
 
 const fresnelSource = (): LayerSource => {
@@ -565,7 +604,9 @@ export const createLayerSource = (layer: PaintLayer, pictures: PictureSource): L
                 ? normalSource()
                 : layer.type === "matcap"
                   ? matcapSource()
-                  : colorSource();
+                  : layer.type === "rainbow"
+                    ? rainbowSource()
+                    : colorSource();
   source.update(layer, pictures);
   return source;
 };
@@ -585,6 +626,8 @@ export const layerSourceShape = (layer: PaintLayer): string => {
       return "normal";
     case "matcap":
       return "matcap";
+    case "rainbow":
+      return "rainbow";
     case "image":
       return `image:${layer.projection}${layer.projection === "planar" || layer.projection === "cylindrical" ? `:${layer.axis}` : ""}`;
     case "color":

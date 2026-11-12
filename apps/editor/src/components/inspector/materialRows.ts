@@ -22,6 +22,7 @@ export const LAYER_TYPE_NAMES: Record<MaterialLayerType, string> = {
   fresnel: "Fresnel",
   normal: "Normal",
   matcap: "Matcap",
+  rainbow: "Rainbow",
 };
 
 export const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
@@ -34,6 +35,7 @@ export const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
   fresnel: "ti-circle-dot",
   normal: "ti-compass",
   matcap: "ti-sphere",
+  rainbow: "ti-rainbow",
 };
 
 export const BLEND_MODE_NAMES: Record<BlendMode, string> = {
