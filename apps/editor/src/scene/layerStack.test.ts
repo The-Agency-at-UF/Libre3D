@@ -24,6 +24,7 @@ import {
   type Paint,
   type PaintLayer,
 } from "./layerStack";
+import { createDisplaceLayer, createGlassLayer } from "./entityFactories";
 import type { BlendMode, ColorLayer, DepthLayer, FresnelLayer, GradientLayer, ImageLayer, LightingLayer, MaterialLayer, NoiseLayer } from "./types";
 
 const color = (id: string, hex: string, overrides: Partial<ColorLayer> = {}): ColorLayer => ({
@@ -433,5 +434,53 @@ describe("stack rules", () => {
     expect(lightingStrength(lighting({ opacity: 0.3 }))).toBe(0.3);
     expect(lightingStrength(lighting({ enabled: false }))).toBe(0);
     expect(lightingStrength(undefined)).toBe(1);
+  });
+});
+
+describe("Glass and Displace", () => {
+  const glass = { ...createGlassLayer(), id: "glass" };
+  const displace = { ...createDisplaceLayer(), id: "displace" };
+
+  it("take Spline's defaults", () => {
+    expect(createGlassLayer()).toMatchObject({ blur: 10, thickness: 10, ior: 1.5, absorption: "#ffffff", absorbDistance: 0 });
+    expect(createDisplaceLayer()).toMatchObject({ displaceType: "simplex", scale: 10, movement: 1, offset: [0, 0, 0], intensity: 8 });
+  });
+
+  it("paints with Glass, solidly, and marks the stack as glass", () => {
+    const plan = planStack([lighting(), glass, color("c", "#ffffff")]);
+    expect(plan.under.map((step) => step.layer.id)).toEqual(["c", "glass"]);
+    expect(plan.opaque).toBe(true);
+    expect(plan.glass).toBe(true);
+    expect(planStack([lighting(), color("c", "#ffffff")]).glass).toBe(false);
+    expect(planStack([lighting(), { ...glass, enabled: false }, color("c", "#ffffff")]).glass).toBe(false);
+    expect(MASKABLE_LAYER_TYPES).not.toContain("glass");
+  });
+
+  it("doesn't paint with Displace, and lists its eyes-on layers apart", () => {
+    const plan = planStack([lighting(), displace, color("c", "#ff0000")]);
+    expect(plan.under.map((step) => step.layer.id)).toEqual(["c"]);
+    expect(plan.displace.map((layer) => layer.id)).toEqual(["displace"]);
+    // A plain colour still needs nodes while it's displaced.
+    expect(plan.folded).not.toBeNull();
+    expect(isPlainPlan(plan)).toBe(false);
+    expect(planStack([lighting(), { ...displace, enabled: false }, color("c", "#ff0000")]).displace).toEqual([]);
+    expect(MASKABLE_LAYER_TYPES).not.toContain("displace");
+  });
+
+  it("removes Displace freely, but keeps something painting", () => {
+    const layers: MaterialLayer[] = [lighting(), displace, color("c", "#ffffff")];
+    expect(canRemoveLayer(layers, layers[1])).toBe(true);
+    expect(canRemoveLayer(layers, layers[2])).toBe(false);
+  });
+
+  it("switches the last painting layer to Displace only while another one paints", () => {
+    const one: MaterialLayer[] = [lighting(), color("c", "#ffffff")];
+    expect(canSwitchLayerType(one, one[1], "displace")).toBe(false);
+    expect(canSwitchLayerType(one, one[1], "glass")).toBe(true);
+    const two: MaterialLayer[] = [lighting(), color("a", "#ffffff"), color("b", "#ffffff")];
+    expect(canSwitchLayerType(two, two[1], "displace")).toBe(true);
+    const displaced: MaterialLayer[] = [lighting(), displace, color("c", "#ffffff")];
+    expect(canSwitchLayerType(displaced, displaced[1], "noise")).toBe(true);
+    expect(canSwitchLayerType(displaced, displaced[0], "displace")).toBe(false);
   });
 });
