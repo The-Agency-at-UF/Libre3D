@@ -18,6 +18,7 @@ import { useViewportPlay } from "../viewport/hooks/useViewportPlay";
 import { useViewportPenTool } from "../viewport/hooks/useViewportPenTool";
 import { useViewportDepthGizmo } from "../viewport/hooks/useViewportDepthGizmo";
 import { useFrameAutoScale } from "../viewport/hooks/useFrameAutoScale";
+import { useCenterOnSelection } from "../viewport/hooks/useCenterOnSelection";
 
 export function ViewportCanvas() {
   const wrapperRef   = useRef<HTMLDivElement | null>(null);
@@ -154,6 +155,8 @@ export function ViewportCanvas() {
   const penAnchorRef = useViewportPenTool(penFrameRef, cameraRef, rendererRef, scene, objectManager, orbitControlsRef, transformControlsRef);
 
   const depthAnchorRef = useViewportDepthGizmo(depthFrameRef, cameraRef, rendererRef, scene, objectManager, transformControlsRef);
+
+  useCenterOnSelection(orbitControlsRef, objectManager, cameraRef);
 
   // -- Multi-select Drag Handlers --
   // Only the selection's move roots are driven by the proxy. A selected
@@ -433,69 +436,6 @@ export function ViewportCanvas() {
     resizeObserver.observe(container);
     return () => resizeObserver.disconnect();
   }, [cameraManager, rendererRef, gizmoRef]);
-
-  // -- Viewport centering events --
-  useEffect(() => {
-    const handleCenterOnSelected = () => {
-      if (!orbitControlsRef.current || !objectManager) return;
-      const selectedIds = useEditorStore.getState().selectedEntityIds;
-      if (selectedIds.length === 0) return;
-
-      const box = new THREE.Box3();
-      selectedIds.forEach(id => {
-        const mesh = objectManager.getObject(id);
-        if (mesh) {
-           const targetPos = new THREE.Vector3();
-           mesh.getWorldPosition(targetPos);
-           box.expandByPoint(targetPos);
-        }
-      });
-      const center = new THREE.Vector3();
-      box.getCenter(center);
-      
-      const camera    = cameraRef.current;
-      const offset = new THREE.Vector3().subVectors(camera.position, orbitControlsRef.current.target);
-      orbitControlsRef.current.target.copy(center);
-      camera.position.copy(center).add(offset);
-      orbitControlsRef.current.update();
-    };
-
-    const handleOrientateToSelected = () => {
-      if (!orbitControlsRef.current || !objectManager) return;
-      const selectedIds = useEditorStore.getState().selectedEntityIds;
-      if (selectedIds.length === 0) return;
-
-      const box = new THREE.Box3();
-      selectedIds.forEach(id => {
-        const mesh = objectManager.getObject(id);
-        if (mesh) {
-           const targetPos = new THREE.Vector3();
-           mesh.getWorldPosition(targetPos);
-           box.expandByPoint(targetPos);
-        }
-      });
-      const center = new THREE.Vector3();
-      box.getCenter(center);
-
-      const camera        = cameraRef.current;
-      orbitControlsRef.current.target.copy(center);
-      const currentZoom   = useEditorStore.getState().viewportZoom || 100;
-      const defaultDistance = 11.180339887498949;
-      camera.position.set(
-        center.x,
-        center.y,
-        center.z + defaultDistance * (100 / currentZoom)
-      );
-      orbitControlsRef.current.update();
-    };
-
-    window.addEventListener("libre3d-center-on-selected",    handleCenterOnSelected);
-    window.addEventListener("libre3d-orientate-to-selected", handleOrientateToSelected);
-    return () => {
-      window.removeEventListener("libre3d-center-on-selected",    handleCenterOnSelected);
-      window.removeEventListener("libre3d-orientate-to-selected", handleOrientateToSelected);
-    };
-  }, [orbitControlsRef, objectManager, cameraRef]);
 
   // Files dropped on the editor are imported by DropOverlay (EditorLayout), not here.
 
