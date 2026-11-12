@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { useEditorStore, type ColorLayer, type DepthLayer, type Entity, type ImageLayer, type LightingLayer, type LightingModel } from "../../store/useEditorStore";
+import { useEditorStore, type ColorLayer, type DepthLayer, type ImageLayer, type LightingLayer, type LightingModel } from "../../store/useEditorStore";
 import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../../scene/layers";
 import { loadTextureForScene } from "../../utils/assetTransfers";
 import { editDepth } from "../../viewport/hooks/useViewportDepthGizmo";
@@ -15,8 +15,7 @@ import { NumberField } from "../ui/NumberField";
 import { Select } from "../ui/Select";
 import { Slider } from "../ui/Slider";
 import { Switch } from "../ui/Switch";
-import { Vector3Input } from "../ui/Vector3Input";
-import { DepthRamp } from "./DepthRamp";
+import { RampEditor } from "./RampEditor";
 import { IMAGE_SLOT_LABELS, useRowUpdate, type LayerRowData } from "./materialRows";
 
 const LIGHTING_MODEL_OPTIONS: { label: string; value: LightingModel }[] = [
@@ -48,6 +47,21 @@ const DEPTH_TYPE_OPTIONS: { label: string; value: DepthLayer["gradientType"] }[]
 const BLENDING_OPTIONS: { label: string; value: "linear" | "smooth" }[] = [
   { label: "Linear", value: "linear" },
   { label: "Smooth", value: "smooth" },
+];
+
+const ORIGIN_OPTIONS: { label: string; value: "vector" | "camera" }[] = [
+  { label: "Vector", value: "vector" },
+  { label: "Camera", value: "camera" },
+];
+
+const SPACE_OPTIONS: { label: string; value: "local" | "world" }[] = [
+  { label: "Local", value: "local" },
+  { label: "World", value: "world" },
+];
+
+const MODE_OPTIONS: { label: string; value: "mask" | "color" }[] = [
+  { label: "Mask", value: "mask" },
+  { label: "Color", value: "color" },
 ];
 
 // ─── Fields ──────────────────────────────────────────────────────────────────
@@ -83,12 +97,70 @@ export function SegmentedRow<T extends string>({
   );
 }
 
-export function NumberRow({ label, value, min, onChange }: { label: string; value: number; min?: number; onChange: (value: number) => void }) {
+export function NumberRow({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number | null;
+  min?: number;
+  max?: number;
+  step?: number;
+  onChange: (value: number) => void;
+}) {
   return (
     <div className="prop">
       <span className="prop-label">{label}</span>
-      <NumberField label={label} value={value} min={min} onChange={onChange} />
+      <NumberField className="drawer-number" label={label} value={value} min={min} max={max} step={step} onChange={onChange} />
     </div>
+  );
+}
+
+/** Two or three numbers in a row, each with its letter (X Y Z, as Spline's), in a label/control row. */
+export function AxesRow({
+  label,
+  axes,
+  values,
+  step,
+  onChange,
+}: {
+  label: string;
+  axes: string[];
+  values: readonly number[];
+  step?: number;
+  onChange: (axis: number, value: number) => void;
+}) {
+  return (
+    <div className="prop">
+      <span className="prop-label">{label}</span>
+      <div className="axes-row">
+        {axes.map((axis, index) => (
+          <label key={index} className="axes-row-field">
+            <span>{axis}</span>
+            <NumberField label={`${label} ${axis}`} value={values[index]} step={step} onChange={(value) => onChange(index, value)} />
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A maskable layer's Mode (Spline's Layer Masking): Color paints; Mask paints nothing and shows the
+ * one layer right under it only where this one is light.
+ */
+export function ModeRow({ row }: { row: LayerRowData }) {
+  const update = useRowUpdate(row);
+  const masked = row.pairs[0].layer.mask === true;
+  return (
+    <>
+      <SegmentedRow label="Mode" options={MODE_OPTIONS} value={masked ? "mask" : "color"} onChange={(mode) => update({ mask: mode === "mask" })} />
+      <div className="mat-drawer-divider" />
+    </>
   );
 }
 
@@ -184,87 +256,68 @@ export function LightingSettings({ row }: { row: LayerRowData }) {
   );
 }
 
-// The Depth layer of one object (utils/depthColors.ts says how it colours). The picked stop is this
-// drawer's own state; it starts on the first stop for each layer (the drawer is keyed by layer).
-export function DepthSettings({ entity, layer }: { entity: Entity; layer: DepthLayer }) {
-  const updateMaterialLayer = useEditorStore((state) => state.updateMaterialLayer);
+// A Depth layer, as Spline's drawer has it. The picked ramp stop is this drawer's own state; it
+// starts on the first stop for each layer (the drawer is keyed by layer). Several objects with the
+// same stack take the first one's values for what's changed; the viewport's handles are one
+// object's.
+export function DepthSettings({ row }: { row: LayerRowData }) {
+  const update = useRowUpdate(row);
   const depthEdit = useEditorStore((state) => state.depthEdit);
   const setDepthEdit = useEditorStore((state) => state.setDepthEdit);
-  const onUpdate = (updates: Partial<DepthLayer>) => updateMaterialLayer(entity.id, layer.id, updates);
-  const isEditing = depthEdit === entity.id;
+  const layer = row.pairs[0].layer as DepthLayer;
+  const single = row.pairs.length === 1 ? row.pairs[0].entity : null;
   const [selected, setSelected] = useState(0);
-  const index = Math.min(selected, layer.stops.length - 1);
-  const stop = layer.stops[index];
+  const camera = layer.originType === "camera";
+  const isEditing = !!single && depthEdit === single.id;
 
-  const setVector = (key: "origin" | "direction", axis: number, value: number) => {
+  const setAxis = (key: "origin" | "direction", axis: number, value: number) => {
     if (value === layer[key][axis]) return;
     const next: [number, number, number] = [...layer[key]];
     next[axis] = value;
-    onUpdate({ [key]: next });
+    update({ [key]: next });
   };
-
-  const setStop = (updates: Partial<DepthLayer["stops"][number]>) =>
-    onUpdate({ stops: layer.stops.map((each, i) => (i === index ? { ...each, ...updates } : each)) });
 
   return (
     <>
-      <div className="prop">
-        <span className="prop-label">Viewport</span>
-        <button
-          type="button"
-          className={`mat-drawer-btn ${isEditing ? "on" : ""}`}
-          title={isEditing ? "Stop editing in the viewport (Enter)" : "Edit in the viewport: the gizmo moves the origin"}
-          aria-pressed={isEditing}
-          onClick={() => (isEditing ? setDepthEdit(null) : editDepth(entity.id))}
-        >
-          <i className="ti ti-pointer"></i>
-          <span>{isEditing ? "Editing" : "Edit"}</span>
-        </button>
-      </div>
-      <SegmentedRow label="Type" options={DEPTH_TYPE_OPTIONS} value={layer.gradientType} onChange={(gradientType) => onUpdate({ gradientType })} />
+      <ModeRow row={row} />
       <SegmentedRow
-        label="Blending"
-        options={BLENDING_OPTIONS}
-        value={layer.smooth ? "smooth" : "linear"}
-        onChange={(value) => onUpdate({ smooth: value === "smooth" })}
+        label="Origin"
+        options={ORIGIN_OPTIONS}
+        value={camera ? "camera" : "vector"}
+        onChange={(originType) => {
+          if (originType === "camera" && isEditing) setDepthEdit(null);
+          update({ originType });
+        }}
       />
-      <DepthRamp layer={layer} selected={index} onSelect={setSelected} onChange={(stops) => onUpdate({ stops })} />
-      {stop && (
+      <SegmentedRow label="Blending" options={BLENDING_OPTIONS} value={layer.smooth ? "smooth" : "linear"} onChange={(value) => update({ smooth: value === "smooth" })} />
+      <RampEditor stops={layer.stops} smooth={layer.smooth} selected={selected} onSelect={setSelected} onChange={(stops) => update({ stops })} />
+      <Select label="Type" options={DEPTH_TYPE_OPTIONS} value={layer.gradientType} onChange={(value) => update({ gradientType: value as DepthLayer["gradientType"] })} />
+      {!camera && (
         <>
-          <ColorField label="Stop Color" color={stop.color} alpha={stop.alpha ?? 1} onChange={(change) => setStop(change.color !== undefined ? { color: change.color } : { alpha: change.alpha })} />
-          <div className="prop">
-            <span className="prop-label">Stop Position</span>
-            <NumberField
-              label="Stop position"
-              min={0}
-              max={100}
-              step={1}
-              integer
-              value={Math.round(stop.position * 100)}
-              onChange={(percent) => setStop({ position: percent / 100 })}
-            />
-            <button
-              type="button"
-              className="mat-icon-btn"
-              disabled={layer.stops.length <= 2}
-              title={layer.stops.length <= 2 ? "A ramp needs two stops" : "Remove this stop"}
-              aria-label="Remove this stop"
-              onClick={() => {
-                onUpdate({ stops: layer.stops.filter((_, i) => i !== index) });
-                setSelected(Math.max(0, index - 1));
-              }}
-            >
-              <i className="ti ti-trash"></i>
-            </button>
-          </div>
+          <SegmentedRow label="Position" options={SPACE_OPTIONS} value={layer.space ?? "local"} onChange={(space) => update({ space })} />
+          <AxesRow label="Origin" axes={["X", "Y", "Z"]} values={layer.origin} onChange={(axis, value) => setAxis("origin", axis, value)} />
+          {layer.gradientType === "linear" && (
+            <AxesRow label="Direction" axes={["X", "Y", "Z"]} values={layer.direction} onChange={(axis, value) => setAxis("direction", axis, value)} />
+          )}
         </>
       )}
-      <Vector3Input label="Origin" values={layer.origin} onChange={(axis, value) => setVector("origin", axis, value)} />
-      {layer.gradientType === "linear" && (
-        <Vector3Input label="Direction" values={layer.direction} onChange={(axis, value) => setVector("direction", axis, value)} />
+      <NumberRow label="Near" value={layer.near} min={0} onChange={(near) => update({ near })} />
+      <NumberRow label="Far" value={layer.far} min={0} onChange={(far) => update({ far })} />
+      {!camera && single && (
+        <div className="prop">
+          <span className="prop-label">Viewport</span>
+          <button
+            type="button"
+            className={`mat-drawer-btn ${isEditing ? "on" : ""}`}
+            title={isEditing ? "Stop editing in the viewport (Enter)" : "Edit in the viewport: the gizmo moves the origin"}
+            aria-pressed={isEditing}
+            onClick={() => (isEditing ? setDepthEdit(null) : editDepth(single.id, layer.id))}
+          >
+            <i className="ti ti-pointer"></i>
+            <span>{isEditing ? "Editing" : "Edit"}</span>
+          </button>
+        </div>
       )}
-      <NumberRow label="Near" value={layer.near} min={0} onChange={(near) => onUpdate({ near })} />
-      <NumberRow label="Far" value={layer.far} min={0} onChange={(far) => onUpdate({ far })} />
     </>
   );
 }

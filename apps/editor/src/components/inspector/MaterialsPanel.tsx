@@ -2,11 +2,13 @@
  * PURPOSE: Inspector panel for the selected objects' material: their opacity and their layer stack
  * (scene/layerStack.ts), one row per layer, top of the stack first.
  *
- * A row, left to right: the layer's type (a dropdown switches Color ↔ Depth), its icon (opens the
- * layer's settings in a drawer beside the sidebar; dragging it reorders the stack), its opacity,
- * its blend mode, its eye, and ×. The stack's rules decide what can be removed, switched or moved:
- * Lighting stays on top and can't be removed; a Color layer goes only while another colour layer
- * stays; an imported model's Image layers fill their texture slots and stay at the bottom.
+ * A row, left to right: the layer's type (a dropdown switches among the colour types), its icon
+ * (opens the layer's settings in a drawer beside the sidebar, LayerSettings.tsx; dragging it moves
+ * the layer), its opacity, its blend mode, its eye, and ×. The stack's rules decide what can be
+ * removed, switched or moved: Lighting can't be removed, and layers over it are drawn unshaded; a
+ * layer that paints goes only while another one stays; a layer in Mask mode (purple, with an arrow
+ * to the layer it masks) shows that layer only where it's light; an imported model's Image layer
+ * stays at the bottom.
  *
  * Several selected objects with the same layers in the same order are edited row by row; with
  * different stacks, their Lighting and top Color layers are.
@@ -14,9 +16,9 @@
 
 import { useState, useEffect, useRef, useLayoutEffect, type DragEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { useEditorStore, type DepthLayer, type Entity, type ImageLayer, type MaterialLayer as MaterialLayerData, type MaterialLayerType } from "../../store/useEditorStore";
+import { useEditorStore, type Entity, type ImageLayer, type MaterialLayer as MaterialLayerData, type MaterialLayerType } from "../../store/useEditorStore";
 import type { PaintLayerType } from "../../scene/entityFactories";
-import { BLEND_MODES, canSwitchLayerType, movableRange, removeBlockedReason, SWITCHABLE_LAYER_TYPES } from "../../scene/layerStack";
+import { BLEND_MODES, canSwitchLayerType, maskTarget, movableRange, removeBlockedReason, SWITCHABLE_LAYER_TYPES } from "../../scene/layerStack";
 import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
 import { ColorSettings, DepthSettings, ImageSettings, LightingSettings } from "./LayerSettings";
@@ -154,11 +156,18 @@ function LayerRow({
   const switchable = SWITCHABLE_LAYER_TYPES.includes(row.type);
   const enabled = !mixed((layer) => layer.enabled) ? first.enabled : true;
   const name = rowTitle(row);
+  // In Mask mode: it masks the layer under it, or nothing (under it is Lighting, a mask, or nothing).
+  const masking = first.mask
+    ? row.pairs.every(({ entity, layer }) => maskTarget(entity.materialLayers!, entity.materialLayers!.indexOf(layer)) !== null)
+      ? "mask"
+      : "mask idle"
+    : "";
 
   return (
     <div
       ref={rowRef}
-      className={`mat-row ${drawerOpen ? "open" : ""} ${enabled ? "" : "off"} ${dropEdge ? `drop-${dropEdge}` : ""}`}
+      className={`mat-row ${masking} ${drawerOpen ? "open" : ""} ${enabled ? "" : "off"} ${dropEdge ? `drop-${dropEdge}` : ""}`}
+      title={masking === "mask" ? "Mask: shows the layer under it where it's light" : masking ? "This mask has nothing to mask: put a colour layer right under it" : undefined}
       data-layer-type={row.type}
       onDragOver={onDragOver}
       onDrop={(event) => {
@@ -173,6 +182,7 @@ function LayerRow({
           triggerClassName="mat-row-type"
           trigger={
             <>
+              {masking && <i className="ti ti-corner-left-down mat-row-mask-arrow" aria-label="Mask"></i>}
               <span className="mat-row-name">{name}</span>
               <i className="ti ti-chevron-down"></i>
             </>
@@ -230,7 +240,7 @@ function LayerRow({
 
       <RowMenu
         label={`${name} blend mode`}
-        title={isLighting ? "Lighting shades everything under it" : isImage ? "Comes with the imported model" : `Blend mode: ${mixed((layer) => layer.blendMode) ? "mixed" : BLEND_MODE_NAMES[first.blendMode]}`}
+        title={isLighting ? "Lighting shades the layers under it; the ones over it are drawn as they are" : isImage ? "Comes with the imported model" : `Blend mode: ${mixed((layer) => layer.blendMode) ? "mixed" : BLEND_MODE_NAMES[first.blendMode]}`}
         triggerClassName="mat-icon-btn"
         trigger={<i className={`ti ${mixed((layer) => layer.blendMode) ? "ti-blend-mode" : BLEND_MODE_ICONS[first.blendMode]}`}></i>}
         disabled={isLighting || isImage}
@@ -302,7 +312,6 @@ function LayerDrawer({ row, anchor, onClose }: { row: LayerRowData; anchor: HTML
   }, [onClose]);
 
   const name = rowTitle(row);
-  const single = row.pairs.length === 1 ? row.pairs[0] : null;
 
   return createPortal(
     <div
@@ -322,12 +331,7 @@ function LayerDrawer({ row, anchor, onClose }: { row: LayerRowData; anchor: HTML
       <fieldset className="mat-drawer-body inspector-fieldset" disabled={isReadOnly}>
         {row.type === "color" && <ColorSettings row={row} />}
         {row.type === "lighting" && <LightingSettings row={row} />}
-        {row.type === "depth" &&
-          (single ? (
-            <DepthSettings key={single.layer.id} entity={single.entity} layer={single.layer as DepthLayer} />
-          ) : (
-            <p className="mat-drawer-note">Select one object to edit its Depth layer.</p>
-          ))}
+        {row.type === "depth" && <DepthSettings row={row} />}
         {row.type === "image" && <ImageSettings layer={row.pairs[0].layer as ImageLayer} />}
       </fieldset>
     </div>,

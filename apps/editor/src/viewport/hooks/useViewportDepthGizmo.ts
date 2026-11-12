@@ -15,25 +15,34 @@ type Handle = { kind: "near" } | { kind: "far" } | { kind: "stop"; index: number
 const store = () => useEditorStore.getState();
 
 // The enabled Depth layer of the object being depth-edited, while it's the one selected.
+// Which of the object's Depth layers is edited (an object can have several): the one whose drawer
+// asked, else its first. Only a layer with an origin of its own ("vector") has handles.
+let editedLayerId: string | null = null;
+
 const editedLayer = (state: EditorState): DepthLayer | null => {
   const { depthEdit, selectedEntityIds, entities } = state;
   if (!depthEdit || selectedEntityIds.length !== 1 || selectedEntityIds[0] !== depthEdit) return null;
   const entity = getEntityIndex(entities).byId.get(depthEdit);
-  return entity?.materialLayers?.find((each): each is DepthLayer => each.type === "depth" && each.enabled) ?? null;
+  const depths = (entity?.materialLayers ?? []).filter(
+    (each): each is DepthLayer => each.type === "depth" && each.enabled && each.originType !== "camera",
+  );
+  return depths.find((each) => each.id === editedLayerId) ?? depths[0] ?? null;
 };
 
-// What's being depth-edited, and the object's world matrix as it's shown. None when the object is hidden.
+// What's being depth-edited, and the matrix of its space as it's shown: the object's world matrix,
+// or none for a layer in world space. None when the object is hidden.
 const findTarget = (objectManager: ObjectManager) => {
   const state = store();
   const layer = editedLayer(state);
   const object = layer && state.depthEdit ? objectManager.getObject(state.depthEdit) : undefined;
   if (!layer || !object?.visible) return null;
   object.updateWorldMatrix(true, false);
-  return { entityId: state.depthEdit!, layer, matrix: object.matrixWorld.clone() };
+  return { entityId: state.depthEdit!, layer, matrix: layer.space === "world" ? new THREE.Matrix4() : object.matrixWorld.clone() };
 };
 
-/** Starts editing an object's Depth layer in the viewport (it must be the one selected). */
-export function editDepth(entityId: string): void {
+/** Starts editing an object's Depth layer (`layerId`, else its first) in the viewport; the object must be the one selected. */
+export function editDepth(entityId: string, layerId?: string): void {
+  editedLayerId = layerId ?? null;
   store().setDepthEdit(entityId);
   if (!editedLayer(store())) store().setDepthEdit(null);
 }
