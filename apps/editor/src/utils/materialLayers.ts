@@ -32,16 +32,21 @@ import type {
 
 const createLayerId = (): string => createId("layer");
 
+// Whether a material is (or stands for) one of three's built-in classes, by its flag: node
+// materials (three/webgpu) carry the flags of the built-in ones they stand for, `instanceof` doesn't
+// see them.
+const is = (material: THREE.Material, flag: string): boolean => (material as unknown as Record<string, unknown>)[flag] === true;
+
 // Maps a parsed material's class to our LightingModel, mirroring
-// materialClassForLayer (viewport/entityMaterials.ts) in reverse. MeshPhysicalMaterial extends
-// MeshStandardMaterial and both map to "physical" (clearcoat is read into the
+// materialClassForLayer (viewport/entityMaterials.ts) in reverse. Physical extends
+// standard and both map to "physical" (clearcoat is read into the
 // lighting layer; other physical-only features like sheen aren't surfaced yet).
 function lightingModelForMaterial(material: THREE.Material): LightingModel {
-  if (material instanceof THREE.MeshStandardMaterial) return "physical"; // incl. MeshPhysicalMaterial
-  if (material instanceof THREE.MeshPhongMaterial) return "phong";
-  if (material instanceof THREE.MeshToonMaterial) return "toon";
-  if (material instanceof THREE.MeshLambertMaterial) return "lambert";
-  return "none"; // MeshBasicMaterial (KHR_materials_unlit) and anything unrecognized
+  if (is(material, "isMeshStandardMaterial")) return "physical"; // incl. physical
+  if (is(material, "isMeshPhongMaterial")) return "phong";
+  if (is(material, "isMeshToonMaterial")) return "toon";
+  if (is(material, "isMeshLambertMaterial")) return "lambert";
+  return "none"; // basic (KHR_materials_unlit) and anything unrecognized
 }
 
 function colorLayerFromMaterial(material: THREE.Material): ColorLayer {
@@ -86,8 +91,8 @@ function lightingLayerFromMaterial(material: THREE.Material, model: LightingMode
     model,
     roughness: typeof std.roughness === "number" ? std.roughness : DEFAULT_ROUGHNESS,
     metalness: typeof std.metalness === "number" ? std.metalness : DEFAULT_METALNESS,
-    clearcoat: material instanceof THREE.MeshPhysicalMaterial ? material.clearcoat : 0,
-    clearcoatRoughness: material instanceof THREE.MeshPhysicalMaterial ? material.clearcoatRoughness : 0,
+    clearcoat: is(material, "isMeshPhysicalMaterial") ? (material as THREE.MeshPhysicalMaterial).clearcoat : 0,
+    clearcoatRoughness: is(material, "isMeshPhysicalMaterial") ? (material as THREE.MeshPhysicalMaterial).clearcoatRoughness : 0,
     shininess: typeof phong.shininess === "number" ? phong.shininess : 30,
     emissive: `#${emissive}`,
     emissiveIntensity:

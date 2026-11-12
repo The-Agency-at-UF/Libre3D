@@ -8,6 +8,10 @@
  * brought up to date in place, or replaced when the lighting model needs another class
  * (`syncMaterial`).
  *
+ * Every material is a node material (three/webgpu), so a layer can add TSL nodes to it. An imported
+ * model arrives with GLTFLoader's built-in materials; the first sync swaps each for a node copy with
+ * the same values (nodeMaterials.ts), so its textures and glTF extras (transmission, sheen, …) stay.
+ *
  * Textures load in the background: a mesh is drawn without one until it arrives, then every mesh
  * that uses it gets it. Loaded textures are kept for the session and shared between meshes.
  *
@@ -16,40 +20,53 @@
  */
 
 import * as THREE from "three";
+import {
+  MeshBasicNodeMaterial,
+  MeshLambertNodeMaterial,
+  MeshPhongNodeMaterial,
+  MeshPhysicalNodeMaterial,
+  MeshStandardNodeMaterial,
+  MeshToonNodeMaterial,
+} from "three/webgpu";
 import type { Entity, MaterialLayer, ColorLayer, LightingLayer, ImageLayer, ImageSlot } from "../scene/types";
 import { getEntityIndex } from "../scene/entityIndex";
 import { colorLayerOf, lightingLayerOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../scene/layers";
 import { buildTextureFromLayer } from "../utils/materialLayers";
 import { depthPaintOf, syncDepthColors } from "../utils/depthColors";
 import { PathMesh } from "../paths/PathMesh";
+import { toNodeMaterial } from "./nodeMaterials";
 import type { SceneSource } from "./sceneSource";
 
 export type LayeredMaterial =
-  | THREE.MeshBasicMaterial
-  | THREE.MeshLambertMaterial
-  | THREE.MeshPhongMaterial
-  | THREE.MeshStandardMaterial
-  | THREE.MeshPhysicalMaterial
-  | THREE.MeshToonMaterial;
+  | MeshBasicNodeMaterial
+  | MeshLambertNodeMaterial
+  | MeshPhongNodeMaterial
+  | MeshStandardNodeMaterial
+  | MeshPhysicalNodeMaterial
+  | MeshToonNodeMaterial;
 
-// Physical builds the cheaper MeshStandardMaterial unless the layer asks for a clearcoat.
+// The built-in material flags, which node materials carry too (nodeMaterials.ts): `instanceof` can't
+// tell a node material from the built-in one it stands for.
+const flag = (material: THREE.Material, name: string): boolean => (material as unknown as Record<string, unknown>)[name] === true;
+
+// Physical builds the cheaper standard material unless the layer asks for a clearcoat.
 const wantsClearcoat = (lightingLayer: LightingLayer | undefined): boolean =>
   (lightingLayer?.model ?? "physical") === "physical" && (lightingLayer?.clearcoat ?? 0) > 0;
 
 const materialClassForLayer = (lightingLayer: LightingLayer | undefined) => {
-  if (wantsClearcoat(lightingLayer)) return THREE.MeshPhysicalMaterial;
+  if (wantsClearcoat(lightingLayer)) return MeshPhysicalNodeMaterial;
   switch (lightingLayer?.model ?? "physical") {
     case "lambert":
-      return THREE.MeshLambertMaterial;
+      return MeshLambertNodeMaterial;
     case "phong":
-      return THREE.MeshPhongMaterial;
+      return MeshPhongNodeMaterial;
     case "toon":
-      return THREE.MeshToonMaterial;
+      return MeshToonNodeMaterial;
     case "physical":
-      return THREE.MeshStandardMaterial;
+      return MeshStandardNodeMaterial;
     case "none":
     default:
-      return THREE.MeshBasicMaterial;
+      return MeshBasicNodeMaterial;
   }
 };
 
@@ -167,7 +184,7 @@ export class EntityMaterials {
   // The material property (or properties) each ImageLayer slot feeds. The glTF
   // metallic-roughness map is one packed texture Three assigns to both
   // roughnessMap and metalnessMap, so that slot returns two properties.
-  private static readonly SLOT_PROPS: Record<ImageSlot, Array<keyof THREE.MeshStandardMaterial>> = {
+  private static readonly SLOT_PROPS: Record<ImageSlot, Array<keyof MeshStandardNodeMaterial>> = {
     color: ["map"],
     normal: ["normalMap"],
     metallicRoughness: ["roughnessMap", "metalnessMap"],
@@ -283,23 +300,25 @@ export class EntityMaterials {
     lightingLayer: LightingLayer | undefined,
     model: LightingLayer["model"]
   ): void {
-    if (model === "physical" && material instanceof THREE.MeshStandardMaterial) {
-      material.roughness = lightingLayer?.roughness ?? DEFAULT_ROUGHNESS;
-      material.metalness = lightingLayer?.metalness ?? DEFAULT_METALNESS;
+    if (model === "physical" && flag(material, "isMeshStandardMaterial")) {
+      const standard = material as MeshStandardNodeMaterial;
+      standard.roughness = lightingLayer?.roughness ?? DEFAULT_ROUGHNESS;
+      standard.metalness = lightingLayer?.metalness ?? DEFAULT_METALNESS;
     }
     // Left alone when the layer has no value, so an imported glTF clearcoat survives layers made
     // before clearcoat was one. Turning it back to 0 keeps the physical material: three compiles it
     // without the coat, and swapping materials mid-drag would recompile anyway.
-    if (model === "physical" && material instanceof THREE.MeshPhysicalMaterial && lightingLayer?.clearcoat !== undefined) {
-      material.clearcoat = lightingLayer.clearcoat;
-      material.clearcoatRoughness = lightingLayer.clearcoatRoughness ?? 0;
+    if (model === "physical" && flag(material, "isMeshPhysicalMaterial") && lightingLayer?.clearcoat !== undefined) {
+      const physical = material as MeshPhysicalNodeMaterial;
+      physical.clearcoat = lightingLayer.clearcoat;
+      physical.clearcoatRoughness = lightingLayer.clearcoatRoughness ?? 0;
     }
-    if (model === "phong" && material instanceof THREE.MeshPhongMaterial) {
-      material.shininess = lightingLayer?.shininess ?? 30;
+    if (model === "phong" && flag(material, "isMeshPhongMaterial")) {
+      (material as MeshPhongNodeMaterial).shininess = lightingLayer?.shininess ?? 30;
     }
     if (model !== "none" && "emissive" in material) {
-      (material as THREE.MeshStandardMaterial).emissive.set(lightingLayer?.emissive ?? "#000000");
-      (material as THREE.MeshStandardMaterial).emissiveIntensity = lightingLayer?.emissiveIntensity ?? 1;
+      (material as MeshStandardNodeMaterial).emissive.set(lightingLayer?.emissive ?? "#000000");
+      (material as MeshStandardNodeMaterial).emissiveIntensity = lightingLayer?.emissiveIntensity ?? 1;
     }
   }
 
@@ -320,14 +339,27 @@ export class EntityMaterials {
     const model = lightingLayer?.model ?? "physical";
     const MaterialClass = materialClassForLayer(lightingLayer);
 
-    // A parsed glTF PBR material is often MeshPhysicalMaterial (a subclass of
-    // MeshStandardMaterial). Treat that as already matching "physical" so we take
-    // the in-place branch and keep its textures/advanced features, rather than
-    // rebuilding it into a plain textureless MeshStandardMaterial on first sync.
-    // A clearcoat needs the physical one, so a standard material is rebuilt when one is added.
+    // An imported mesh still has GLTFLoader's built-in material: swap it for a node copy with the
+    // same values, once. (glTF meshes can share a material; each gets its own copy, so a layer
+    // edit on one can't show on another.)
+    const builtIn = obj.material as THREE.Material;
+    if (!Array.isArray(obj.material) && !flag(builtIn, "isNodeMaterial")) {
+      const nodeMaterial = toNodeMaterial(builtIn);
+      if (nodeMaterial) {
+        obj.material = nodeMaterial;
+        if (obj instanceof PathMesh) obj.shareMaterialWithCaps();
+        // Frees what the renderer made for it. Its textures are the copy's now, so they stay.
+        builtIn.dispose();
+      }
+    }
+
+    // A parsed glTF PBR material is often physical (a subclass of standard). Treat that as already
+    // matching "physical" so we take the in-place branch and keep its textures/advanced features,
+    // rather than rebuilding it into a plain textureless standard material on first sync. A
+    // clearcoat needs the physical one, so a standard material is rebuilt when one is added.
     const materialMatches =
       model === "physical"
-        ? obj.material instanceof (wantsClearcoat(lightingLayer) ? THREE.MeshPhysicalMaterial : THREE.MeshStandardMaterial)
+        ? obj.material instanceof (wantsClearcoat(lightingLayer) ? MeshPhysicalNodeMaterial : MeshStandardNodeMaterial)
         : obj.material.constructor === MaterialClass;
 
     if (!materialMatches) {
