@@ -22,6 +22,7 @@ import * as THREE from "three";
 import type { Material } from "three";
 import type { NodeMaterial, Renderer } from "three/webgpu";
 import { Fn, float, mix, output, positionView, select, smoothstep, sRGBTransferOETF, toneMapping, uniform, vec4 } from "three/tsl";
+import { applyLayerNodes } from "./layerNodes";
 
 // The exposure the scene is tone-mapped with. It was read off <model-viewer> 4.0.0 when that played
 // published scenes (Neutral tone mapping, boosted 1.3x with no environment image) so the editor was
@@ -59,14 +60,15 @@ const fogFactor = Fn(() => {
   return select(fogKind.equal(FOG_EXP2), exp2, select(fogKind.equal(FOG_RANGE), range, float(0)));
 });
 
-// What a material's fragment ends in (`output` is three's name for the colour it worked out):
-// tone-mapped unless the material opted out, then sRGB, then the scene's fog if the material takes
-// fog: WebGLRenderer's order (tonemapping, colorspace, then fog_fragment).
-const canvasOutput = (toneMapped: boolean, fogged: boolean) =>
+// What a material's fragment ends in (`output` is three's name for the colour it worked out, or
+// `source`, an entity's lit colour mixed toward its unlit one: layerNodes.ts): tone-mapped unless the
+// material opted out, then sRGB, then the scene's fog if the material takes fog: WebGLRenderer's
+// order (tonemapping, colorspace, then fog_fragment).
+const canvasOutput = (toneMapped: boolean, fogged: boolean, source: typeof output = output) =>
   Fn(() => {
-    const color = toneMapped ? toneMapping(THREE.NeutralToneMapping, float(SCENE_EXPOSURE), output).rgb : output.rgb;
-    const finished = mix(output.rgb, sRGBTransferOETF(color), toCanvas);
-    return vec4(fogged ? mix(finished, fogColor, fogFactor()) : finished, output.a);
+    const color = toneMapped ? toneMapping(THREE.NeutralToneMapping, float(SCENE_EXPOSURE), source).rgb : source.rgb;
+    const finished = mix(source.rgb, sRGBTransferOETF(color), toCanvas);
+    return vec4(fogged ? mix(finished, fogColor, fogFactor()) : finished, source.a);
   })();
 const endings = {
   toneMapped: { fogged: canvasOutput(true, true), clear: canvasOutput(true, false) },
@@ -81,7 +83,8 @@ const endings = {
  * is built from, never on the material: three refreshes every uniform of a material that holds a
  * node on every frame (NodeMaterialObserver), which cost 3 ms a frame for 400 objects. So a node
  * material is built from a stand-in that inherits all it has from it. A node material that sets its
- * own `outputNode` keeps it, and its fog.
+ * own `outputNode` keeps it, and its fog. An entity material whose layers need nodes (layerNodes.ts)
+ * gets them on the stand-in here too.
  */
 export const installCanvasOutput = (renderer: Renderer): void => {
   const library = renderer.library;
@@ -93,7 +96,11 @@ export const installCanvasOutput = (renderer: Renderer): void => {
     const built: NodeMaterial = nodeMaterial === material ? Object.create(nodeMaterial) : nodeMaterial;
     // Not every material has `fog` (three's types leave it off Material); one without takes none.
     const fogged = (material as Material & { fog?: boolean }).fog === true;
-    built.outputNode = endings[material.toneMapped === false ? "plain" : "toneMapped"][fogged ? "fogged" : "clear"];
+    const toneMapped = material.toneMapped !== false;
+    const shaded = applyLayerNodes(material, built);
+    built.outputNode = shaded
+      ? canvasOutput(toneMapped, fogged, shaded as unknown as typeof output)
+      : endings[toneMapped ? "toneMapped" : "plain"][fogged ? "fogged" : "clear"];
     built.fog = false;
     return built;
   };

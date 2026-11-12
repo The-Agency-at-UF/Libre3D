@@ -6,15 +6,14 @@
  * straight out (radial) or along the direction (linear), between `near` (0) and `far` (1). The ramp
  * blends each stop into the next as Spline's does: in order, each blend clamped to its own span,
  * eased when `smooth`. Blends happen in sRGB (as the stops are picked) and are then converted to
- * the linear colours vertex colours hold. The result goes over the Color layer's colour by the
- * Depth layer's opacity; the material's own colour is then white (see viewport/entityMaterials.ts).
+ * the linear colours vertex colours hold. That's the ramp alone: the shader blends it with the
+ * layers under and over it (viewport/layerNodes.ts), and an export bakes that blend in.
  *
  * How smooth it looks depends on the geometry's vertices: tubes, spheres and models have plenty, a
  * cube or a flat shape's face very few.
  */
 
 import * as THREE from "three";
-import { colorLayerOf } from "../scene/layers";
 import type { DepthLayer, MaterialLayer } from "../scene/types";
 
 export const MAX_DEPTH_STOPS = 10;
@@ -24,13 +23,18 @@ type RGB = [number, number, number];
 /** What a mesh is painted with, or null when it has no enabled Depth layer. */
 export interface DepthPaint {
   layer: DepthLayer;
-  base: string; // the Color layer's colour, under the depth colours
 }
 
 export const depthPaintOf = (layers: MaterialLayer[] | undefined): DepthPaint | null => {
   const layer = layers?.find((each): each is DepthLayer => each.type === "depth" && each.enabled);
-  if (!layer) return null;
-  return { layer, base: colorLayerOf(layers)?.color ?? "#ffffff" };
+  return layer ? { layer } : null;
+};
+
+// What of a Depth layer its paint depends on: not its eye, opacity or blend mode, which the shader uses.
+export const depthPaintKey = (paint: DepthPaint | null): string | null => {
+  if (!paint) return null;
+  const { gradientType, origin, direction, near, far, stops, smooth } = paint.layer;
+  return JSON.stringify([gradientType, origin, direction, near, far, stops, smooth]);
 };
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
@@ -98,8 +102,6 @@ export const paintDepthColors = (geometry: THREE.BufferGeometry, paint: DepthPai
     geometry.userData.depthPainted = true;
   }
 
-  const base = hexToSrgb(paint.base);
-  const { opacity } = paint.layer;
   const existing = geometry.getAttribute("color");
   const colors =
     existing && existing !== geometry.userData.depthOriginalColor && existing.count === position.count && existing.itemSize === 3
@@ -110,12 +112,7 @@ export const paintDepthColors = (geometry: THREE.BufferGeometry, paint: DepthPai
     scratch.fromBufferAttribute(position, i);
     if (toObject) scratch.applyMatrix4(toObject);
     const ramp = sampleDepthRamp(paint.layer, depthRampPosition(paint.layer, scratch.x, scratch.y, scratch.z));
-    scratchColor.setRGB(
-      base[0] + (ramp[0] - base[0]) * opacity,
-      base[1] + (ramp[1] - base[1]) * opacity,
-      base[2] + (ramp[2] - base[2]) * opacity,
-      THREE.SRGBColorSpace,
-    );
+    scratchColor.setRGB(ramp[0], ramp[1], ramp[2], THREE.SRGBColorSpace);
     colors.setXYZ(i, scratchColor.r, scratchColor.g, scratchColor.b);
   }
   colors.needsUpdate = true;

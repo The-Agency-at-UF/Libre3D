@@ -15,5 +15,5 @@ export const editorSceneSource: SceneSource = {
   loadModel: loadModelForScene,
   loadTexture: loadTextureForScene,
   saveTexture: saveTextureAsset,
-  setMaterialLayers: (entityId, layers) => useEditorStore.getState().setEntityMaterialLayers(entityId, layers),
+  setMaterialLayers: (entityId, layers, opacity) => useEditorStore.getState().setEntityMaterialLayers(entityId, layers, opacity),
 };

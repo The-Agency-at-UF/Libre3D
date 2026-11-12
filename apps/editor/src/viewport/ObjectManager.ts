@@ -175,7 +175,7 @@ export class ObjectManager {
     } else if (entity.type === "path") {
       // The tube and its caps (paths/PathMesh.ts). The outline is the whole path's box, also while
       // it's trimmed: it doesn't jump while the trim is dragged, and it shows where a hidden path is.
-      const mesh = new PathMesh(pathOf(entity), strokeOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers));
+      const mesh = new PathMesh(pathOf(entity), strokeOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1));
       applyTransform(mesh, entity);
       mesh.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
 
@@ -184,7 +184,7 @@ export class ObjectManager {
       return mesh;
     } else if (entity.type === "shape") {
       // A filled outline (paths/ShapeMesh.ts), flat or extruded.
-      const mesh = new ShapeMesh(shapeOf(entity), solidOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers));
+      const mesh = new ShapeMesh(shapeOf(entity), solidOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1));
       applyTransform(mesh, entity);
 
       if (this.editorHelpers) attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
@@ -193,7 +193,7 @@ export class ObjectManager {
     } else {
       const geometry = createPrimitiveGeometry(entity);
       geometry.computeBoundingBox();
-      const mesh = new THREE.Mesh(geometry, this.materials.createMaterialFromLayers(entity.materialLayers));
+      const mesh = new THREE.Mesh(geometry, this.materials.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1));
       applyTransform(mesh, entity);
 
       if (this.editorHelpers) attachSelectionOutline(mesh, geometry.boundingBox!);

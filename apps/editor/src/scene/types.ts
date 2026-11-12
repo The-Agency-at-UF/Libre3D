@@ -22,31 +22,29 @@ export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
 // never split into two.
 export type ImageSlot = "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
 
-export interface ColorLayer {
-  id: string;
-  type: "color";
-  enabled: boolean;
-  opacity: number; // 0-1
-  color: string;
-  // glTF alpha-blending mode, captured from the source material at derivation
-  // time so imported meshes preserve texture-alpha-driven transparency (BLEND)
-  // and cutout masking (MASK) instead of only reacting to the scalar opacity
-  // above. Undefined for layers on primitives (cube/sphere/torus/plane), which have
-  // no glTF material to inherit this from -- treated as "OPAQUE".
-  alphaMode?: "OPAQUE" | "MASK" | "BLEND";
-  alphaCutoff?: number; // only meaningful when alphaMode === "MASK"
-  // glTF doubleSided, captured the same way -- an imported mesh authored as
-  // double-sided (thin geometry like hair/foliage/fabric) must stay that way
-  // even if its material ever needs a full rebuild (see createMaterialFromLayers in
-  // viewport/entityMaterials.ts).
-  doubleSided?: boolean;
-}
+// How a layer goes over the layers under it. The stack is drawn bottom to top, and
+// `materialLayers[0]` is the top, as the panel lists it. The formulas are the W3C compositing ones,
+// on sRGB values (scene/layerStack.ts).
+export type BlendMode = "normal" | "multiply" | "screen" | "overlay";
 
-export interface LightingLayer {
+// What every layer has. `opacity` (0-1) is how strongly it shows over the layers under it; the
+// object's own see-through-ness is `Entity.opacity`. `enabled` is the row's eye.
+interface LayerBase {
   id: string;
-  type: "lighting";
   enabled: boolean;
   opacity: number;
+  blendMode: BlendMode;
+}
+
+export interface ColorLayer extends LayerBase {
+  type: "color";
+  color: string;
+}
+
+// Shades everything under it. Its opacity is how much shading shows (0 looks unlit, as with the eye
+// off); its blend mode stays "normal". It can't be removed, so it also holds the surface's settings.
+export interface LightingLayer extends LayerBase {
+  type: "lighting";
   model: LightingModel;
   roughness: number; // only meaningful when model === "physical"
   metalness: number; // only meaningful when model === "physical"
@@ -58,17 +56,22 @@ export interface LightingLayer {
   shininess: number; // only meaningful when model === "phong"
   emissive: string;
   emissiveIntensity: number; // ignored when model === "none"
+  // The surface (on the Color layer before schema v5). glTF's alpha mode, captured from an imported
+  // material so texture-alpha transparency (BLEND) and cutouts (MASK) survive; undefined = "OPAQUE".
+  alphaMode?: "OPAQUE" | "MASK" | "BLEND";
+  alphaCutoff?: number; // only meaningful when alphaMode === "MASK"
+  // Drawn from both sides: flat objects, and imported thin geometry (hair, foliage, fabric).
+  doubleSided?: boolean;
 }
 
 // A texture map layer, derived from an imported glTF material's maps. The pixel
 // data is never stored here (materialLayers is saved in the scene document) — it
 // lives in the OPFS texture asset store, referenced by textureAssetId. wrapS/wrapT
 // are the THREE wrap constants copied straight off the source texture.
-export interface ImageLayer {
-  id: string;
+// Until Image is a layer type of its own (task D, PR 4) it only fills its slot, as the imported
+// material did: its opacity and blend mode aren't used.
+export interface ImageLayer extends LayerBase {
   type: "image";
-  enabled: boolean;
-  opacity: number;
   textureAssetId: string;
   slot: ImageSlot;
   wrapS: number;
@@ -78,18 +81,16 @@ export interface ImageLayer {
 // Colours the object by distance (like Spline's Depth layer, Vector origin, Local): each vertex's
 // distance from `origin` in the object's own space, straight out ("radial") or along `direction`
 // ("linear"), is placed on the ramp between `near` (its first stop) and `far` (its last). It's
-// painted as vertex colours (utils/depthColors.ts), so it exports and publishes; over the Color
-// layer's colour by `opacity`. At most one per object.
+// painted as vertex colours (utils/depthColors.ts) and blended over the layers under it like any
+// other (viewport/layerNodes.ts); an export bakes the blend into the vertex colours. At most one per
+// object.
 export interface DepthStop {
   color: string;
   position: number; // 0-1 along the ramp
 }
 
-export interface DepthLayer {
-  id: string;
+export interface DepthLayer extends LayerBase {
   type: "depth";
-  enabled: boolean;
-  opacity: number;
   gradientType: "radial" | "linear";
   origin: [number, number, number];
   direction: [number, number, number]; // only meaningful when gradientType === "linear"
@@ -101,6 +102,13 @@ export interface DepthLayer {
 
 export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer;
 
+/** A reusable material: the scene document's `materials` section, by ID (task D, PR 6). */
+export interface MaterialAsset {
+  id: string;
+  name: string;
+  layers: MaterialLayer[]; // top first, like an entity's
+}
+
 export interface Entity {
   id: string;
   type: EntityType;
@@ -109,7 +117,12 @@ export interface Entity {
   rotation: [number, number, number];
   scale: [number, number, number];
   color?: string;
+  // Top first. Missing on groups, lights, and imported meshes whose layers aren't derived yet.
   materialLayers?: MaterialLayer[];
+  // The material asset (scene.materials) the object uses instead of its own layers (task D, PR 6).
+  materialAssetId?: string;
+  // How see-through the whole object is, 0-1; missing = 1 (the Color layer's opacity before v5).
+  opacity?: number;
   assetId?: string;
   sourceFileName?: string;
   visible: boolean;

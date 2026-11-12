@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { PathMesh } from "../paths/PathMesh";
 import { showBasePoses } from "../viewport/basePoses";
 import { hideEditorOnlyObjects } from "../viewport/editorOnly";
+import { bakeLayerStacksForExport } from "../viewport/layerNodes";
 
 type GLTFExporterResult = ArrayBuffer | Blob | string | Record<string, unknown>;
 
@@ -101,6 +102,62 @@ const hideEditorUserData = (scene: THREE.Scene): (() => void) => {
   };
 };
 
+// glTF has PBR (standard) and unlit materials only: GLTFExporter warns and guesses for any other.
+// New 3D objects are Phong (task D2), so Phong, Lambert and Toon go out as a standard material with
+// the same colour, maps, emissive and surface for the length of the export. Phong's shininess sets
+// the roughness (the usual Blinn-Phong to GGX approximation); Lambert and Toon are fully rough.
+const isBuiltInFlag = (material: THREE.Material, flag: string): boolean => (material as unknown as Record<string, unknown>)[flag] === true;
+
+const standardCopyOf = (material: THREE.Material): THREE.MeshStandardMaterial => {
+  const source = material as THREE.MeshPhongMaterial;
+  const shininess = isBuiltInFlag(material, "isMeshPhongMaterial") ? source.shininess : 0;
+  return new THREE.MeshStandardMaterial({
+    name: source.name,
+    color: source.color,
+    map: source.map,
+    opacity: source.opacity,
+    transparent: source.transparent,
+    alphaTest: source.alphaTest,
+    alphaMap: source.alphaMap,
+    side: source.side,
+    vertexColors: source.vertexColors,
+    emissive: source.emissive,
+    emissiveIntensity: source.emissiveIntensity,
+    emissiveMap: source.emissiveMap,
+    normalMap: source.normalMap,
+    normalScale: source.normalScale,
+    aoMap: source.aoMap,
+    aoMapIntensity: source.aoMapIntensity,
+    roughness: shininess > 0 ? Math.sqrt(2 / (shininess + 2)) : 1,
+    metalness: 0,
+  });
+};
+
+const standardMaterialsForExport = (scene: THREE.Scene): (() => void) => {
+  const copies = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+  const restores: (() => void)[] = [];
+
+  scene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh) || Array.isArray(object.material)) return;
+    const material = object.material as THREE.Material;
+    if (!["isMeshPhongMaterial", "isMeshLambertMaterial", "isMeshToonMaterial"].some((flag) => isBuiltInFlag(material, flag))) return;
+    let copy = copies.get(material);
+    if (!copy) {
+      copy = standardCopyOf(material);
+      copies.set(material, copy);
+    }
+    object.material = copy;
+    restores.push(() => {
+      object.material = material;
+    });
+  });
+
+  return () => {
+    restores.forEach((restore) => restore());
+    copies.forEach((copy) => copy.dispose());
+  };
+};
+
 const hasExportableMeshes = (scene: THREE.Scene): boolean => {
   let meshCount = 0;
 
@@ -143,6 +200,10 @@ export const createSceneExportBlob = async (
   const restorePoses = showBasePoses(scene);
   const restoreTrimmedPaths = trimPathsForExport(scene);
   const restoreEditorUserData = hideEditorUserData(scene);
+  // A glTF material can't blend layers: a Depth stack goes out as vertex colours with the blend baked in.
+  const restoreLayerStacks = bakeLayerStacksForExport(scene);
+  // After the bake, which finds a stack by the object's own material.
+  const restoreMaterials = standardMaterialsForExport(scene);
 
   try {
     const result = await parseScene(
@@ -187,6 +248,8 @@ export const createSceneExportBlob = async (
     restoreTrimmedPaths();
     restorePoses();
     restoreEditorUserData();
+    restoreMaterials();
+    restoreLayerStacks();
   }
 };
 

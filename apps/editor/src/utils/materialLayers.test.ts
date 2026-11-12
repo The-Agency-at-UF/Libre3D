@@ -5,7 +5,7 @@ import type { LightingLayer } from "../store/useEditorStore";
 import { createTextureDedupCache, deriveMaterialLayers, isJpeg } from "./materialLayers";
 
 const lightingOf = async (material: THREE.Material) =>
-  (await deriveMaterialLayers(material, createTextureDedupCache(), async () => {})).find(
+  (await deriveMaterialLayers(material, createTextureDedupCache(), async () => {})).layers.find(
     (layer): layer is LightingLayer => layer.type === "lighting",
   );
 
@@ -18,6 +18,16 @@ describe("deriveMaterialLayers", () => {
 
   it("gives a material without one a clearcoat of 0", async () => {
     expect(await lightingOf(new THREE.MeshStandardMaterial())).toMatchObject({ clearcoat: 0, clearcoatRoughness: 0 });
+  });
+
+  it("puts Lighting on top with the surface, and the material's opacity on the object", async () => {
+    const material = new THREE.MeshStandardMaterial({ color: "#ff0000", opacity: 0.4, transparent: true, side: THREE.DoubleSide });
+    const derived = await deriveMaterialLayers(material, createTextureDedupCache(), async () => {});
+
+    expect(derived.layers.map((layer) => layer.type)).toEqual(["lighting", "color"]);
+    expect(derived.layers[0]).toMatchObject({ alphaMode: "BLEND", doubleSided: true, blendMode: "normal" });
+    expect(derived.layers[1]).toMatchObject({ color: "#ff0000", opacity: 1, blendMode: "normal" });
+    expect(derived.opacity).toBe(0.4);
   });
 });
 

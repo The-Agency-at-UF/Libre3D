@@ -1,6 +1,6 @@
 /**
  * PURPOSE: Builds and updates the Three.js material of an object from its entity's material layers
- * (Color, Lighting, Image, Depth).
+ * (Color, Lighting, Image, Depth) and its opacity.
  *
  * INPUT: An entity's `materialLayers`, and from the SceneSource: the wireframe setting and the
  * textures that Image layers name.
@@ -8,7 +8,10 @@
  * brought up to date in place, or replaced when the lighting model needs another class
  * (`syncMaterial`).
  *
- * Every material is a node material (three/webgpu), so a layer can add TSL nodes to it. An imported
+ * The colour layers are blended as scene/layerStack.ts says. A stack that adds up to one colour sets
+ * the material's colour; one with a Depth layer, or a Lighting layer under full opacity, is drawn
+ * with TSL nodes that never sit on the material itself (layerNodes.ts). Every material is a node
+ * material (three/webgpu) for that. An imported
  * model arrives with GLTFLoader's built-in materials; the first sync swaps each for a node copy with
  * the same values (nodeMaterials.ts), so its textures and glTF extras (transmission, sheen, …) stay.
  *
@@ -28,11 +31,13 @@ import {
   MeshStandardNodeMaterial,
   MeshToonNodeMaterial,
 } from "three/webgpu";
-import type { Entity, MaterialLayer, ColorLayer, LightingLayer, ImageLayer, ImageSlot } from "../scene/types";
+import type { Entity, MaterialLayer, LightingLayer, ImageLayer, ImageSlot } from "../scene/types";
 import { getEntityIndex } from "../scene/entityIndex";
-import { colorLayerOf, lightingLayerOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../scene/layers";
+import { lightingLayerOf, surfaceOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, type Surface } from "../scene/layers";
+import { lightingStrength, planStack, type StackPlan } from "../scene/layerStack";
 import { buildTextureFromLayer } from "../utils/materialLayers";
-import { depthPaintOf, syncDepthColors } from "../utils/depthColors";
+import { depthPaintKey, depthPaintOf, syncDepthColors } from "../utils/depthColors";
+import { syncLayerNodes } from "./layerNodes";
 import { PathMesh } from "../paths/PathMesh";
 import { toNodeMaterial } from "./nodeMaterials";
 import type { SceneSource } from "./sceneSource";
@@ -118,32 +123,41 @@ export class EntityMaterials {
   // legacy layers with no alphaMode recorded -- primitives, or layers derived
   // before this shipped) fall back to the original opacity-only heuristic.
   private computeAlphaBlendState(
-    colorLayer: ColorLayer | undefined,
+    surface: Surface,
     opacity: number,
   ): { transparent: boolean; alphaTest: number; depthWrite: boolean } {
-    const alphaMode = colorLayer?.alphaMode ?? "OPAQUE";
-    if (alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: opacity >= 1 };
-    if (alphaMode === "MASK") return { transparent: opacity < 1, alphaTest: colorLayer?.alphaCutoff ?? 0.5, depthWrite: true };
+    if (surface.alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: opacity >= 1 };
+    if (surface.alphaMode === "MASK") return { transparent: opacity < 1, alphaTest: surface.alphaCutoff, depthWrite: true };
     return { transparent: opacity < 1, alphaTest: 0, depthWrite: true };
   }
 
-  public createMaterialFromLayers(layers: MaterialLayer[] | undefined): LayeredMaterial {
-    const colorLayer = colorLayerOf(layers);
+  // The material's colour: the stack's, when it adds up to one colour; white under a Depth stack,
+  // whose colour comes from its nodes (layerNodes.ts).
+  private static setStackColor(material: LayeredMaterial, plan: StackPlan): void {
+    if (plan.depth) material.color.setRGB(1, 1, 1);
+    else material.color.setRGB(plan.under.rgb[0], plan.under.rgb[1], plan.under.rgb[2], THREE.SRGBColorSpace);
+  }
+
+  /** A new material for `layers` on an object `objectOpacity` see-through (1 = solid). */
+  public createMaterialFromLayers(layers: MaterialLayer[] | undefined, objectOpacity = 1): LayeredMaterial {
     const lightingLayer = lightingLayerOf(layers);
     const model = lightingLayer?.model ?? "physical";
     const MaterialClass = materialClassForLayer(lightingLayer);
-    const opacity = colorLayer?.opacity ?? 1;
-    const alphaState = this.computeAlphaBlendState(colorLayer, opacity);
+    const plan = planStack(layers);
+    const surface = surfaceOf(layers);
+    const opacity = objectOpacity * plan.alpha;
+    const alphaState = this.computeAlphaBlendState(surface, opacity);
 
     const material = new MaterialClass({
-      color: colorLayer?.color ?? "#ffffff",
       opacity,
       transparent: alphaState.transparent,
       alphaTest: alphaState.alphaTest,
       depthWrite: alphaState.depthWrite,
-      side: colorLayer?.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
+      side: surface.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
       wireframe: this.source.isWireframe(),
     });
+    EntityMaterials.setStackColor(material, plan);
+    syncLayerNodes(material, plan, lightingStrength(lightingLayer));
 
     this.applyLightingProperties(material, lightingLayer, model);
     this.applyImageLayers(material, layers);
@@ -151,12 +165,12 @@ export class EntityMaterials {
     return material;
   }
 
-  // A Depth layer (utils/depthColors.ts) is the mesh's vertex colours, which already hold the Color
-  // layer's colour under it, so the material's colour is white while it's on. Whether the material
-  // used vertex colours before (an imported model's own) comes back when the layer goes.
+  // A Depth layer (utils/depthColors.ts) is the mesh's vertex colours: its ramp, which the stack's
+  // nodes blend with the layers around it. Whether the material used vertex colours before (an
+  // imported model's own) comes back when the layer goes.
   public applyDepthLayer(mesh: THREE.Mesh, entity: Entity): void {
     const paint = depthPaintOf(entity.materialLayers);
-    const key = paint ? JSON.stringify(paint) : null;
+    const key = depthPaintKey(paint);
     if (mesh instanceof PathMesh) {
       mesh.setDepthPaint(paint, key);
     } else {
@@ -169,10 +183,7 @@ export class EntityMaterials {
     }
 
     const material = mesh.material as LayeredMaterial;
-    if (paint) {
-      material.userData.vertexColorsBeforeDepth ??= material.vertexColors;
-      material.color.set("#ffffff");
-    }
+    if (paint) material.userData.vertexColorsBeforeDepth ??= material.vertexColors;
     const vertexColors: boolean = paint ? true : (material.userData.vertexColorsBeforeDepth ?? material.vertexColors);
     if (!paint) delete material.userData.vertexColorsBeforeDepth;
     if (material.vertexColors !== vertexColors) {
@@ -334,7 +345,6 @@ export class EntityMaterials {
    */
   public syncMaterial(obj: THREE.Mesh, entity: Entity): boolean {
     this.textureWasMissing = false;
-    const colorLayer = colorLayerOf(entity.materialLayers);
     const lightingLayer = lightingLayerOf(entity.materialLayers);
     const model = lightingLayer?.model ?? "physical";
     const MaterialClass = materialClassForLayer(lightingLayer);
@@ -364,15 +374,19 @@ export class EntityMaterials {
 
     if (!materialMatches) {
       const oldMaterial = obj.material as THREE.Material;
-      obj.material = this.createMaterialFromLayers(entity.materialLayers);
+      obj.material = this.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1);
       if (obj instanceof PathMesh) obj.shareMaterialWithCaps();
       oldMaterial.dispose();
     } else {
       const material = obj.material as LayeredMaterial;
-      material.color.set(colorLayer?.color ?? "#ffffff");
-      const opacity = colorLayer?.opacity ?? 1;
-      const alphaState = this.computeAlphaBlendState(colorLayer, opacity);
-      const newSide = colorLayer?.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+      const plan = planStack(entity.materialLayers);
+      const surface = surfaceOf(entity.materialLayers);
+      EntityMaterials.setStackColor(material, plan);
+      const opacity = (entity.opacity ?? 1) * plan.alpha;
+      const alphaState = this.computeAlphaBlendState(surface, opacity);
+      const newSide = surface.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+      // A change to the stack's shape (a blend mode, an eye, the order) builds another shader.
+      const stackReshaped = syncLayerNodes(material, plan, lightingStrength(lightingLayer));
       // Only transparent/alphaTest/side changes force a shader recompile; color,
       // opacity, roughness, etc. do not. This runs for the gizmo's object on every
       // frame of a drag (and ran for every entity on every store change before
@@ -383,7 +397,8 @@ export class EntityMaterials {
       const needsRecompile =
         material.transparent !== alphaState.transparent ||
         material.alphaTest !== alphaState.alphaTest ||
-        material.side !== newSide;
+        material.side !== newSide ||
+        stackReshaped;
       material.opacity = opacity;
       material.transparent = alphaState.transparent;
       material.alphaTest = alphaState.alphaTest;

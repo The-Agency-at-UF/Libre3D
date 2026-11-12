@@ -52,7 +52,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("persist v17 migration", () => {
+describe("persist migration (v17: preferences only; v18: material assets, no change)", () => {
   it("keeps only editor preferences from an older blob; the scene saved there is dropped", async () => {
     seedEditorState(
       {
@@ -68,7 +68,7 @@ describe("persist v17 migration", () => {
     const { useEditorStore } = await loadStore();
     const state = useEditorStore.getState();
 
-    expect(persisted().version).toBe(17);
+    expect(persisted().version).toBe(18);
     expect(Object.keys(persisted().state).sort()).toEqual(PREFERENCE_KEYS);
     expect(state).toMatchObject({ projectionMode: "orthographic", viewportZoom: 66, selectedEntityIds: [] });
     // The starter scene, not the old one: scenes are opened from the cloud.
@@ -94,7 +94,7 @@ describe("persist v17 migration", () => {
     const { useEditorStore } = await loadStore();
 
     expect(useEditorStore.persist.hasHydrated()).toBe(true);
-    expect(persisted().version).toBe(17);
+    expect(persisted().version).toBe(18);
     expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
   });
 
@@ -747,7 +747,7 @@ describe("paths", () => {
 
     expect(path()).toMatchObject({ type: "path", name: "Path", trimStart: 0, trimEnd: 1, stroke: { radius: 0.12, caps: "round" } });
     expect(path().path?.points).toHaveLength(3);
-    expect(path().materialLayers?.map((layer) => layer.type)).toEqual(["color", "lighting"]);
+    expect(path().materialLayers?.map((layer) => layer.type)).toEqual(["lighting", "color"]);
   });
 
   it("changes the stroke in one undo step each, ignoring a radius that draws nothing", async () => {
@@ -835,7 +835,7 @@ describe("paths", () => {
       [1, 0, 0], // flat: Z dropped
     ]);
     expect(added.shape!.regions[0].outline.points[1].position).not.toBe(drawn.points[1].position);
-    expect(added.materialLayers![0]).toMatchObject({ type: "color", doubleSided: true });
+    expect(added.materialLayers![0]).toMatchObject({ type: "lighting", doubleSided: true });
     expect(useEditorStore.getState().selectedEntityIds).toEqual([shapeId]);
     useEditorStore.temporal.getState().undo();
     expect(useEditorStore.getState().entities.some((e) => e.id === shapeId)).toBe(false);
@@ -994,8 +994,8 @@ describe("paths", () => {
       expect(children[0]).toMatchObject({ position: [2, 0, 0], shape: { regions: [{ outline: square, holes: [] }] } });
       expect(children[0].shape!.regions[0].outline.points[0].position).not.toBe(square.points[0].position);
       expect(children[0].materialLayers).toEqual([
-        expect.objectContaining({ type: "color", color: "#123456", doubleSided: true }),
-        expect.objectContaining({ type: "lighting" }),
+        expect.objectContaining({ type: "lighting", doubleSided: true }),
+        expect.objectContaining({ type: "color", color: "#123456" }),
       ]);
       expect(children[0].stroke).toBeUndefined();
     });
@@ -1059,7 +1059,7 @@ describe("shapes", () => {
       position: [1, 2, 0],
       shape: data,
       extrusion: 0.2,
-      materialLayers: [{ id: `${id}-color`, type: "color", enabled: true, opacity: 1, color: "#123456" }],
+      materialLayers: [{ id: `${id}-color`, type: "color", enabled: true, opacity: 1, blendMode: "normal", color: "#123456" }],
       ...overrides,
     });
   const storeWithShapes = async () => {
@@ -1187,7 +1187,7 @@ describe("the Play camera setting", () => {
 });
 
 describe("planes", () => {
-  it("adds a lit 1×1 plane at the origin, selected, shown from both sides", async () => {
+  it("adds an unlit 1×1 plane at the origin, selected, shown from both sides", async () => {
     const { useEditorStore } = await loadStore();
     useEditorStore.getState().loadScene({ entities: [light] });
 
@@ -1196,8 +1196,8 @@ describe("planes", () => {
 
     expect(added).toMatchObject({ type: "plane", name: "Plane", position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] });
     expect(added.materialLayers).toEqual([
-      expect.objectContaining({ type: "color", color: "#B39DFF", opacity: 1, doubleSided: true }),
-      expect.objectContaining({ type: "lighting", model: "physical" }),
+      expect.objectContaining({ type: "lighting", model: "none", doubleSided: true }),
+      expect.objectContaining({ type: "color", color: "#B39DFF", opacity: 1 }),
     ]);
     expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
   });
@@ -1234,8 +1234,8 @@ describe("image planes", () => {
 
     expect(added).toMatchObject({ type: "image", name: "photo", imageAspect: 1.5, position: [0, 0, 0], scale: [1, 1, 1] });
     expect(added.materialLayers).toEqual([
-      expect.objectContaining({ type: "color", color: "#ffffff", opacity: 1, doubleSided: true }),
-      expect.objectContaining({ type: "lighting", model: "none" }),
+      expect.objectContaining({ type: "lighting", model: "none", doubleSided: true }),
+      expect.objectContaining({ type: "color", color: "#ffffff", opacity: 1 }),
       expect.objectContaining({ type: "image", enabled: true, textureAssetId: hash, slot: "color", wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping }),
     ]);
     expect(added.materialLayers![0]).not.toHaveProperty("alphaMode");
@@ -1248,7 +1248,7 @@ describe("image planes", () => {
 
     const id = useEditorStore.getState().addImagePlane("logo", hash, 1, true);
 
-    expect(useEditorStore.getState().entities.find((e) => e.id === id)!.materialLayers![0]).toMatchObject({ type: "color", alphaMode: "BLEND" });
+    expect(useEditorStore.getState().entities.find((e) => e.id === id)!.materialLayers![0]).toMatchObject({ type: "lighting", alphaMode: "BLEND" });
   });
 
   it("is one undo step and puts the pen down", async () => {
@@ -1406,6 +1406,110 @@ describe("depth layers", () => {
     useEditorStore.getState().setReadOnly("openElsewhere");
 
     useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+
+    expect(useEditorStore.getState().entities).toBe(before);
+  });
+});
+
+describe("the material layer stack", () => {
+  const storeWithCube = async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    useEditorStore.getState().loadScene({ entities: [light] });
+    const cubeId = useEditorStore.getState().addEntity("cube");
+    const cube = () => useEditorStore.getState().entities.find((e) => e.id === cubeId)!;
+    const types = () => cube().materialLayers!.map((layer) => layer.type);
+    const idOf = (type: string, nth = 0) => cube().materialLayers!.filter((layer) => layer.type === type)[nth].id;
+    return { useEditorStore, selectSceneContent, cubeId, cube, types, idOf };
+  };
+
+  it("starts a 3D object with Lighting on top of a Color layer, both Normal", async () => {
+    const { cube, types } = await storeWithCube();
+
+    expect(types()).toEqual(["lighting", "color"]);
+    expect(cube().materialLayers!.every((layer) => layer.blendMode === "normal" && layer.opacity === 1 && layer.enabled)).toBe(true);
+  });
+
+  it("adds Color layers just under Lighting, in the colour of the one under them", async () => {
+    const { useEditorStore, cubeId, cube, types } = await storeWithCube();
+    const color = (cube().materialLayers![1] as { color: string }).color;
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "color");
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+
+    expect(types()).toEqual(["lighting", "depth", "color", "color"]);
+    expect(cube().materialLayers![2]).toMatchObject({ type: "color", color });
+  });
+
+  it("never removes Lighting, and removes Color only while another colour layer stays", async () => {
+    const { useEditorStore, cubeId, types, idOf } = await storeWithCube();
+
+    useEditorStore.getState().removeMaterialLayer(cubeId, idOf("lighting"));
+    useEditorStore.getState().removeMaterialLayer(cubeId, idOf("color"));
+    expect(types()).toEqual(["lighting", "color"]);
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+    useEditorStore.getState().removeMaterialLayer(cubeId, idOf("color"));
+    expect(types()).toEqual(["lighting", "depth"]);
+    useEditorStore.getState().removeMaterialLayer(cubeId, idOf("depth"));
+    expect(types()).toEqual(["lighting", "depth"]);
+  });
+
+  it("switches a layer's type, keeping its ID, eye, opacity and blend mode, one Depth at most", async () => {
+    const { useEditorStore, cubeId, cube, types, idOf } = await storeWithCube();
+    const colorId = idOf("color");
+    useEditorStore.getState().updateMaterialLayer(cubeId, colorId, { opacity: 0.5, blendMode: "screen" });
+
+    useEditorStore.getState().switchMaterialLayerType(cubeId, colorId, "depth", 1.5);
+    expect(cube().materialLayers![1]).toMatchObject({ id: colorId, type: "depth", opacity: 0.5, blendMode: "screen", far: 1.5 });
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "color");
+    useEditorStore.getState().switchMaterialLayerType(cubeId, idOf("color"), "depth");
+    expect(types()).toEqual(["lighting", "color", "depth"]);
+
+    useEditorStore.getState().switchMaterialLayerType(cubeId, idOf("lighting"), "color");
+    expect(types()).toEqual(["lighting", "color", "depth"]);
+  });
+
+  it("moves layers below Lighting only, as one undo step", async () => {
+    const { useEditorStore, cubeId, types, idOf } = await storeWithCube();
+    useEditorStore.getState().addMaterialLayer(cubeId, "depth");
+
+    useEditorStore.getState().moveMaterialLayer(cubeId, idOf("depth"), 2);
+    expect(types()).toEqual(["lighting", "color", "depth"]);
+    useEditorStore.getState().moveMaterialLayer(cubeId, idOf("color"), 0);
+    expect(types()).toEqual(["lighting", "color", "depth"]);
+    useEditorStore.temporal.getState().undo();
+    expect(types()).toEqual(["lighting", "depth", "color"]);
+  });
+
+  it("sets the object's opacity, leaving it off the object at 1", async () => {
+    const { useEditorStore, cubeId, cube } = await storeWithCube();
+
+    useEditorStore.getState().setEntityOpacity({ [cubeId]: 0.25 });
+    expect(cube().opacity).toBe(0.25);
+    useEditorStore.getState().setEntityOpacity({ [cubeId]: 1 });
+    expect(cube()).not.toHaveProperty("opacity");
+  });
+
+  it("saves and reloads material assets with the scene, and undoes them", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithCube();
+    const materials = { m: { id: "m", name: "Gloss", layers: [] } };
+
+    useEditorStore.getState().loadScene({ entities: [light], materials });
+
+    expect(selectSceneContent(useEditorStore.getState()).materials).toEqual(materials);
+    expect(useEditorStore.getState().materials).not.toBe(materials);
+  });
+
+  it("changes nothing in a view-only tab", async () => {
+    const { useEditorStore, cubeId, idOf } = await storeWithCube();
+    const before = useEditorStore.getState().entities;
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().addMaterialLayer(cubeId, "color");
+    useEditorStore.getState().switchMaterialLayerType(cubeId, idOf("color"), "depth");
+    useEditorStore.getState().moveMaterialLayer(cubeId, idOf("color"), 0);
+    useEditorStore.getState().setEntityOpacity({ [cubeId]: 0.5 });
 
     expect(useEditorStore.getState().entities).toBe(before);
   });
