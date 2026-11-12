@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from "react";
-import { useEditorStore, type ColorLayer, type DepthLayer, type GradientLayer, type ImageLayer, type NoiseLayer, type NoiseType, type VoronoiStyle, type LightingLayer, type LightingModel } from "../../store/useEditorStore";
+import { useEditorStore, type ColorLayer, type DepthLayer, type FresnelLayer, type GradientLayer, type ImageLayer, type NoiseLayer, type NoiseType, type VoronoiStyle, type LightingLayer, type LightingModel } from "../../store/useEditorStore";
 import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../../scene/layers";
 import { loadTextureForScene } from "../../utils/assetTransfers";
 import { editDepth } from "../../viewport/hooks/useViewportDepthGizmo";
@@ -421,6 +421,23 @@ export function NoiseSettings({ row }: { row: LayerRowData }) {
       <NumberRow label="Seed" value={layer.seed} step={1} onChange={(seed) => update({ seed })} />
       <NumberRow label="Low Cut" value={layer.lowCut} min={0} max={1} step={0.05} onChange={(lowCut) => update({ lowCut })} />
       <NumberRow label="High Cut" value={layer.highCut} min={0} max={1} step={0.05} onChange={(highCut) => update({ highCut })} />
+    </>
+  );
+}
+
+// A Fresnel layer, as Spline's: its colour where the surface turns away from the camera, as much as
+// clamp(bias + scale * (1 - |N·V|)^intensity) * factor. Over Lighting it glows.
+export function FresnelSettings({ row }: { row: LayerRowData }) {
+  const update = useRowUpdate(row);
+  const layer = row.pairs[0].layer as FresnelLayer;
+  return (
+    <>
+      <ModeRow row={row} />
+      <ColorField label="Color" color={layer.color} alpha={layer.alpha ?? 1} onChange={(change) => update(change.color !== undefined ? { color: change.color } : { alpha: change.alpha })} />
+      <Slider label="Bias" min={0} max={1} step={0.01} value={layer.bias} onChange={(bias) => update({ bias })} />
+      <NumberRow label="Scale" value={layer.scale} step={0.1} onChange={(scale) => update({ scale })} />
+      <NumberRow label="Intensity" value={layer.intensity} min={0} step={0.1} onChange={(intensity) => update({ intensity })} />
+      <NumberRow label="Factor" value={layer.factor} min={0} step={0.1} onChange={(factor) => update({ factor })} />
     </>
   );
 }
