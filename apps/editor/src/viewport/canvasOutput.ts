@@ -72,18 +72,16 @@ const endings = {
   toneMapped: { fogged: canvasOutput(true, true), clear: canvasOutput(true, false) },
   plain: { fogged: canvasOutput(false, true), clear: canvasOutput(false, false) },
 };
-const allEndings = new Set<unknown>(Object.values(endings).flatMap((pair) => Object.values(pair)));
-
-// Whether a node material took fog before installCanvasOutput turned three's own fog off on it (a
-// node material is handed back as itself, so its own `fog` can't be read again).
-const takesFog = new WeakMap<Material, boolean>();
 
 /**
  * Makes every material `renderer` draws end in `canvasOutput`. Three asks the renderer's material
- * library for the node material to build a shader from (its own for a built-in material like
- * MeshStandardMaterial, the material itself when it already is one); that is where the ending is
- * put on, and three's own fog step turned off. A node material that sets its own `outputNode` keeps
- * it, and its fog.
+ * library for the node material to build a shader from: for a built-in material like
+ * MeshStandardMaterial a copy as its node material, which three builds from and then drops; for a
+ * node material the material itself. The ending, and three's own fog step turned off, go on what
+ * is built from, never on the material: three refreshes every uniform of a material that holds a
+ * node on every frame (NodeMaterialObserver), which cost 3 ms a frame for 400 objects. So a node
+ * material is built from a stand-in that inherits all it has from it. A node material that sets its
+ * own `outputNode` keeps it, and its fog.
  */
 export const installCanvasOutput = (renderer: Renderer): void => {
   const library = renderer.library;
@@ -91,14 +89,13 @@ export const installCanvasOutput = (renderer: Renderer): void => {
   library.fromMaterial = (material: Material) => {
     // Three's types say a plain Material can come back; what does is a node material or null.
     const nodeMaterial = toNodeMaterial(material) as NodeMaterial | null;
-    // A material with an ending of its own keeps it.
-    if (!nodeMaterial || (nodeMaterial.outputNode !== null && !allEndings.has(nodeMaterial.outputNode))) return nodeMaterial;
+    if (!nodeMaterial || nodeMaterial.outputNode !== null) return nodeMaterial;
+    const built: NodeMaterial = nodeMaterial === material ? Object.create(nodeMaterial) : nodeMaterial;
     // Not every material has `fog` (three's types leave it off Material); one without takes none.
-    const fogged = takesFog.get(material) ?? (material as Material & { fog?: boolean }).fog === true;
-    if (nodeMaterial === material) takesFog.set(material, fogged);
-    nodeMaterial.outputNode = endings[material.toneMapped === false ? "plain" : "toneMapped"][fogged ? "fogged" : "clear"];
-    nodeMaterial.fog = false;
-    return nodeMaterial;
+    const fogged = (material as Material & { fog?: boolean }).fog === true;
+    built.outputNode = endings[material.toneMapped === false ? "plain" : "toneMapped"][fogged ? "fogged" : "clear"];
+    built.fog = false;
+    return built;
   };
 };
 

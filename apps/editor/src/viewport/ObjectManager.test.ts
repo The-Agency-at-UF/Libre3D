@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { MeshBasicNodeMaterial, MeshLambertNodeMaterial, MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from "three/webgpu";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Entity, LightingLayer } from "../store/useEditorStore";
@@ -50,8 +51,8 @@ describe("ObjectManager clearcoat", () => {
 
     const material = sync({});
 
-    expect(material).toBeInstanceOf(THREE.MeshStandardMaterial);
-    expect(material).not.toBeInstanceOf(THREE.MeshPhysicalMaterial);
+    expect(material).toBeInstanceOf(MeshStandardNodeMaterial);
+    expect(material).not.toBeInstanceOf(MeshPhysicalNodeMaterial);
   });
 
   it("builds a physical material for a clearcoat, and keeps it when the coat goes back to 0", async () => {
@@ -60,7 +61,7 @@ describe("ObjectManager clearcoat", () => {
 
     const coated = sync({ clearcoat: 1, clearcoatRoughness: 0.05 }) as THREE.MeshPhysicalMaterial;
 
-    expect(coated).toBeInstanceOf(THREE.MeshPhysicalMaterial);
+    expect(coated).toBeInstanceOf(MeshPhysicalNodeMaterial);
     expect(coated).toMatchObject({ clearcoat: 1, clearcoatRoughness: 0.05, roughness: 0.45 });
 
     const uncoated = sync({ clearcoat: 0 });
@@ -76,14 +77,32 @@ describe("ObjectManager clearcoat", () => {
 
     const material = sync({ clearcoat: undefined, clearcoatRoughness: undefined, roughness: 0.3 });
 
-    expect(material).toBe(imported);
+    // GLTFLoader's built-in material is swapped for a node copy with its values, kept in place after.
+    expect(material).toBeInstanceOf(MeshPhysicalNodeMaterial);
     expect(material).toMatchObject({ clearcoat: 0.7, clearcoatRoughness: 0.2, roughness: 0.3 });
+    expect(sync({ clearcoat: undefined, clearcoatRoughness: undefined, roughness: 0.5 })).toBe(material);
+  });
+
+  it("keeps an imported material's maps and extras when it swaps it for a node material", async () => {
+    const { sync, mesh } = await buildCube();
+    sync({});
+    const normalMap = new THREE.Texture();
+    const imported = new THREE.MeshPhysicalMaterial({ normalMap, transmission: 0.6, sheen: 0.4 });
+    mesh().material = imported;
+    const disposed = vi.fn();
+    imported.addEventListener("dispose", disposed);
+
+    const material = sync({}) as THREE.MeshPhysicalMaterial;
+
+    expect(material).toBeInstanceOf(MeshPhysicalNodeMaterial);
+    expect(material).toMatchObject({ normalMap, transmission: 0.6, sheen: 0.4 });
+    expect(disposed).toHaveBeenCalledOnce();
   });
 
   it("drops the coat for a lighting model other than physical", async () => {
     const { sync } = await buildCube();
 
-    expect(sync({ model: "lambert", clearcoat: 1 })).toBeInstanceOf(THREE.MeshLambertMaterial);
+    expect(sync({ model: "lambert", clearcoat: 1 })).toBeInstanceOf(MeshLambertNodeMaterial);
   });
 });
 
@@ -109,7 +128,7 @@ describe("ObjectManager planes", () => {
     expect(mesh.geometry.parameters).toMatchObject({ width: 1, height: 1 });
     expect(mesh.geometry.boundingBox).toMatchObject({ min: { x: -0.5, y: -0.5, z: 0 }, max: { x: 0.5, y: 0.5, z: 0 } });
     expect(new THREE.Vector3().fromBufferAttribute(mesh.geometry.getAttribute("normal"), 0)).toEqual(new THREE.Vector3(0, 0, 1));
-    expect(mesh.material).toBeInstanceOf(THREE.MeshStandardMaterial);
+    expect(mesh.material).toBeInstanceOf(MeshStandardNodeMaterial);
     expect(mesh.material.side).toBe(THREE.DoubleSide);
   });
 
@@ -149,7 +168,7 @@ describe("ObjectManager image planes", () => {
 
     expect(mesh.geometry).toBeInstanceOf(THREE.PlaneGeometry);
     expect(mesh.geometry.parameters).toMatchObject({ width: 2, height: 1 });
-    expect(mesh.material).toBeInstanceOf(THREE.MeshBasicMaterial);
+    expect(mesh.material).toBeInstanceOf(MeshBasicNodeMaterial);
     expect(mesh.material).toMatchObject({ side: THREE.DoubleSide, transparent: true, depthWrite: true });
     expect(loadTextureForScene).toHaveBeenCalledWith(hash);
     vi.doUnmock("../utils/assetTransfers");

@@ -93,6 +93,33 @@ describe("createSceneExportBlob", () => {
     expect(materials[0].extensions.KHR_materials_clearcoat).toEqual({ clearcoatFactor: 1, clearcoatRoughnessFactor: 0.05 });
   });
 
+  // Objects draw with node materials (three/webgpu); GLTFExporter reads them by the built-in flags they carry.
+  it("writes the node materials' colour, roughness, metalness, emissive and unlit as glTF materials", async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
+    const store = useEditorStore.getState();
+    const layer = (id: string, type: string) => useEditorStore.getState().entities.find((e) => e.id === id)!.materialLayers!.find((l) => l.type === type)!;
+    const metal = store.addEntity("sphere");
+    store.updateMaterialLayer(metal, layer(metal, "color").id, { color: "#ff0000" });
+    store.updateMaterialLayer(metal, layer(metal, "lighting").id, { model: "physical", roughness: 0.2, metalness: 0.9, emissive: "#00ff00", emissiveIntensity: 1 });
+    const unlit = store.addEntity("cube");
+    store.updateMaterialLayer(unlit, layer(unlit, "lighting").id, { model: "none" });
+    const scene = new THREE.Scene();
+    createObjectManager(scene, new Map()).syncMeshes(useEditorStore.getState().entities, null, false);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { materials, extensionsUsed } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(materials).toContainEqual(
+      expect.objectContaining({
+        pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1], metallicFactor: 0.9, roughnessFactor: 0.2 },
+        emissiveFactor: [0, 1, 0],
+      }),
+    );
+    expect(extensionsUsed).toContain("KHR_materials_unlit");
+    expect(warn.mock.calls.flat().join(" ")).not.toMatch(/MeshStandardMaterial or MeshBasicMaterial/);
+    warn.mockRestore();
+  });
+
   it("keeps the extras an imported glTF node brought with it", async () => {
     const { scene, cube, createSceneExportBlob } = await buildStarterScene();
     // GLTFLoader puts a node's extras in userData, next to the editor's own keys.
