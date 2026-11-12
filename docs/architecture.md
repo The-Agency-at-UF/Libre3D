@@ -175,6 +175,9 @@ These live in [`src/viewport/hooks/`](../apps/editor/src/viewport/hooks/) and ho
 | `useViewportControls` | `OrbitControls` (camera) + `TransformControls` (gizmo) | `(cameraRef, rendererRef, scene)` |
 | `useViewportRaycaster` | click-to-select, box-select, gizmo-click rejection | `(cameraRef, rendererRef, meshMap, transformControlsRef)` |
 | `useViewportPlay` | running events: Play's `SceneRuntime`, the ▶ preview, Play's clicks, Play's camera (`PlayCamera`) | `(frameRef, cameraRef, rendererRef, objectManager)`; fills `frameRef`, which `ViewportCanvas` hands to `useViewportRenderer` as `onRender` |
+| `useMultiSelectProxy` | the stand-in group the gizmo drags for a multi-selection, and the store writes for that drag | `(scene, objectManager, transformControlsRef)`; returns the stand-in's ref, which `ViewportCanvas` places and attaches |
+| `useFrameAutoScale` | the scale a fixed-size frame is shown at (math in `viewport/frameFit.ts`) | `(wrapperRef, frame, isPreviewMode)`; returns the scale |
+| `useCenterOnSelection` | the "center on selected" and "orient to selected" window events | `(orbitControlsRef, objectManager, cameraRef)` |
 
 ---
 
