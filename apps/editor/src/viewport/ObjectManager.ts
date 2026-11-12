@@ -34,6 +34,7 @@ import { createPrimitiveGeometry } from "./entityGeometry";
 import { EntityMaterials } from "./entityMaterials";
 import { ImportedModels } from "./importedModels";
 import { attachSelectionOutline, disposeSelectionOutline, replaceSelectionOutline } from "./selectionOutline";
+import { OriginTarget } from "./lightTargets";
 
 // Puts an object where an entity, or a pose, says: its position, rotation, and scale in its
 // parent's space.
@@ -43,12 +44,6 @@ function applyTransform(object: THREE.Object3D, transform: Pick<Entity, "positio
   object.scale.set(...transform.scale);
 }
 
-// Points a directional light at the world origin by rotation, which is what both
-// three's renderer (via the child target) and the glTF exporter read.
-function aimDirectionalLight(light: THREE.DirectionalLight): void {
-  light.updateMatrixWorld();
-  light.lookAt(0, 0, 0);
-}
 
 // A path entity without its path or stroke (a damaged file) draws nothing rather than failing. One
 // object each, so comparing them with the entity's tells PathMesh when to rebuild.
@@ -148,18 +143,14 @@ export class ObjectManager {
       const light = new THREE.DirectionalLight(new THREE.Color(entity.color ?? "#ffffff"), 2.2);
       applyTransform(light, entity);
 
-      // Target setup. glTF encodes a directional light's direction as the node's
-      // own rotation (it shines down -Z) and has no concept of a separate target
-      // object, so THREE.GLTFExporter only preserves the direction when the
-      // light's target is its *child* at (0, 0, -1). Parenting it that way and
-      // aiming the light with lookAt keeps the editor behaviour identical — the
-      // light still points at the world origin — while making the exported GLB
-      // light match. Wired the old way (target loose in the scene at the origin)
-      // the export silently dropped the rotation, so preview and published scenes
-      // were lit from world -Z instead of from the light's position.
+      // A directional light shines from where it is toward the world origin, as Spline's does: its
+      // rotation can be edited but changes nothing. Its target is an OriginTarget, which stays at the
+      // origin whatever the light's rotation, so a turn of the rotate gizmo doesn't change the
+      // lighting either. The target is still the light's child at (0, 0, -1), the only wiring
+      // GLTFExporter takes; an export aims each light at the origin first (aimLightsAtOrigin).
+      light.target = new OriginTarget();
       light.add(light.target);
       light.target.position.set(0, 0, -1);
-      aimDirectionalLight(light);
       light.userData.target = light.target;
 
       // Helper setup
@@ -282,10 +273,6 @@ export class ObjectManager {
       applyTransform(obj, entity);
       if (obj instanceof PathMesh) obj.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
       forgetBasePose(obj);
-      // Re-aim after a move so the baked rotation keeps tracking the origin.
-      // (A directional light's stored entity.rotation has never affected its
-      // direction — three drives that from position → target.)
-      if (obj instanceof THREE.DirectionalLight) aimDirectionalLight(obj);
     }
     obj.visible = entity.visible;
     obj.userData.locked = isEffectivelyLocked(entities, entity.id);
@@ -462,7 +449,6 @@ export class ObjectManager {
     this.unsettledObjects.add(obj);
     rememberBasePose(obj);
     applyTransform(obj, pose);
-    if (obj instanceof THREE.DirectionalLight) aimDirectionalLight(obj);
     if (obj instanceof PathMesh && (pose.trimStart !== undefined || pose.trimEnd !== undefined)) {
       obj.setTrim(pose.trimStart ?? 0, pose.trimEnd ?? 1);
     }

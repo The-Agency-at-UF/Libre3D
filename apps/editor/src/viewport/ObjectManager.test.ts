@@ -230,3 +230,31 @@ describe("ObjectManager lighting (task D, PR 4)", () => {
     expect(material).toHaveProperty("libre3dLayerStack");
   });
 });
+
+describe("ObjectManager directional lights", () => {
+  it("shine at the world origin whatever their rotation, as Spline's do", async () => {
+    const { useEditorStore, createObjectManager } = await loadModules();
+    const meshMap = new Map<string, THREE.Object3D>();
+    const manager = createObjectManager(meshMap);
+    const lightEntity = useEditorStore.getState().entities.find((entity) => entity.type === "directionalLight")!;
+    const targetOf = () => {
+      const light = meshMap.get(lightEntity.id) as THREE.DirectionalLight;
+      light.updateMatrixWorld(true);
+      return { light, target: light.target.getWorldPosition(new THREE.Vector3()) };
+    };
+
+    manager.syncMeshes(useEditorStore.getState().entities, null, false);
+    expect(targetOf().target.length()).toBe(0);
+
+    useEditorStore.getState().updateEntityTransform(lightEntity.id, { rotation: [0.4, 1.2, -0.3] });
+    manager.syncMeshes(useEditorStore.getState().entities, null, false);
+    const { light, target } = targetOf();
+    expect(target.length()).toBe(0);
+    // The rotation is kept (the gizmo shows it), it just doesn't aim the light.
+    expect(light.rotation.toArray().slice(0, 3)).toEqual([0.4, 1.2, -0.3]);
+
+    // As the rotate gizmo turns it mid-drag, before any sync.
+    light.rotation.set(-1, 0.5, 2);
+    expect(targetOf().target.length()).toBe(0);
+  });
+});
