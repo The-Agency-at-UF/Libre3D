@@ -1,6 +1,7 @@
 /**
  * PURPOSE: What each colour layer paints at a pixel, as TSL: Color, Image, Depth, Gradient, Noise,
- * Fresnel. viewport/layerNodes.ts blends them into a stack.
+ * Fresnel, Normal, Matcap, Rainbow, Glass.
+ * viewport/layerNodes.ts blends them into a stack.
  *
  * INPUT: A layer (scene/types.ts). OUTPUT: A LayerSource: its uniforms, a way to bring them up to
  * date with the layer, and the node for its colour, as sRGB (as picked) plus an alpha.
@@ -17,22 +18,30 @@ import * as THREE from "three";
 import {
   abs,
   asin,
+  cameraProjectionMatrix,
+  cameraViewMatrix,
   atan,
   cameraPosition,
   clamp,
+  div,
   dot,
+  exp,
   float,
   floor,
   Fn,
   fract,
   length,
+  log,
+  log2,
   matcapUV,
   max,
   min,
   mix,
+  modelScale,
   mx_fractal_noise_float,
   mx_noise_float,
   mx_worley_noise_vec2,
+  normalize,
   normalLocal,
   normalView,
   normalWorld,
@@ -40,19 +49,27 @@ import {
   positionViewDirection,
   positionWorld,
   pow,
+  refract,
+  screenSize,
   select,
   smoothstep,
+  sqrt,
+  sRGBTransferEOTF,
   sRGBTransferOETF,
   step,
+  textureBicubicLevel,
+  texture,
   time,
   uniform,
   uv,
   vec2,
   vec3,
   vec4,
+  viewportMipTexture,
 } from "three/tsl";
 import { hexToRgb, sortedStops, type PaintLayer } from "../scene/layerStack";
 import { DEFAULT_MATCAP, matcapTexture } from "./matcaps";
+import { SCENE_EXPOSURE } from "./canvasOutput";
 import { objectSlot, objectTexture, objectUniform, shaderNode } from "./objectValues";
 import type { DepthLayer, FresnelLayer, GradientLayer, ImageLayer, NoiseLayer, PaintColor, RampStop, TextureRef } from "../scene/types";
 
@@ -566,6 +583,73 @@ const rainbowSource = (): LayerSource => {
   };
 };
 
+// ─── Glass ───────────────────────────────────────────────────────────────────
+
+// What's been drawn so far this frame, copied once (on the first glass drawn) with its mipmaps, which
+// the blur reads. One for every glass, as three's own transmission has: glass doesn't see glass.
+const backdrop = viewportMipTexture() as unknown as { sample(uv: Node): Node };
+
+// Neutral tone mapping (as the canvas ending does it: canvasOutput.ts) undone, so a colour read
+// off the canvas comes back out as itself: the inverse of three's neutralToneMapping, step by step
+// backwards (the highlight squeeze and its desaturation, then the dark offset), then the exposure.
+const untoneMap = (shown: Node): Node => {
+  const start = 0.8 - 0.04;
+  const d = 1 - start;
+  const desaturation = 0.15;
+  const out = n(min(shown, vec3(0.999, 0.999, 0.999)));
+  const newPeak = n(max(out.x, max(out.y, out.z)));
+  const peak = n(div(d * d, float(1).sub(newPeak)).sub(d - start));
+  const g = n(float(1).sub(div(1, peak.sub(newPeak).mul(desaturation).add(1))));
+  const squeezed = n(out.sub(newPeak.mul(g)).div(max(g.oneMinus(), 1e-6)).mul(peak.div(max(newPeak, 1e-6))));
+  const compressed = n(select(newPeak.lessThan(start), out, squeezed));
+  const least = n(min(compressed.x, min(compressed.y, compressed.z)));
+  const darkest = n(sqrt(max(least, 0).div(6.25)));
+  const offset = n(select(least.lessThan(0.04), darkest.sub(least), float(0.04)));
+  return n(compressed.add(offset).div(SCENE_EXPOSURE));
+};
+
+const glassSource = (): LayerSource => {
+  const blur = objectUniform(10);
+  const thickness = objectUniform(10);
+  const ior = objectUniform(1.5);
+  const absorption: Vec3Uniform = objectUniform(new THREE.Vector3(1, 1, 1));
+  const absorbDistance = objectUniform(0);
+  return {
+    update(layer) {
+      if (layer.type !== "glass") return;
+      blur.value = Math.max(0, layer.blur);
+      thickness.value = Math.max(0, layer.thickness);
+      ior.value = Math.max(1, layer.ior);
+      const tint = new THREE.Color(layer.absorption);
+      absorption.value.set(Math.max(1e-4, tint.r), Math.max(1e-4, tint.g), Math.max(1e-4, tint.b));
+      absorbDistance.value = Math.max(0, layer.absorbDistance);
+    },
+    node() {
+      // As three's transmission (PhysicalLightingModel, getIBLVolumeRefraction): the ray bent into
+      // the glass, as far as its thickness (hundredths of the object's own units, scaled with it),
+      // and where it comes out, on the canvas.
+      const view = n(normalize(n(cameraPosition).sub(positionWorld)));
+      const bent = n(normalize(refract(view.negate(), normalize(normalWorld), div(1, n(ior)))));
+      const ray = n(bent.mul(n(thickness).mul(0.01)).mul(modelScale));
+      const exit = n(n(cameraProjectionMatrix).mul(n(cameraViewMatrix).mul(vec4(n(positionWorld).add(ray), 1))));
+      const at = n(exit.xy.div(exit.w).add(1).div(2));
+      const onCanvas = n(vec2(at.x, at.y.oneMinus()));
+      // Blur: a smaller mip the rougher it is, as three's (roughness scaled by the IOR). Three's goes
+      // down to the 1-pixel mip at roughness 1, one flat colour; Spline's Blur 10 is frosted but still
+      // shows shapes, so it reaches 60% of the way.
+      const roughness = n(clamp(n(blur).div(10), 0, 1).mul(clamp(n(ior).mul(2).sub(2), 0, 1)));
+      const lod = n(log2(n(screenSize).x).mul(roughness).mul(0.6));
+      const shown = n(textureBicubicLevel(n(backdrop.sample(onCanvas)), lod).rgb);
+      // Absorption (Beer's law, as three's volumeAttenuation): the colour it reaches at its distance.
+      const tint = n(exp(log(n(absorption)).mul(length(ray).mul(100).div(max(n(absorbDistance), 1e-6)))));
+      const absorbed = n(select(n(absorbDistance).greaterThan(0), tint, vec3(1, 1, 1)));
+      // Back to the stack's sRGB, so the canvas ending turns it into what was shown.
+      const light = n(untoneMap(n(sRGBTransferEOTF(shown))).mul(absorbed));
+      return { rgb: n(sRGBTransferOETF(light)), a: float(1) };
+    },
+  };
+};
+
 // ─── Fresnel ─────────────────────────────────────────────────────────────────
 
 const fresnelSource = (): LayerSource => {
@@ -612,7 +696,9 @@ export const createLayerSource = (layer: PaintLayer, pictures: PictureSource): L
                   ? matcapSource()
                   : layer.type === "rainbow"
                     ? rainbowSource()
-                    : colorSource();
+                    : layer.type === "glass"
+                      ? glassSource()
+                      : colorSource();
   source.update(layer, pictures);
   return source;
 };
@@ -634,6 +720,8 @@ export const layerSourceShape = (layer: PaintLayer): string => {
       return "matcap";
     case "rainbow":
       return "rainbow";
+    case "glass":
+      return "glass";
     case "image":
       return `image:${layer.projection}${layer.projection === "planar" || layer.projection === "cylindrical" ? `:${layer.axis}` : ""}`;
     case "color":

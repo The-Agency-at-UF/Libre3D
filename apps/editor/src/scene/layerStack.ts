@@ -22,6 +22,7 @@ import type {
   ColorLayer,
   DepthLayer,
   FresnelLayer,
+  GlassLayer,
   GradientLayer,
   ImageLayer,
   LightingLayer,
@@ -44,14 +45,14 @@ export interface Paint {
 }
 
 /** A layer that makes colour: it paints, or in Mask mode masks the layer under it. */
-export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | NormalLayer | MatcapLayer | RainbowLayer;
+export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | NormalLayer | MatcapLayer | RainbowLayer | GlassLayer;
 /** A layer that can be put in Mask mode. */
 export type MaskableLayer = DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | MatcapLayer | RainbowLayer;
 
 export const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overlay"];
 
 /** Layer types that make colour. An object keeps one that paints (so Color can go once another is there). */
-export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "image", "depth", "gradient", "noise", "fresnel", "normal", "matcap", "rainbow"];
+export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "image", "depth", "gradient", "noise", "fresnel", "normal", "matcap", "rainbow", "glass"];
 
 /** Layer types a layer's type dropdown can switch it to. "+" adds a Color layer. */
 export const SWITCHABLE_LAYER_TYPES: readonly MaterialLayerType[] = COLOR_LAYER_TYPES;
@@ -300,6 +301,7 @@ export const sourceIsOpaque = (layer: PaintLayer): boolean => {
     case "normal":
     case "matcap":
     case "rainbow":
+    case "glass":
       return true;
     case "image":
       // A picture's own see-through parts make the object see-through only with the surface's
@@ -331,6 +333,8 @@ export interface StackPlan {
   opaque: boolean;
   // How much shading shows (Lighting's opacity, 0 with its eye off; 1 without Lighting).
   strength: number;
+  // Whether a Glass layer paints: the object then draws after the solid ones, so it sees them.
+  glass: boolean;
 }
 
 /**
@@ -372,7 +376,8 @@ export const planStack = (layers: MaterialLayer[] | undefined): StackPlan => {
   const opaque = folded
     ? folded.alpha >= 1
     : under.some((step) => !step.mask && step.layer.opacity >= 1 && sourceIsOpaque(step.layer));
-  return { under, over, folded, opaque, strength };
+  const glass = [...under, ...over].some((step) => step.layer.type === "glass");
+  return { under, over, folded, opaque, strength, glass };
 };
 
 /** Whether the plan can be drawn as the material's own colour: no nodes at all. */

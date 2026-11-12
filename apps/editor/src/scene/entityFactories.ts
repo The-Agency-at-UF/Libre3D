@@ -23,6 +23,7 @@ import type {
   Entity,
   EntityType,
   FresnelLayer,
+  GlassLayer,
   GradientLayer,
   ImageLayer,
   LightingLayer,
@@ -203,6 +204,20 @@ export const createRainbowLayer = (): RainbowLayer => ({
   offset: [0, 0, 0],
 });
 
+// Spline's defaults (its player, @splinetool/runtime 2.0.178), as its drawer shows them.
+export const createGlassLayer = (): GlassLayer => ({
+  id: createEntityId(),
+  type: "glass",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  blur: 10,
+  thickness: 10,
+  ior: 1.5,
+  absorption: "#ffffff",
+  absorbDistance: 0,
+});
+
 export const createFresnelLayer = (): FresnelLayer => ({
   id: createEntityId(),
   type: "fresnel",
@@ -299,13 +314,15 @@ export const createPaintLayer = (type: PaintLayerType, depthFar?: number, color 
       return createMatcapLayer();
     case "rainbow":
       return createRainbowLayer();
+    case "glass":
+      return createGlassLayer();
     case "color":
     default:
       return createColorLayer(color);
   }
 };
 
-export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow">;
+export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow" | "glass">;
 
 /**
  * A layer of `type` in place of `layer`: the same ID, eye, opacity and blend mode, and its Mode

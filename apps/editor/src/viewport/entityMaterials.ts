@@ -171,15 +171,18 @@ export class EntityMaterials {
   // legacy layers with no alphaMode recorded -- primitives, or layers derived
   // before this shipped) fall back to the original opacity-only heuristic.
   // `seeThrough`: the layer stack leaves parts see-through (a mask, a Fresnel at the bottom, …).
+  // `glass`: a Glass layer paints what's behind the object, so it's drawn with the see-through
+  // objects, after every solid one (still writing depth while it's solid).
   private computeAlphaBlendState(
     surface: Surface,
     opacity: number,
     seeThrough: boolean,
+    glass = false,
   ): { transparent: boolean; alphaTest: number; depthWrite: boolean } {
     const translucent = opacity < 1 || seeThrough;
     if (surface.alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: !translucent };
-    if (surface.alphaMode === "MASK") return { transparent: translucent, alphaTest: surface.alphaCutoff, depthWrite: true };
-    return { transparent: translucent, alphaTest: 0, depthWrite: true };
+    if (surface.alphaMode === "MASK") return { transparent: translucent || glass, alphaTest: surface.alphaCutoff, depthWrite: true };
+    return { transparent: translucent || glass, alphaTest: 0, depthWrite: true };
   }
 
   // The material's colour and opacity: the stack's, when its layers under Lighting add up to one
@@ -206,7 +209,7 @@ export class EntityMaterials {
       wireframe: this.source.isWireframe(),
     });
     const opacity = EntityMaterials.stackColor(material, plan, objectOpacity);
-    const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque);
+    const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque, plan.glass);
     material.opacity = opacity;
     material.transparent = alphaState.transparent;
     material.alphaTest = alphaState.alphaTest;
@@ -417,7 +420,7 @@ export class EntityMaterials {
       const plan = planStack(entity.materialLayers);
       const surface = surfaceOf(entity.materialLayers);
       const opacity = EntityMaterials.stackColor(material, plan, entity.opacity ?? 1);
-      const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque);
+      const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque, plan.glass);
       const newSide = surface.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
       // A change to the stack's shape (a type, a blend mode, an eye, the order) builds another shader.
       const stackReshaped = syncLayerNodes(material, plan, spaceOf(obj), this.pictures);

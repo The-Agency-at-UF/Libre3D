@@ -23,6 +23,7 @@ export const LAYER_TYPE_NAMES: Record<MaterialLayerType, string> = {
   normal: "Normal",
   matcap: "Matcap",
   rainbow: "Rainbow",
+  glass: "Glass",
 };
 
 export const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
@@ -36,6 +37,7 @@ export const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
   normal: "ti-compass",
   matcap: "ti-sphere",
   rainbow: "ti-rainbow",
+  glass: "ti-droplet",
 };
 
 export const BLEND_MODE_NAMES: Record<BlendMode, string> = {

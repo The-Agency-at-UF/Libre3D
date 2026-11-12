@@ -28,7 +28,7 @@ import type { NodeMaterial } from "three/webgpu";
 import { diffuseColor, dot, float, materialColor, max, mix, output, positionLocal, positionWorld, sRGBTransferEOTF, sRGBTransferOETF, step, uniform, vec3, vec4 } from "three/tsl";
 import { isPlainPlan, type PlanStep, type StackPlan } from "../scene/layerStack";
 import type { BlendMode } from "../scene/types";
-import { createLayerSource, layerSourceShape, type LayerSource, type PictureSource, type SourceContext } from "./layerSources";
+import { createLayerSource, layerSourceShape, type LayerSource, type PictureSource, type SourceColor, type SourceContext } from "./layerSources";
 import { collectSlots, objectUniform, setSlotLookup, shaderNode, type Slot } from "./objectValues";
 
 type Node = ReturnType<typeof float>;
@@ -44,6 +44,8 @@ interface StepNodes {
   mask: { layerId: string; source: LayerSource; opacity: FloatUniform } | null;
   opacity: FloatUniform;
   mode: BlendMode;
+  // A Glass layer: what's behind the object, which isn't shaded again (buildColorNode).
+  glass: boolean;
 }
 
 interface LayerStackRecord {
@@ -60,8 +62,10 @@ interface LayerStackRecord {
   // The values this stack's shader reads for its object, as the sources and steps made them
   // (objectValues.ts): materials with the same shape share one shader, each with its own values.
   slots: Slot<unknown>[];
-  // Built once per record, on the first shader build.
+  // Built once per record, on the first shader build: the colour under Lighting, and (with a Glass
+  // under it) the light its glass adds on top of the shading, linear.
   colorNode?: Node;
+  glassLight?: Node | null;
 }
 
 const records = new WeakMap<Material, LayerStackRecord>();
@@ -109,6 +113,7 @@ const stepNodes = (step: PlanStep, pictures: PictureSource): StepNodes => ({
   mask: step.mask ? { layerId: step.mask.id, source: createLayerSource(step.mask, pictures), opacity: objectUniform(1) } : null,
   opacity: objectUniform(1),
   mode: step.layer.blendMode,
+  glass: step.layer.type === "glass",
 });
 
 // True when a picture changed (an Image layer's): its shader's bindings must be remade.
@@ -212,17 +217,27 @@ const compositeOver = (backdrop: Paint, source: Node, as: Node, mode: BlendMode)
 // How light a mask is (layerStack.ts, maskValue): Rec. 709 weights on sRGB, times its alpha.
 const maskValue = (paint: { rgb: Node; a: Node }): Node => n(dot(paint.rgb, vec3(0.2126, 0.7152, 0.0722)).mul(paint.a).clamp(0, 1));
 
-// The steps blended over `base`, bottom first (layerStack.ts, evaluateSteps).
-const blendSteps = (steps: StepNodes[], base: Paint, context: SourceContext): Paint => {
+// Each step's colour and its mask's, worked out once for both blends buildColorNode makes.
+interface StepColors {
+  step: StepNodes;
+  source: SourceColor;
+  mask: SourceColor | null;
+}
+
+const colorsOf = (steps: StepNodes[], context: SourceContext): StepColors[] =>
+  steps.map((step) => ({ step, source: step.source.node(context), mask: step.mask ? step.mask.source.node(context) : null }));
+
+// The steps blended over `base`, bottom first (layerStack.ts, evaluateSteps). `glassDark`: Glass
+// layers paint black (with their alpha), for the part of the colour that gets shaded.
+const blendSteps = (colors: StepColors[], base: Paint, glassDark = false): Paint => {
   let result = base;
-  for (const step of steps) {
-    const source = step.source.node(context);
+  for (const { step, source, mask } of colors) {
     let alpha = n(source.a.mul(n(step.opacity)));
-    if (step.mask) {
-      const shown = maskValue(step.mask.source.node(context));
+    if (step.mask && mask) {
+      const shown = maskValue(mask);
       alpha = n(alpha.mul(float(1).sub(n(step.mask.opacity).mul(shown.oneMinus()))));
     }
-    result = compositeOver(result, source.rgb, alpha, step.mode);
+    result = compositeOver(result, glassDark && step.glass ? n(vec3(0, 0, 0)) : source.rgb, alpha, step.mode);
   }
   return result;
 };
@@ -233,14 +248,24 @@ const contextOf = (record: LayerStackRecord): SourceContext => ({
 
 // The layers under Lighting as the material's colour node: linear, times the material's own colour
 // (white while it has one of these) and map, as three would have multiplied them. Where nothing
-// paints, the object is see-through (the stack's alpha).
-const buildColorNode = (record: LayerStackRecord, steps: StepNodes[]): Node => {
+// paints, the object is see-through (the stack's alpha). A Glass among them paints what's behind
+// the object, which was shaded already: so the colour is shaded with the glass painting black, and
+// the difference the glass makes is added after the shading (`glassLight`), which keeps the glass's
+// highlights and leaves what's behind it as it was.
+const buildColorNode = (record: LayerStackRecord, steps: StepNodes[]): { color: Node; glassLight: Node | null } => {
   const nothing: Paint = { rgb: n(vec3(0, 0, 0)), a: float(0) };
   const white: Paint = { rgb: n(vec3(1, 1, 1)), a: float(1) };
-  const painted = steps.length > 0 ? blendSteps(steps, nothing, contextOf(record)) : white;
+  const colors = colorsOf(steps, contextOf(record));
+  const hasGlass = steps.some((step) => step.glass);
+  const shaded = steps.length > 0 ? blendSteps(colors, nothing, hasGlass) : white;
   // Without a colour node three takes the material's colour times its map (materialColor); with one
   // it doesn't, so that's multiplied in here.
-  return n(vec4(sRGBTransferEOTF(n(painted.rgb.clamp(0, 1))), painted.a).mul(vec4(materialColor as never)));
+  const color = n(vec4(sRGBTransferEOTF(n(shaded.rgb.clamp(0, 1))), shaded.a).mul(vec4(materialColor as never)));
+  if (!hasGlass) return { color, glassLight: null };
+  // Glass colours run past 1 (a bright backdrop, before tone mapping), so these aren't clamped.
+  const withGlass = blendSteps(colors, nothing);
+  const glassLight = n(sRGBTransferEOTF(n(max(withGlass.rgb, vec3(0, 0, 0)))).sub(sRGBTransferEOTF(n(max(shaded.rgb, vec3(0, 0, 0))))));
+  return { color, glassLight };
 };
 
 /**
@@ -253,17 +278,22 @@ export const applyLayerNodes = (material: Material, built: NodeMaterial): Node |
   const record = records.get(material);
   if (!record) return null;
   if (record.under) {
-    record.colorNode ??= buildColorNode(record, record.under);
+    if (!record.colorNode) {
+      const { color, glassLight } = buildColorNode(record, record.under);
+      record.colorNode = color;
+      record.glassLight = glassLight;
+    }
     built.colorNode = record.colorNode as never;
   }
-  if (!record.strength && record.over.length === 0) return null;
+  if (!record.strength && record.over.length === 0 && !record.glassLight) return null;
 
   let lit: Paint = { rgb: n(output.rgb), a: n(output.a) };
   if (record.strength) lit = { rgb: n(mix(diffuseColor.rgb, output.rgb, n(record.strength))), a: lit.a };
+  if (record.glassLight) lit = { rgb: n(lit.rgb.add(record.glassLight)), a: lit.a };
   if (record.over.length > 0) {
     // On sRGB values, as the colours are picked; a lit colour can be over 1, which tone mapping brings back.
     const shaded: Paint = { rgb: n(sRGBTransferOETF(n(max(lit.rgb, vec3(0, 0, 0))))), a: lit.a };
-    const painted = blendSteps(record.over, shaded, contextOf(record));
+    const painted = blendSteps(colorsOf(record.over, contextOf(record)), shaded);
     lit = { rgb: n(sRGBTransferEOTF(painted.rgb)), a: painted.a };
   }
   return n(vec4(lit.rgb, lit.a));

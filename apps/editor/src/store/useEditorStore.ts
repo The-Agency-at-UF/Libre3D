@@ -94,6 +94,7 @@ export type {
   DepthLayer,
   Entity,
   FresnelLayer,
+  GlassLayer,
   GradientLayer,
   LightingMapSlot,
   NoiseLayer,
