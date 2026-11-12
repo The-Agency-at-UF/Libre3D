@@ -11,6 +11,8 @@
  */
 
 import * as THREE from "three";
+import { MeshBasicNodeMaterial } from "three/webgpu";
+import { attribute, cameraProjectionMatrix, length, modelViewMatrix, positionGeometry, screenSize, select, uniform, uv, vec4 } from "three/tsl";
 import { buildPathCurve, type PathData } from "../paths/pathGeometry";
 import type { HandleSide } from "../paths/pathEditing";
 
@@ -33,38 +35,23 @@ const ACCENT = new THREE.Color(0x0a84ff); // --accent
 const WHITE = new THREE.Color(0xffffff);
 const RENDER_ORDER = 1000; // after the scene
 
-// A round dot with a ring, `size` pixels across whatever the distance. Colours are written as is
-// (no tone mapping), so they match the UI's.
-const DOT_VERTEX_SHADER = /* glsl */ `
-  attribute vec3 fill;
-  attribute vec3 ring;
-  attribute float size;
-  uniform float pixelRatio;
-  varying vec3 vFill;
-  varying vec3 vRing;
-  void main() {
-    vFill = fill;
-    vRing = ring;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    gl_PointSize = size * pixelRatio;
-  }
-`;
-
-const DOT_FRAGMENT_SHADER = /* glsl */ `
-  varying vec3 vFill;
-  varying vec3 vRing;
-  void main() {
-    float radius = length(gl_PointCoord - 0.5) * 2.0;
-    if (radius > 1.0) discard;
-    gl_FragColor = vec4(radius > 0.6 ? vRing : vFill, 1.0);
-  }
-`;
-
-// The colour's sRGB components, as the dot shader writes them out unconverted.
-const srgb = (color: THREE.Color): number[] => {
-  const { r, g, b } = color.getRGB({ r: 0, g: 0, b: 0 }, THREE.SRGBColorSpace);
-  return [r, g, b];
+// A round dot with a ring, `size` pixels across whatever the distance: a quad per dot (WebGPU has
+// no sized points), placed at the dot's position and sized on the screen by the vertex stage.
+// Written in TSL, which three compiles for WebGPU and for WebGL 2.
+const dotMaterial = (pixelRatio: ReturnType<typeof uniform<number>>): MeshBasicNodeMaterial => {
+  const material = new MeshBasicNodeMaterial({ depthTest: false, depthWrite: false, toneMapped: false });
+  const center = cameraProjectionMatrix.mul(modelViewMatrix).mul(vec4(attribute("center", "vec3"), 1));
+  // The quad's corners are half a unit out; clip space is two units across the screen.
+  const corner = positionGeometry.xy.mul(attribute("size", "float")).mul(pixelRatio).mul(2).div(screenSize);
+  material.vertexNode = vec4(center.xy.add(corner.mul(center.w)), center.zw);
+  const radius = length(uv().sub(0.5)).mul(2);
+  material.colorNode = vec4(select(radius.greaterThan(0.6), attribute("ring", "vec3"), attribute("fill", "vec3")), radius.lessThanEqual(1));
+  material.alphaTest = 0.5; // nothing outside the circle
+  return material;
 };
+
+// The colour's components as the dot's shader takes them.
+const rgb = (color: THREE.Color): number[] => color.toArray();
 
 const overlayLineMaterial = (color: THREE.Color, opacity: number) =>
   new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthTest: false, depthWrite: false, toneMapped: false });
@@ -72,12 +59,31 @@ const overlayLineMaterial = (color: THREE.Color, opacity: number) =>
 const toVector3 = (vector: [number, number, number]) => new THREE.Vector3(...vector);
 
 const LINE_ATTRIBUTES = { position: 3 };
-const DOT_ATTRIBUTES = { position: 3, fill: 3, ring: 3, size: 1 };
+const DOT_ATTRIBUTES = { center: 3, fill: 3, ring: 3, size: 1 };
+
+type Dots = THREE.Mesh<THREE.InstancedBufferGeometry, MeshBasicNodeMaterial>;
+
+// Makes room for `count` dots and draws just that many: as `reserve` below, with a value per dot
+// (per instance of the quad) instead of per vertex.
+const reserveDots = (dots: Dots, count: number): THREE.InstancedBufferGeometry => {
+  const capacity = dots.geometry.getAttribute("center")?.count ?? 0;
+  if (capacity < count) {
+    dots.geometry.dispose();
+    const size = Math.max(count, 2 * capacity, 16);
+    const geometry = new THREE.InstancedBufferGeometry().copy(new THREE.PlaneGeometry(1, 1) as unknown as THREE.InstancedBufferGeometry);
+    for (const [name, itemSize] of Object.entries(DOT_ATTRIBUTES)) {
+      geometry.setAttribute(name, new THREE.InstancedBufferAttribute(new Float32Array(size * itemSize), itemSize).setUsage(THREE.DynamicDrawUsage));
+    }
+    dots.geometry = geometry;
+  }
+  dots.geometry.instanceCount = count;
+  return dots.geometry;
+};
 
 // Makes room for `count` vertices in a part's geometry and draws just that many. Three can't grow a
 // buffer it has uploaded (setFromPoints keeps the old size), so a full one is swapped for a new
 // geometry twice as big, and the old one disposed so its GPU buffers go too.
-const reserve = (part: THREE.Points | THREE.Line, count: number, attributes: Record<string, number>): THREE.BufferGeometry => {
+const reserve = (part: THREE.Line, count: number, attributes: Record<string, number>): THREE.BufferGeometry => {
   const position = part.geometry.getAttribute("position");
   const capacity = position?.count ?? 0;
   if (!position || capacity < count) {
@@ -102,16 +108,24 @@ const write = (geometry: THREE.BufferGeometry, name: string, values: number[]) =
 const writePoints = (part: THREE.Line, points: THREE.Vector3[]) =>
   write(reserve(part, points.length, LINE_ATTRIBUTES), "position", points.flatMap((point) => point.toArray()));
 
+// As writePoints, for a line that is simply not drawn while it has no points (WebGPU warns about
+// a draw of nothing).
+const writeLine = (part: THREE.Line, points: THREE.Vector3[]) => {
+  part.visible = points.length > 0;
+  writePoints(part, points);
+};
+
 export class PathEditOverlay {
   /** Add this to the scene. */
   readonly object = new THREE.Group();
   private readonly pathSpace = new THREE.Group();
-  private readonly dots: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  private readonly dots: Dots;
+  private readonly pixelRatio = uniform(1);
   private readonly handleLines: THREE.LineSegments<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   private readonly curveLine: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   private readonly previewLine: THREE.Line<THREE.BufferGeometry, THREE.LineBasicMaterial>;
   // In the world, not the path's space: before a path's first point there's no path.
-  private readonly cursorDot: THREE.Points<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  private readonly cursorDot: Dots;
   // What was last shown, so a frame with nothing new does nothing.
   private shownPath: PathData | null = null;
   private shownKey = "";
@@ -121,16 +135,7 @@ export class PathEditOverlay {
     this.object.visible = false;
     this.pathSpace.matrixAutoUpdate = false;
 
-    this.dots = new THREE.Points(
-      new THREE.BufferGeometry(),
-      new THREE.ShaderMaterial({
-        uniforms: { pixelRatio: { value: 1 } },
-        vertexShader: DOT_VERTEX_SHADER,
-        fragmentShader: DOT_FRAGMENT_SHADER,
-        depthTest: false,
-        depthWrite: false,
-      }),
-    );
+    this.dots = new THREE.Mesh(new THREE.InstancedBufferGeometry(), dotMaterial(this.pixelRatio));
     this.handleLines = new THREE.LineSegments(new THREE.BufferGeometry(), overlayLineMaterial(ACCENT, 0.9));
     this.curveLine = new THREE.Line(new THREE.BufferGeometry(), overlayLineMaterial(ACCENT, 0.7));
     this.previewLine = new THREE.Line(new THREE.BufferGeometry(), overlayLineMaterial(WHITE, 0.6));
@@ -141,7 +146,7 @@ export class PathEditOverlay {
     [this.dots, this.handleLines, this.curveLine, this.previewLine].forEach((part) => (part.frustumCulled = false));
     this.pathSpace.add(this.curveLine, this.previewLine, this.handleLines, this.dots);
 
-    this.cursorDot = new THREE.Points(new THREE.BufferGeometry(), this.dots.material);
+    this.cursorDot = new THREE.Mesh(new THREE.InstancedBufferGeometry(), this.dots.material);
     this.cursorDot.renderOrder = RENDER_ORDER + 2;
     this.cursorDot.frustumCulled = false;
     this.cursorDot.visible = false;
@@ -161,7 +166,7 @@ export class PathEditOverlay {
 
     this.pathSpace.matrix.copy(view.matrixWorld);
     this.pathSpace.matrixWorldNeedsUpdate = true;
-    this.dots.material.uniforms.pixelRatio.value = pixelRatio;
+    this.pixelRatio.value = pixelRatio;
 
     const pathChanged = view.path !== this.shownPath;
     const key = JSON.stringify([view.selectedPoints, view.handles, view.preview?.toArray(), view.insertAt?.toArray()]);
@@ -169,7 +174,7 @@ export class PathEditOverlay {
     this.shownKey = key;
     if (pathChanged) {
       this.shownPath = view.path;
-      writePoints(this.curveLine, buildPathCurve(view.path)?.getPoints(LINE_SEGMENTS_PER_CURVE) ?? []);
+      writeLine(this.curveLine, buildPathCurve(view.path)?.getPoints(LINE_SEGMENTS_PER_CURVE) ?? []);
     }
 
     const { points } = view.path;
@@ -183,8 +188,8 @@ export class PathEditOverlay {
     const sizes: number[] = [];
     const addDot = (position: THREE.Vector3, fill: THREE.Color, ring: THREE.Color, size: number) => {
       positions.push(position);
-      fills.push(srgb(fill));
-      rings.push(srgb(ring));
+      fills.push(rgb(fill));
+      rings.push(rgb(ring));
       sizes.push(size);
     };
     view.handles.forEach((handle) => addDot(handleTip(handle), ACCENT, WHITE, HANDLE_SIZE));
@@ -195,13 +200,13 @@ export class PathEditOverlay {
     );
     if (view.insertAt) addDot(view.insertAt, WHITE, ACCENT, INSERT_SIZE);
 
-    const geometry = reserve(this.dots, positions.length, DOT_ATTRIBUTES);
-    write(geometry, "position", positions.flatMap((position) => position.toArray()));
+    const geometry = reserveDots(this.dots, positions.length);
+    write(geometry, "center", positions.flatMap((position) => position.toArray()));
     write(geometry, "fill", fills.flat());
     write(geometry, "ring", rings.flat());
     write(geometry, "size", sizes);
 
-    writePoints(this.handleLines, view.handles.flatMap((handle) => [toVector3(points[handle.index].position), handleTip(handle)]));
+    writeLine(this.handleLines, view.handles.flatMap((handle) => [toVector3(points[handle.index].position), handleTip(handle)]));
 
     // The next segment: from the last point, leaving along its out handle, straight into the cursor.
     const last = points[points.length - 1];
@@ -221,11 +226,11 @@ export class PathEditOverlay {
     this.cursorDot.visible = !!position;
     this.updateVisible();
     if (!position) return;
-    this.dots.material.uniforms.pixelRatio.value = pixelRatio;
-    const geometry = reserve(this.cursorDot, 1, DOT_ATTRIBUTES);
-    write(geometry, "position", position.toArray());
-    write(geometry, "fill", srgb(highlight ? ACCENT : WHITE));
-    write(geometry, "ring", srgb(highlight ? WHITE : ACCENT));
+    this.pixelRatio.value = pixelRatio;
+    const geometry = reserveDots(this.cursorDot, 1);
+    write(geometry, "center", position.toArray());
+    write(geometry, "fill", rgb(highlight ? ACCENT : WHITE));
+    write(geometry, "ring", rgb(highlight ? WHITE : ACCENT));
     write(geometry, "size", [highlight ? CURSOR_HIGHLIGHT_SIZE : ANCHOR_SIZE]);
   }
 
