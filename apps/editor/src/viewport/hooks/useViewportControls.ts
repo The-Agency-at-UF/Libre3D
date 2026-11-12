@@ -7,6 +7,7 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import type { SceneRenderer } from "../rendererSettings";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { selectViewedObjectState, useEditorStore } from "../../store/useEditorStore";
@@ -16,7 +17,7 @@ import { resolveState, unwrapRotation } from "../../animation/objectStates";
 export function useViewportControls(
   // Accept a ref so OrbitControls / TransformControls always use the live camera.
   cameraRef: React.RefObject<THREE.Camera>,
-  rendererRef: React.RefObject<THREE.WebGLRenderer | null>,
+  rendererRef: React.RefObject<SceneRenderer | null>,
   scene: THREE.Scene,
 ) {
   const orbitControlsRef = useRef<OrbitControls | null>(null);

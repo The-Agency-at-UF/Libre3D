@@ -28,6 +28,7 @@ import { deriveMaterialLayers, createTextureDedupCache } from "../utils/material
 import { indexNodesByPath, nodePathKey } from "../utils/gltfHierarchy";
 import { takeParsedModel } from "../utils/parsedModelCache";
 import { createConfiguredGltfLoader } from "../utils/createGltfLoader";
+import type { SceneRenderer } from "./rendererSettings";
 import type { SceneSource } from "./sceneSource";
 import { attachSelectionOutline, replaceSelectionOutline } from "./selectionOutline";
 
@@ -38,7 +39,7 @@ export interface ImportedModelHost {
   meshMap: Map<string, THREE.Object3D>;
   source: SceneSource;
   /** The renderer the scene is drawn with, for decoding a model's KTX2 textures; null before there is one. */
-  getRenderer(): THREE.WebGLRenderer | null;
+  getRenderer(): SceneRenderer | null;
   /** Whether models get a selection outline, and a failed one its red box (the editor's; not the viewer's). */
   editorHelpers: boolean;
   /** Applies an entity to its object: transform, visibility, lock, material. */

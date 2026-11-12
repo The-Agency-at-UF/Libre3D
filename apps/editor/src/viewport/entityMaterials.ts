@@ -53,6 +53,17 @@ const materialClassForLayer = (lightingLayer: LightingLayer | undefined) => {
   }
 };
 
+/**
+ * Draws a material as a wireframe or solid. The renderer draws lines with another pipeline and
+ * another index buffer than triangles, and only makes them when it's told the material changed
+ * (an object that hasn't changed otherwise would be drawn with buffers that aren't there).
+ */
+export const setWireframe = (material: THREE.Material & { wireframe: boolean }, wireframe: boolean): void => {
+  if (material.wireframe === wireframe) return;
+  material.wireframe = wireframe;
+  material.needsUpdate = true;
+};
+
 export class EntityMaterials {
   // The scene's objects by entity id (ObjectManager's map), to give a texture that has just loaded
   // to every mesh that uses it.
@@ -346,7 +357,7 @@ export class EntityMaterials {
       material.alphaTest = alphaState.alphaTest;
       material.depthWrite = alphaState.depthWrite;
       material.side = newSide;
-      material.wireframe = this.source.isWireframe();
+      setWireframe(material, this.source.isWireframe());
       if (needsRecompile) material.needsUpdate = true;
       this.applyLightingProperties(material, lightingLayer, model);
       this.applyImageLayers(material, entity.materialLayers);

@@ -21,6 +21,8 @@ import { useEditorStore } from "../store/useEditorStore";
 import { getEntityIndex } from "../scene/entityIndex";
 import { getViewedState, resolveState } from "../animation/objectStates";
 import { SceneManager } from "../viewport/SceneManager";
+import { setWireframe } from "../viewport/entityMaterials";
+import { whenRendererReady } from "../viewport/rendererSettings";
 import { createRoomEnvironment } from "../viewport/sceneEnvironment";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
@@ -127,11 +129,21 @@ export function ViewportCanvas() {
   useEffect(() => {
     const renderer = rendererRef.current;
     if (!renderer) return;
-    const environment = createRoomEnvironment(renderer);
-    sceneManager.setEnvironmentMap(environment.texture);
+    let environment: THREE.RenderTarget | null = null;
+    let unmounted = false;
+    // Once the renderer has started (useViewportRenderer starts it; this only waits for it).
+    whenRendererReady(renderer).then(
+      () => {
+        if (unmounted) return;
+        environment = createRoomEnvironment(renderer);
+        sceneManager.setEnvironmentMap(environment.texture);
+      },
+      () => undefined, // useViewportRenderer reports a renderer that couldn't start
+    );
     return () => {
+      unmounted = true;
       sceneManager.setEnvironmentMap(null);
-      environment.dispose();
+      environment?.dispose();
     };
   }, [sceneManager, rendererRef]);
 
@@ -173,16 +185,15 @@ export function ViewportCanvas() {
     sceneManager.updateGridVisibility(sceneSettings.showGrid !== false);
 
     // Wireframe sync
+    const applyWireframe = (mesh: THREE.Mesh) => {
+      if ("wireframe" in mesh.material) setWireframe(mesh.material as THREE.MeshStandardMaterial, sceneSettings.wireframe);
+    };
     objectManager?.getMeshes().forEach((obj) => {
       if (obj instanceof THREE.Mesh) {
-        if ("wireframe" in obj.material) {
-          (obj.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
-        }
+        applyWireframe(obj);
       } else {
         obj.traverse((child) => {
-          if (child instanceof THREE.Mesh && "wireframe" in child.material) {
-            (child.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
-          }
+          if (child instanceof THREE.Mesh) applyWireframe(child);
         });
       }
     });

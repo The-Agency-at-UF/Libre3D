@@ -6,8 +6,8 @@
  *
  * `captureViewportThumbnail` asks for one; the render loop (useViewportRenderer) takes it on its
  * next frame with `renderPendingThumbnail`, just before the frame's normal render. The picture has to
- * be copied in that same frame: the WebGL canvas doesn't keep its drawing buffer once the browser
- * has shown it.
+ * be copied in that same frame: the canvas (WebGPU or WebGL) doesn't keep its drawing buffer once the
+ * browser has shown it.
  */
 
 import type * as THREE from "three";
@@ -15,6 +15,7 @@ import type * as THREE from "three";
 import { useEditorStore } from "../store/useEditorStore";
 import { showBasePoses } from "./basePoses";
 import { hideEditorOnlyObjects } from "./editorOnly";
+import type { SceneRenderer } from "./rendererSettings";
 
 // The gallery card's 16:9 thumbnail at about twice its displayed size.
 const THUMBNAIL_WIDTH = 480;
@@ -35,7 +36,7 @@ export const hasPendingThumbnail = (): boolean => pending.length > 0;
  * objects, with every object in its Base State, and copies it, cropped to 16:9 from the middle, into a small canvas for every waiting
  * request. The frame's normal render follows and replaces it on screen.
  */
-export const renderPendingThumbnail = (renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera): void => {
+export const renderPendingThumbnail = (renderer: SceneRenderer, scene: THREE.Scene, camera: THREE.Camera): void => {
   const waiting = pending;
   pending = [];
 

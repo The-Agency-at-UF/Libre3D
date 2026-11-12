@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import * as THREE from "three";
+import type { SceneRenderer } from "../rendererSettings";
 import { resolveState } from "../../animation/objectStates";
 import { SceneRuntime } from "../../animation/sceneRuntime";
 import { previewTiming, type TransitionAction } from "../../animation/transitions";
@@ -63,7 +64,7 @@ const findAction = (state: EditorState, actionId: string): TransitionAction | un
 export function useViewportPlay(
   frameRef: React.MutableRefObject<(() => void) | null>,
   cameraRef: React.RefObject<THREE.Camera>,
-  rendererRef: React.RefObject<THREE.WebGLRenderer | null>,
+  rendererRef: React.RefObject<SceneRenderer | null>,
   objectManager: ObjectManager,
 ) {
   useEffect(() => {

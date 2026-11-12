@@ -5,7 +5,7 @@ import Stats from "three/examples/jsm/libs/stats.module.js";
 import { hasPendingThumbnail, renderPendingThumbnail } from "../thumbnailCapture";
 import { hideEditorOnlyObjects } from "../editorOnly";
 import { setLiveRenderer } from "../liveViewport";
-import { createSceneRenderer } from "../rendererSettings";
+import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "../rendererSettings";
 import { RIGHT_SIDEBAR_CLEARANCE } from "./useViewportGizmo";
 
 export function useViewportRenderer(
@@ -22,7 +22,7 @@ export function useViewportRenderer(
   // the main `renderer.render(scene, camera)` call below.
   onAfterRender?: () => void
 ) {
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const rendererRef = useRef<SceneRenderer | null>(null);
   // The FPS panel, while the HUD shows it (see the effect below); null otherwise.
   const statsRef    = useRef<Stats | null>(null);
 
@@ -39,6 +39,7 @@ export function useViewportRenderer(
     const clearLiveRenderer = setLiveRenderer(renderer);
 
     let animationFrameId = 0;
+    let disposed = false;
 
     const animate = () => {
       animationFrameId = window.requestAnimationFrame(animate);
@@ -57,14 +58,21 @@ export function useViewportRenderer(
       restoreEditorOnlyObjects?.();
       if (onAfterRender) onAfterRender();
     };
-    animate();
+    // Nothing can be drawn until the renderer has started (it asks the browser for a GPU device,
+    // which takes a moment). The canvas is already in the page, so the hooks that listen on it
+    // don't wait.
+    whenRendererReady(renderer).then(
+      () => {
+        if (!disposed) animate();
+      },
+      (error) => console.error("[Libre3D] The renderer could not start:", error),
+    );
 
     return () => {
+      disposed = true;
       window.cancelAnimationFrame(animationFrameId);
       clearLiveRenderer();
-      renderer.dispose();
-      renderer.forceContextLoss();
-      renderer.domElement.remove();
+      disposeSceneRenderer(renderer);
     };
     // Only scene/container matter for renderer lifecycle; camera is via ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps

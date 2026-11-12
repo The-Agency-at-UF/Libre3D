@@ -6,6 +6,7 @@
 
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import type { SceneRenderer } from "../rendererSettings";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { useEditorStore, type Entity, type PenToolState } from "../../store/useEditorStore";
@@ -164,7 +165,7 @@ export function useViewportPenTool(
   // Filled here: updates the overlay before each render (ViewportCanvas runs it, like Play's frame).
   frameRef: React.MutableRefObject<(() => void) | null>,
   cameraRef: React.RefObject<THREE.Camera>,
-  rendererRef: React.RefObject<THREE.WebGLRenderer | null>,
+  rendererRef: React.RefObject<SceneRenderer | null>,
   scene: THREE.Scene,
   objectManager: ObjectManager,
   orbitControlsRef: React.RefObject<OrbitControls | null>,
