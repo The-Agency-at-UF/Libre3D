@@ -45,7 +45,7 @@ graph TB
     UI["<b>React UI</b><br/>App.tsx, panels, toolbars<br/><i>reads store via selectors, writes via actions</i>"]
     Store["<b>Zustand store</b> — useEditorStore.ts<br/>entities, selection, camera profiles, settings<br/><i>single source of truth; persisted; undoable</i>"]
     Mgr["<b>Manager classes</b> — src/viewport/<br/>SceneManager · ObjectManager · CameraManager<br/><i>imperative Three.js, rebuilt to match the store</i>"]
-    Three["<b>Three.js / WebGL</b><br/>meshes, materials, lights, camera → canvas"]
+    Three["<b>Three.js / WebGPU or WebGL 2</b><br/>meshes, materials, lights, camera → canvas"]
 
     UI -->|"actions"| Store
     Store -->|"subscriptions re-render"| UI
@@ -171,13 +171,23 @@ These live in [`src/viewport/hooks/`](../apps/editor/src/viewport/hooks/) and ho
 
 | Hook | Owns | Signature |
 |---|---|---|
-| `useViewportRenderer` | `WebGLRenderer`, the `requestAnimationFrame` loop, the FPS overlay | `(containerRef, scene, cameraRef, onRender?)` |
+| `useViewportRenderer` | the renderer (`WebGPURenderer`, see below), the `requestAnimationFrame` loop, the FPS overlay | `(containerRef, scene, cameraRef, onRender?)` |
 | `useViewportControls` | `OrbitControls` (camera) + `TransformControls` (gizmo) | `(cameraRef, rendererRef, scene)` |
 | `useViewportRaycaster` | click-to-select, box-select, gizmo-click rejection | `(cameraRef, rendererRef, meshMap, transformControlsRef)` |
 | `useViewportPlay` | running events: Play's `SceneRuntime`, the ▶ preview, Play's clicks, Play's camera (`PlayCamera`) | `(frameRef, cameraRef, rendererRef, objectManager)`; fills `frameRef`, which `ViewportCanvas` hands to `useViewportRenderer` as `onRender` |
 | `useMultiSelectProxy` | the stand-in group the gizmo drags for a multi-selection, and the store writes for that drag | `(scene, objectManager, transformControlsRef)`; returns the stand-in's ref, which `ViewportCanvas` places and attaches |
 | `useFrameAutoScale` | the scale a fixed-size frame is shown at (math in `viewport/frameFit.ts`) | `(wrapperRef, frame, isPreviewMode)`; returns the scale |
 | `useCenterOnSelection` | the "center on selected" and "orient to selected" window events | `(orbitControlsRef, objectManager, cameraRef)` |
+
+### The renderer
+
+Scenes are drawn by three's `WebGPURenderer` (`viewport/rendererSettings.ts`), in the editor and on a share link alike. It uses WebGPU where the browser has it and WebGL 2 where it doesn't (`?webgl` in the address forces WebGL 2). Three things follow from it:
+
+- **It starts asynchronously.** The canvas exists at once, so hooks can listen on it, but nothing draws, and nothing that asks the GPU a question works (the environment map, KTX2 support), until `whenRendererReady(renderer)` resolves. Call that, never `renderer.init()` directly: three throws on a second `init()`.
+- **Shaders are written in TSL** (`three/tsl`), three's node shader language, which it compiles for both backends. A GLSL `ShaderMaterial` does not run. Built-in materials (`MeshStandardMaterial`, `LineBasicMaterial`, …) still work: three turns them into node materials itself. A material setting that changes how an object is drawn rather than a value (wireframe, transparency, side) needs `material.needsUpdate = true`, or an object that hasn't otherwise changed keeps its old pipeline.
+- **Colours are finished per material** (`viewport/canvasOutput.ts`): tone mapping and the conversion to sRGB are each material's last step, as under `WebGLRenderer`, not the renderer's pass over the whole picture. That keeps the background and the editor's own `toneMapped: false` objects at their exact colours.
+
+The navigation gizmo is the exception: its library draws with WebGL only, so it has a small canvas and `WebGLRenderer` of its own (`useViewportGizmo.ts`).
 
 ---
 
@@ -314,7 +324,7 @@ The editor exposes handles on `window`. They are for the console: no code reads 
 __libre3dStore      // the Zustand store itself (development only)
 __libre3dViewport   // { sceneManager, objectManager } (development only)
 __libre3dScene      // the live THREE.Scene
-__libre3dRenderer   // the live THREE.WebGLRenderer (also on a share page)
+__libre3dRenderer   // the live renderer, a WebGPURenderer (also on a share page)
 
 __libre3dStore.getState().entities
 __libre3dScene.children.forEach(o => console.log(o.name, o.position))
