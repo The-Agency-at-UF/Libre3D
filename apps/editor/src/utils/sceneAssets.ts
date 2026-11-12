@@ -80,6 +80,12 @@ export const collectAssetRefs = (entities: unknown): AssetRef[] => {
         if (isObject(layer) && layer.type === "image") {
           add(layer.textureAssetId, "texture");
         }
+        // A Lighting layer's maps (normal, roughness, …): pictures too.
+        if (isObject(layer) && layer.type === "lighting" && isObject(layer.maps)) {
+          for (const map of Object.values(layer.maps)) {
+            if (isObject(map)) add(map.textureAssetId, "texture");
+          }
+        }
       }
     }
   }

@@ -16,7 +16,7 @@ export const imagePlaneSize = (aspect: number | undefined): [number, number] => 
 
 /**
  * The plane, centred on its origin. Textures load the glTF way, with the picture's top row at V = 0
- * (utils/materialLayers.ts, buildTextureFromLayer), so V runs downward here: the picture shows
+ * (utils/materialLayers.ts, buildTexture), so V runs downward here: the picture shows
  * upright, and an exported GLB has it upright too.
  */
 export const createImagePlaneGeometry = (aspect: number | undefined): THREE.PlaneGeometry => {

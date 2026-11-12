@@ -13,7 +13,7 @@ import type { ShapeData } from "../paths/shapeGeometry";
 
 export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
 
-export type MaterialLayerType = "color" | "lighting" | "image" | "depth";
+export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
 
 // Which glTF texture channel an ImageLayer feeds. "metallicRoughness" is a
@@ -29,11 +29,27 @@ export type BlendMode = "normal" | "multiply" | "screen" | "overlay";
 
 // What every layer has. `opacity` (0-1) is how strongly it shows over the layers under it; the
 // object's own see-through-ness is `Entity.opacity`. `enabled` is the row's eye.
+// `mask` is the drawer's Mode (Spline's Layer Masking): a Depth, Gradient, Noise or Fresnel layer in
+// Mask mode paints nothing, and shows the one layer right under it only where it's light
+// (scene/layerStack.ts). Missing = Color mode.
 interface LayerBase {
   id: string;
   enabled: boolean;
   opacity: number;
   blendMode: BlendMode;
+  mask?: boolean;
+}
+
+// A colour with its own alpha (0-1, missing = 1): a ramp stop, a Noise or a Fresnel colour.
+// `color` is "#rrggbb", sRGB as picked.
+export interface PaintColor {
+  color: string;
+  alpha?: number;
+}
+
+// A ramp's stop (Depth, Gradient): a colour and its place along the ramp, 0-1.
+export interface RampStop extends PaintColor {
+  position: number;
 }
 
 export interface ColorLayer extends LayerBase {
@@ -41,8 +57,24 @@ export interface ColorLayer extends LayerBase {
   color: string;
 }
 
-// Shades everything under it. Its opacity is how much shading shows (0 looks unlit, as with the eye
-// off); its blend mode stays "normal". It can't be removed, so it also holds the surface's settings.
+// A picture a Lighting layer's map uses: its bytes are in the texture store under `textureAssetId`,
+// like an Image layer's. `flipY` is true for a picture uploaded in the editor (drawn the way up it
+// was made); a map from an imported glTF keeps glTF's way (missing). `name` labels it in the map
+// dropdowns.
+export interface TextureRef {
+  textureAssetId: string;
+  name?: string;
+  wrapS: number;
+  wrapT: number;
+  flipY?: boolean;
+}
+
+/** The maps a Lighting layer can have. */
+export type LightingMapSlot = "roughness" | "metalness" | "normal" | "ao" | "emissive" | "bump";
+
+// Shades the layers under it; the layers over it are drawn on the shaded result, unshaded (as in
+// Spline). Its opacity is how much shading shows (0 looks unlit, as with the eye off); its blend
+// mode stays "normal". It can't be removed, so it also holds the surface's settings and the maps.
 export interface LightingLayer extends LayerBase {
   type: "lighting";
   model: LightingModel;
@@ -62,14 +94,29 @@ export interface LightingLayer extends LayerBase {
   alphaCutoff?: number; // only meaningful when alphaMode === "MASK"
   // Drawn from both sides: flat objects, and imported thin geometry (hair, foliage, fabric).
   doubleSided?: boolean;
+  // Phong's highlight colour (missing = three's #111111).
+  specular?: string;
+  // Physical only; off their defaults they take a MeshPhysicalMaterial, as a clearcoat does: how
+  // strong the specular reflection is (three's specularIntensity, 1), a velvet sheen (0), a
+  // soap-bubble iridescence (0), and the index of refraction (1.5).
+  reflectivity?: number;
+  sheen?: number;
+  iridescence?: number;
+  ior?: number;
+  // Pictures that feed the shading (roughness and metalness only on Physical). `bumpScale` is how
+  // strong the bump map is (missing = 1).
+  maps?: Partial<Record<LightingMapSlot, TextureRef>>;
+  bumpScale?: number;
 }
 
-// A texture map layer, derived from an imported glTF material's maps. The pixel
+// A picture layer: an imported glTF material's colour map, or an image plane's picture. The pixel
 // data is never stored here (materialLayers is saved in the scene document) — it
 // lives in the OPFS texture asset store, referenced by textureAssetId. wrapS/wrapT
 // are the THREE wrap constants copied straight off the source texture.
-// Until Image is a layer type of its own (task D, PR 4) it only fills its slot, as the imported
-// material did: its opacity and blend mode aren't used.
+// It fills the material's colour map, so its opacity and blend mode aren't used yet (a full Image
+// layer is task D's PR 4b). Before PR 4 an imported model's other pictures (normal, roughness,
+// emissive, AO) were Image layers too: they're the Lighting layer's `maps` now, and older documents
+// are folded so on load (utils/sceneDocument.ts).
 export interface ImageLayer extends LayerBase {
   type: "image";
   textureAssetId: string;
@@ -78,29 +125,73 @@ export interface ImageLayer extends LayerBase {
   wrapT: number;
 }
 
-// Colours the object by distance (like Spline's Depth layer, Vector origin, Local): each vertex's
-// distance from `origin` in the object's own space, straight out ("radial") or along `direction`
-// ("linear"), is placed on the ramp between `near` (its first stop) and `far` (its last). It's
-// painted as vertex colours (utils/depthColors.ts) and blended over the layers under it like any
-// other (viewport/layerNodes.ts); an export bakes the blend into the vertex colours. At most one per
-// object.
-export interface DepthStop {
-  color: string;
-  position: number; // 0-1 along the ramp
-}
-
+// Colours the object by distance, as Spline's Depth layer: each point's distance from the origin,
+// straight out ("radial") or along `direction` ("linear"), is placed on the ramp between `near` (its
+// first stop) and `far` (its last). The origin is `origin` ("vector": in the object's own space, or
+// with `space: "world"` the scene's) or the camera ("camera": radial is the distance to it, linear
+// the depth along the view). Drawn per pixel (viewport/layerNodes.ts).
 export interface DepthLayer extends LayerBase {
   type: "depth";
   gradientType: "radial" | "linear";
+  originType?: "vector" | "camera"; // missing = "vector"
+  space?: "local" | "world"; // missing = "local"; for a "vector" origin
   origin: [number, number, number];
   direction: [number, number, number]; // only meaningful when gradientType === "linear"
   near: number;
   far: number;
-  stops: DepthStop[]; // 2-10
+  stops: RampStop[]; // 2-10
   smooth: boolean; // eased blends between stops
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer;
+// A ramp laid over the object's UVs, as Spline's Gradient layer (its maths: scene/layerStack.ts,
+// gradientPosition). `angle` in degrees; `offset` moves it, `morph` bends it.
+export interface GradientLayer extends LayerBase {
+  type: "gradient";
+  gradientType: "linear" | "radial" | "polar";
+  stops: RampStop[]; // 2-10
+  smooth: boolean;
+  angle: number;
+  offset: [number, number];
+  morph: [number, number];
+}
+
+export type NoiseType = "simplex" | "simplexFractal" | "perlin" | "fbm" | "voronoi";
+export type VoronoiStyle = "f1" | "f2" | "f2MinusF1" | "smoothBlend" | "edge";
+
+// Swirling 3D noise in the object's own space, as Spline's Noise layer: a domain-warped noise (Inigo
+// Quilez's warp, whose constants Spline's Factor A and B defaults are) colouring between four
+// colours. `size` stretches it per axis, `scale` zooms in, `movement` animates it (0 = still), and
+// `distortion` is how far each of the two warps pushes. Voronoi cells take `voronoiStyle`,
+// `smoothness` and `seed`. `lowCut` / `highCut` remap the noise's value. Its maths:
+// viewport/layerSources.ts.
+export interface NoiseLayer extends LayerBase {
+  type: "noise";
+  noiseType: NoiseType;
+  size: [number, number, number];
+  scale: number;
+  movement: number;
+  colors: [PaintColor, PaintColor, PaintColor, PaintColor];
+  distortion: [number, number];
+  factorA: [number, number];
+  factorB: [number, number];
+  voronoiStyle: VoronoiStyle;
+  smoothness: number;
+  seed: number;
+  lowCut: number;
+  highCut: number;
+}
+
+// A glow where the surface turns away from the camera, as Spline's Fresnel layer: its colour, as
+// much as clamp(bias + scale * (1 - |N·V|)^intensity) * factor. Over Lighting it glows.
+export interface FresnelLayer extends LayerBase, PaintColor {
+  type: "fresnel";
+  bias: number;
+  scale: number;
+  intensity: number;
+  factor: number;
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer;
 
 /** A reusable material: the scene document's `materials` section, by ID (task D, PR 6). */
 export interface MaterialAsset {

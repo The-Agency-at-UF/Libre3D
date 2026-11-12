@@ -2,7 +2,6 @@ import * as THREE from "three";
 import { PathMesh } from "../paths/PathMesh";
 import { showBasePoses } from "../viewport/basePoses";
 import { hideEditorOnlyObjects } from "../viewport/editorOnly";
-import { bakeLayerStacksForExport } from "../viewport/layerNodes";
 
 type GLTFExporterResult = ArrayBuffer | Blob | string | Record<string, unknown>;
 
@@ -200,9 +199,8 @@ export const createSceneExportBlob = async (
   const restorePoses = showBasePoses(scene);
   const restoreTrimmedPaths = trimPathsForExport(scene);
   const restoreEditorUserData = hideEditorUserData(scene);
-  // A glTF material can't blend layers: a Depth stack goes out as vertex colours with the blend baked in.
-  const restoreLayerStacks = bakeLayerStacksForExport(scene);
-  // After the bake, which finds a stack by the object's own material.
+  // A glTF material can't hold layers drawn per pixel (Depth, Gradient, Noise, Fresnel): those go
+  // out as the material's own colour. (.glb export goes with task G.)
   const restoreMaterials = standardMaterialsForExport(scene);
 
   try {
@@ -249,7 +247,6 @@ export const createSceneExportBlob = async (
     restorePoses();
     restoreEditorUserData();
     restoreMaterials();
-    restoreLayerStacks();
   }
 };
 

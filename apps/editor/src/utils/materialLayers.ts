@@ -5,10 +5,10 @@ import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
 import type {
   ColorLayer,
   ImageLayer,
-  ImageSlot,
   LightingLayer,
   LightingModel,
   MaterialLayer,
+  TextureRef,
 } from "../scene/types";
 
 // Turns a parsed glTF THREE.Material into the editable layer stack this codebase
@@ -171,36 +171,39 @@ async function resolveTextureAssetId(texture: THREE.Texture, cache: TextureDedup
   return id;
 }
 
-async function imageLayersFromMaterial(material: THREE.Material, cache: TextureDedupCache, saveTexture: SaveTexture): Promise<ImageLayer[]> {
+// The material's pictures: its colour map as an Image layer, the others as the Lighting layer's maps
+// (glTF's packed metallic-roughness picture fills both roughness and metalness, as three does).
+async function picturesFromMaterial(
+  material: THREE.Material,
+  cache: TextureDedupCache,
+  saveTexture: SaveTexture,
+): Promise<{ layers: ImageLayer[]; maps: NonNullable<LightingLayer["maps"]> }> {
   const std = material as THREE.MeshStandardMaterial;
-  const layers: ImageLayer[] = [];
-
-  const add = async (texture: THREE.Texture | null | undefined, slot: ImageSlot): Promise<void> => {
-    if (!texture) return;
+  const refFor = async (texture: THREE.Texture | null | undefined): Promise<TextureRef | null> => {
+    if (!texture) return null;
     const textureAssetId = await resolveTextureAssetId(texture, cache, saveTexture);
-    if (!textureAssetId) return;
-    layers.push({
-      id: createLayerId(),
-      type: "image",
-      enabled: true,
-      opacity: 1,
-      blendMode: "normal",
-      textureAssetId,
-      slot,
-      wrapS: texture.wrapS,
-      wrapT: texture.wrapT,
-    });
+    return textureAssetId ? { textureAssetId, wrapS: texture.wrapS, wrapT: texture.wrapT } : null;
   };
 
-  await add(std.map, "color");
-  await add(std.normalMap, "normal");
-  // glTF packs metallic + roughness into a single texture Three assigns to both
-  // roughnessMap and metalnessMap — emit one "metallicRoughness" layer, not two.
-  await add(std.roughnessMap ?? std.metalnessMap, "metallicRoughness");
-  await add((material as THREE.MeshStandardMaterial).emissiveMap, "emissive");
-  await add(std.aoMap, "ao");
+  const layers: ImageLayer[] = [];
+  const color = await refFor(std.map);
+  if (color) {
+    layers.push({ id: createLayerId(), type: "image", enabled: true, opacity: 1, blendMode: "normal", slot: "color", textureAssetId: color.textureAssetId, wrapS: color.wrapS, wrapT: color.wrapT });
+  }
 
-  return layers;
+  const maps: NonNullable<LightingLayer["maps"]> = {};
+  const normal = await refFor(std.normalMap);
+  if (normal) maps.normal = normal;
+  const metallicRoughness = await refFor(std.roughnessMap ?? std.metalnessMap);
+  if (metallicRoughness) {
+    maps.roughness = metallicRoughness;
+    maps.metalness = { ...metallicRoughness };
+  }
+  const emissive = await refFor(std.emissiveMap);
+  if (emissive) maps.emissive = emissive;
+  const ao = await refFor(std.aoMap);
+  if (ao) maps.ao = ao;
+  return { layers, maps };
 }
 
 /** An imported mesh's editable material: its layer stack, top first, and the object's opacity. */
@@ -215,9 +218,11 @@ export interface DerivedMaterial {
 // under its hash.
 export async function deriveMaterialLayers(material: THREE.Material, cache: TextureDedupCache, saveTexture: SaveTexture): Promise<DerivedMaterial> {
   const model = lightingModelForMaterial(material);
-  const imageLayers = await imageLayersFromMaterial(material, cache, saveTexture);
+  const pictures = await picturesFromMaterial(material, cache, saveTexture);
+  const lighting = lightingLayerFromMaterial(material, model);
+  if (Object.keys(pictures.maps).length > 0) lighting.maps = pictures.maps;
   return {
-    layers: [lightingLayerFromMaterial(material, model), colorLayerFromMaterial(material), ...imageLayers],
+    layers: [lighting, colorLayerFromMaterial(material), ...pictures.layers],
     opacity: typeof material.opacity === "number" ? material.opacity : 1,
   };
 }
@@ -229,21 +234,30 @@ export async function isJpeg(blob: Blob): Promise<boolean> {
   return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 }
 
-// Rebuilds a THREE.Texture from a stored blob for an ImageLayer, restoring the
-// wrap/colorSpace/flip conventions glTF textures use so the reloaded map renders
-// identically to the parsed original.
-export async function buildTextureFromLayer(blob: Blob, layer: ImageLayer): Promise<THREE.Texture> {
-  const bitmap = await createImageBitmap(blob);
+/** How a stored picture is made into a texture: its wrapping, whether it's turned up (see below), and whether it holds colours. */
+export interface TextureOptions {
+  wrapS: number;
+  wrapT: number;
+  flipY?: boolean;
+  srgb: boolean;
+}
+
+// Rebuilds a THREE.Texture from a stored blob (an Image layer's picture, a Lighting map's), restoring
+// the wrap/colorSpace/flip conventions glTF textures use so the reloaded map renders identically to
+// the parsed original. A colour picture (`srgb`) is in sRGB; data (normals, roughness, …) isn't.
+export async function buildTexture(blob: Blob, options: TextureOptions): Promise<THREE.Texture> {
+  const bitmap = await createImageBitmap(blob, options.flipY ? { imageOrientation: "flipY" } : undefined);
   const texture = new THREE.Texture(bitmap);
   // wrapS/wrapT are persisted as plain numbers (THREE wrap constants); the union
   // type is narrower than number, so assert back to it here.
-  texture.wrapS = layer.wrapS as THREE.Wrapping;
-  texture.wrapT = layer.wrapT as THREE.Wrapping;
+  texture.wrapS = options.wrapS as THREE.Wrapping;
+  texture.wrapT = options.wrapT as THREE.Wrapping;
   // glTF stores textures unflipped and Three uploads them with flipY = false; the
-  // canvas re-encode preserved that top-left origin, so reload the same way.
+  // canvas re-encode preserved that top-left origin, so reload the same way. A picture uploaded in
+  // the editor is turned when it's decoded (an ImageBitmap can't be flipped on upload), so three's
+  // primitives, whose UVs go up, show it the way up it was made.
   texture.flipY = false;
-  texture.colorSpace =
-    layer.slot === "color" || layer.slot === "emissive" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  texture.colorSpace = options.srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   // GLTFExporter writes every texture as a PNG unless told otherwise; a JPEG (an
   // imported photo, utils/importImage.ts) stays one in exports and published
   // scenes, which keeps them several times smaller.

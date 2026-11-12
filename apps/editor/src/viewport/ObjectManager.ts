@@ -356,7 +356,7 @@ export class ObjectManager {
         if (isPendingImportNode) continue;
 
         const obj = this.createSceneObject(entity);
-        if (obj instanceof THREE.Mesh && entity.materialLayers) this.materials.applyDepthLayer(obj, entity);
+        if (obj instanceof THREE.Mesh && entity.materialLayers) this.materials.bindMesh(obj, entity);
         obj.userData.entityId = entity.id;
         obj.userData.entityType = entity.type;
         obj.userData.locked = isEffectivelyLocked(entities, entity.id);

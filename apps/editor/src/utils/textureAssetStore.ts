@@ -15,7 +15,7 @@ const store = createAssetStore<Blob>({
   dirName: "libre3d-textures",
   dbName: "libre3d-texture-assets",
   storeName: "texture-assets",
-  // File already is a Blob, and buildTextureFromLayer takes it straight through
+  // File already is a Blob, and buildTexture takes it straight through
   // to createImageBitmap -- no conversion needed.
   decode: (file) => file,
 });

@@ -1,21 +1,22 @@
 /**
  * PURPOSE: Builds and updates the Three.js material of an object from its entity's material layers
- * (Color, Lighting, Image, Depth) and its opacity.
+ * (scene/layerStack.ts) and its opacity.
  *
  * INPUT: An entity's `materialLayers`, and from the SceneSource: the wireframe setting and the
- * textures that Image layers name.
+ * pictures that Image layers and Lighting maps name.
  * OUTPUT: A material for a new mesh (`createMaterialFromLayers`), and an existing mesh's material
  * brought up to date in place, or replaced when the lighting model needs another class
  * (`syncMaterial`).
  *
- * The colour layers are blended as scene/layerStack.ts says. A stack that adds up to one colour sets
- * the material's colour; one with a Depth layer, or a Lighting layer under full opacity, is drawn
- * with TSL nodes that never sit on the material itself (layerNodes.ts). Every material is a node
- * material (three/webgpu) for that. An imported
- * model arrives with GLTFLoader's built-in materials; the first sync swaps each for a node copy with
- * the same values (nodeMaterials.ts), so its textures and glTF extras (transmission, sheen, …) stay.
+ * The Lighting layer picks the material's class and sets its shading (roughness, maps, sheen, …).
+ * The colour layers are blended as scene/layerStack.ts says: a stack of Color layers under Lighting
+ * is the material's own colour; anything that paints per pixel, a mask, a layer over Lighting or
+ * Lighting under full opacity is drawn with TSL nodes that never sit on the material itself
+ * (layerNodes.ts). Every material is a node material (three/webgpu) for that. An imported model
+ * arrives with GLTFLoader's built-in materials; the first sync swaps each for a node copy with the
+ * same values (nodeMaterials.ts), so its textures and glTF extras (transmission, …) stay.
  *
- * Textures load in the background: a mesh is drawn without one until it arrives, then every mesh
+ * Pictures load in the background: a mesh is drawn without one until it arrives, then every mesh
  * that uses it gets it. Loaded textures are kept for the session and shared between meshes.
  *
  * Not here: geometry (entityGeometry.ts), which objects exist and where they are (ObjectManager),
@@ -31,12 +32,11 @@ import {
   MeshStandardNodeMaterial,
   MeshToonNodeMaterial,
 } from "three/webgpu";
-import type { Entity, MaterialLayer, LightingLayer, ImageLayer, ImageSlot } from "../scene/types";
+import type { Entity, MaterialLayer, LightingLayer, LightingMapSlot, TextureRef } from "../scene/types";
 import { getEntityIndex } from "../scene/entityIndex";
 import { lightingLayerOf, surfaceOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, type Surface } from "../scene/layers";
-import { lightingStrength, planStack, type StackPlan } from "../scene/layerStack";
-import { buildTextureFromLayer } from "../utils/materialLayers";
-import { depthPaintKey, depthPaintOf, syncDepthColors } from "../utils/depthColors";
+import { planStack, type StackPlan } from "../scene/layerStack";
+import { buildTexture } from "../utils/materialLayers";
 import { syncLayerNodes } from "./layerNodes";
 import { PathMesh } from "../paths/PathMesh";
 import { toNodeMaterial } from "./nodeMaterials";
@@ -54,12 +54,19 @@ export type LayeredMaterial =
 // tell a node material from the built-in one it stands for.
 const flag = (material: THREE.Material, name: string): boolean => (material as unknown as Record<string, unknown>)[name] === true;
 
-// Physical builds the cheaper standard material unless the layer asks for a clearcoat.
-const wantsClearcoat = (lightingLayer: LightingLayer | undefined): boolean =>
-  (lightingLayer?.model ?? "physical") === "physical" && (lightingLayer?.clearcoat ?? 0) > 0;
+// The Lighting values only MeshPhysicalMaterial has, at the values that leave it looking like the
+// cheaper standard one.
+const PHYSICAL_DEFAULTS = { clearcoat: 0, sheen: 0, iridescence: 0, ior: 1.5, reflectivity: 1 } as const;
+
+// Physical builds the standard material unless the layer asks for something only physical has.
+const wantsPhysical = (lightingLayer: LightingLayer | undefined): boolean =>
+  (lightingLayer?.model ?? "physical") === "physical" &&
+  (Object.keys(PHYSICAL_DEFAULTS) as Array<keyof typeof PHYSICAL_DEFAULTS>).some(
+    (key) => lightingLayer?.[key] !== undefined && lightingLayer[key] !== PHYSICAL_DEFAULTS[key],
+  );
 
 const materialClassForLayer = (lightingLayer: LightingLayer | undefined) => {
-  if (wantsClearcoat(lightingLayer)) return MeshPhysicalNodeMaterial;
+  if (wantsPhysical(lightingLayer)) return MeshPhysicalNodeMaterial;
   switch (lightingLayer?.model ?? "physical") {
     case "lambert":
       return MeshLambertNodeMaterial;
@@ -75,6 +82,9 @@ const materialClassForLayer = (lightingLayer: LightingLayer | undefined) => {
   }
 };
 
+/** The object whose own space Depth and Noise work in, when it isn't the mesh: a path's, for its end caps. */
+const spaceOf = (mesh: THREE.Mesh | null): THREE.Object3D | null => (mesh instanceof PathMesh ? mesh : null);
+
 /**
  * Draws a material as a wireframe or solid. The renderer draws lines with another pipeline and
  * another index buffer than triangles, and only makes them when it's told the material changed
@@ -86,6 +96,46 @@ export const setWireframe = (material: THREE.Material & { wireframe: boolean }, 
   material.needsUpdate = true;
 };
 
+// The material property each Lighting map fills, and whether its picture holds colours.
+const MAP_PROPS: Record<LightingMapSlot, { prop: string; srgb: boolean }> = {
+  roughness: { prop: "roughnessMap", srgb: false },
+  metalness: { prop: "metalnessMap", srgb: false },
+  normal: { prop: "normalMap", srgb: false },
+  ao: { prop: "aoMap", srgb: false },
+  emissive: { prop: "emissiveMap", srgb: true },
+  bump: { prop: "bumpMap", srgb: false },
+};
+
+/** Every material property a picture can fill here. */
+const TEXTURE_PROPS = ["map", ...Object.values(MAP_PROPS).map(({ prop }) => prop)];
+
+/** A picture a material property should have. */
+interface TextureBinding {
+  ref: TextureRef;
+  srgb: boolean;
+}
+
+// What a stored picture is turned into: the same bytes made two ways (a colour map and a normal
+// map, say) are two textures.
+const textureKey = (binding: TextureBinding): string =>
+  `${binding.ref.textureAssetId}|${binding.ref.wrapS}|${binding.ref.wrapT}|${binding.ref.flipY ? 1 : 0}|${binding.srgb ? 1 : 0}`;
+
+/** The pictures `layers` put on a material, by property: an Image layer's colour map, and the Lighting layer's maps. */
+const textureBindings = (layers: MaterialLayer[] | undefined): Map<string, TextureBinding> => {
+  const bindings = new Map<string, TextureBinding>();
+  for (const layer of layers ?? []) {
+    if (layer.type === "image" && layer.enabled && layer.slot === "color" && !bindings.has("map")) {
+      bindings.set("map", { ref: layer, srgb: true });
+    }
+    if (layer.type === "lighting" && layer.maps) {
+      for (const [slot, ref] of Object.entries(layer.maps) as Array<[LightingMapSlot, TextureRef | undefined]>) {
+        if (ref) bindings.set(MAP_PROPS[slot].prop, { ref, srgb: MAP_PROPS[slot].srgb });
+      }
+    }
+  }
+  return bindings;
+};
+
 export class EntityMaterials {
   // The scene's objects by entity id (ObjectManager's map), to give a texture that has just loaded
   // to every mesh that uses it.
@@ -93,15 +143,14 @@ export class EntityMaterials {
   // Where the wireframe setting, the entities, and the textures come from (sceneSource.ts).
   private readonly source: SceneSource;
 
-  // Session cache of textures rebuilt from the texture store (downloaded first
-  // if this browser doesn't have the image), keyed by ImageLayer.textureAssetId. Loaded lazily (and once) the first time an empty
-  // material slot actually needs one — a rebuild after a lighting-model change,
-  // or an Image layer re-enabled — never re-decoded per sync. loadingTextures
-  // guards against firing a second load for an id already in flight.
+  // Session cache of textures rebuilt from the texture store (downloaded first if this browser
+  // doesn't have the picture), by textureKey. Loaded lazily (and once) the first time a material
+  // property needs one, never re-decoded per sync. loadingTextures guards against a second load of a
+  // key already in flight.
   private textureCache = new Map<string, THREE.Texture>();
   private loadingTextures = new Set<string>();
 
-  // Set by applyImageLayers when an Image layer's texture isn't there yet; syncMaterial reports it.
+  // Set by applyTextures when a picture isn't there yet; syncMaterial reports it.
   private textureWasMissing = false;
 
   constructor(meshMap: Map<string, THREE.Object3D>, source: SceneSource) {
@@ -122,20 +171,27 @@ export class EntityMaterials {
   // manually-reduced opacity on top of it still enables blending. OPAQUE (and
   // legacy layers with no alphaMode recorded -- primitives, or layers derived
   // before this shipped) fall back to the original opacity-only heuristic.
+  // `seeThrough`: the layer stack leaves parts see-through (a mask, a Fresnel at the bottom, …).
   private computeAlphaBlendState(
     surface: Surface,
     opacity: number,
+    seeThrough: boolean,
   ): { transparent: boolean; alphaTest: number; depthWrite: boolean } {
-    if (surface.alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: opacity >= 1 };
-    if (surface.alphaMode === "MASK") return { transparent: opacity < 1, alphaTest: surface.alphaCutoff, depthWrite: true };
-    return { transparent: opacity < 1, alphaTest: 0, depthWrite: true };
+    const translucent = opacity < 1 || seeThrough;
+    if (surface.alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: !translucent };
+    if (surface.alphaMode === "MASK") return { transparent: translucent, alphaTest: surface.alphaCutoff, depthWrite: true };
+    return { transparent: translucent, alphaTest: 0, depthWrite: true };
   }
 
-  // The material's colour: the stack's, when it adds up to one colour; white under a Depth stack,
-  // whose colour comes from its nodes (layerNodes.ts).
-  private static setStackColor(material: LayeredMaterial, plan: StackPlan): void {
-    if (plan.depth) material.color.setRGB(1, 1, 1);
-    else material.color.setRGB(plan.under.rgb[0], plan.under.rgb[1], plan.under.rgb[2], THREE.SRGBColorSpace);
+  // The material's colour and opacity: the stack's, when its layers under Lighting add up to one
+  // colour; white and the object's opacity when they're drawn per pixel (layerNodes.ts).
+  private static stackColor(material: LayeredMaterial, plan: StackPlan, objectOpacity: number): number {
+    if (!plan.folded) {
+      material.color.setRGB(1, 1, 1);
+      return objectOpacity;
+    }
+    material.color.setRGB(plan.folded.rgb[0], plan.folded.rgb[1], plan.folded.rgb[2], THREE.SRGBColorSpace);
+    return objectOpacity * plan.folded.alpha;
   }
 
   /** A new material for `layers` on an object `objectOpacity` see-through (1 = solid). */
@@ -145,192 +201,149 @@ export class EntityMaterials {
     const MaterialClass = materialClassForLayer(lightingLayer);
     const plan = planStack(layers);
     const surface = surfaceOf(layers);
-    const opacity = objectOpacity * plan.alpha;
-    const alphaState = this.computeAlphaBlendState(surface, opacity);
 
     const material = new MaterialClass({
-      opacity,
-      transparent: alphaState.transparent,
-      alphaTest: alphaState.alphaTest,
-      depthWrite: alphaState.depthWrite,
       side: surface.doubleSided ? THREE.DoubleSide : THREE.FrontSide,
       wireframe: this.source.isWireframe(),
     });
-    EntityMaterials.setStackColor(material, plan);
-    syncLayerNodes(material, plan, lightingStrength(lightingLayer));
+    const opacity = EntityMaterials.stackColor(material, plan, objectOpacity);
+    const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque);
+    material.opacity = opacity;
+    material.transparent = alphaState.transparent;
+    material.alphaTest = alphaState.alphaTest;
+    material.depthWrite = alphaState.depthWrite;
+    syncLayerNodes(material, plan);
 
     this.applyLightingProperties(material, lightingLayer, model);
-    this.applyImageLayers(material, layers);
+    this.applyTextures(material, layers);
 
     return material;
   }
 
-  // A Depth layer (utils/depthColors.ts) is the mesh's vertex colours: its ramp, which the stack's
-  // nodes blend with the layers around it. Whether the material used vertex colours before (an
-  // imported model's own) comes back when the layer goes.
-  public applyDepthLayer(mesh: THREE.Mesh, entity: Entity): void {
-    const paint = depthPaintOf(entity.materialLayers);
-    const key = depthPaintKey(paint);
-    if (mesh instanceof PathMesh) {
-      mesh.setDepthPaint(paint, key);
-    } else {
-      // An imported mesh's geometry can be shared with other copies of the model: paint its own.
-      if (paint && entity.type === "importedModel" && !mesh.geometry.userData.depthOwned) {
-        mesh.geometry = mesh.geometry.clone();
-        mesh.geometry.userData.depthOwned = true;
-      }
-      syncDepthColors(mesh.geometry, paint, key);
-    }
-
-    const material = mesh.material as LayeredMaterial;
-    if (paint) material.userData.vertexColorsBeforeDepth ??= material.vertexColors;
-    const vertexColors: boolean = paint ? true : (material.userData.vertexColorsBeforeDepth ?? material.vertexColors);
-    if (!paint) delete material.userData.vertexColorsBeforeDepth;
-    if (material.vertexColors !== vertexColors) {
-      material.vertexColors = vertexColors;
-      material.needsUpdate = true;
+  /**
+   * Ties a new mesh's material to the mesh: a path's Depth and Noise layers work in the path's own
+   * space, which its end caps (meshes of their own) share.
+   */
+  public bindMesh(mesh: THREE.Mesh, entity: Entity): void {
+    const space = spaceOf(mesh);
+    if (space && syncLayerNodes(mesh.material as THREE.Material, planStack(entity.materialLayers), space)) {
+      (mesh.material as THREE.Material).needsUpdate = true;
     }
   }
 
-  // The material property (or properties) each ImageLayer slot feeds. The glTF
-  // metallic-roughness map is one packed texture Three assigns to both
-  // roughnessMap and metalnessMap, so that slot returns two properties.
-  private static readonly SLOT_PROPS: Record<ImageSlot, Array<keyof MeshStandardNodeMaterial>> = {
-    color: ["map"],
-    normal: ["normalMap"],
-    metallicRoughness: ["roughnessMap", "metalnessMap"],
-    emissive: ["emissiveMap"],
-    ao: ["aoMap"],
-  };
-
-  // True when the material actually has this slot's property (materials differ —
-  // MeshPhongMaterial has no roughnessMap) and it's currently unset. Used to skip
-  // loading/assigning a texture when the slot is already filled (e.g. the parsed
-  // glTF material still carries its original map on the common reload path), which
-  // both avoids needless work and leaves the untouched parsed textures in place.
-  private slotNeedsTexture(material: THREE.Material, slot: ImageSlot): boolean {
-    const mat = material as unknown as Record<string, unknown>;
-    return EntityMaterials.SLOT_PROPS[slot].some((prop) => prop in material && !mat[prop as string]);
-  }
-
-  // Assigns the texture to every empty property of the slot the material has,
-  // never overwriting a map that's already present. Returns whether anything changed.
-  private assignTextureToSlot(material: THREE.Material, slot: ImageSlot, texture: THREE.Texture): boolean {
-    const mat = material as unknown as Record<string, unknown>;
-    let changed = false;
-    for (const prop of EntityMaterials.SLOT_PROPS[slot]) {
-      if (prop in material && !mat[prop as string]) {
-        mat[prop as string] = texture;
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
-  private clearTextureSlot(material: THREE.Material, slot: ImageSlot): boolean {
-    const mat = material as unknown as Record<string, unknown>;
-    let changed = false;
-    for (const prop of EntityMaterials.SLOT_PROPS[slot]) {
-      if (prop in material && mat[prop as string]) {
-        mat[prop as string] = null;
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
-  // Returns the cached texture for a layer, or null while kicking off a one-shot
-  // async load. When the load lands, assignLoadedTextureToMeshes fills the slot on
-  // every mesh using that id; the continuous RAF loop renders it the next frame.
-  private getTextureForLayer(layer: ImageLayer): THREE.Texture | null {
-    const cached = this.textureCache.get(layer.textureAssetId);
+  // A material property's picture: the texture when it's loaded, or null while it's loaded in the
+  // background (then every mesh that wants it gets it: assignLoadedTexture).
+  private getTexture(binding: TextureBinding): THREE.Texture | null {
+    const key = textureKey(binding);
+    const cached = this.textureCache.get(key);
     if (cached) return cached;
 
-    const id = layer.textureAssetId;
-    if (!this.loadingTextures.has(id)) {
-      this.loadingTextures.add(id);
-      this.source.loadTexture(id)
+    if (!this.loadingTextures.has(key)) {
+      this.loadingTextures.add(key);
+      const id = binding.ref.textureAssetId;
+      this.source
+        .loadTexture(id)
         .then(async (blob) => {
           if (!blob) return;
-          const texture = await buildTextureFromLayer(blob, layer);
-          this.textureCache.set(id, texture);
-          this.assignLoadedTextureToMeshes(id);
+          this.textureCache.set(key, await buildTexture(blob, { ...binding.ref, srgb: binding.srgb }));
+          this.assignLoadedTexture(key);
         })
         .catch((error) => console.error(`[Libre3D] Failed to load texture asset "${id}":`, error))
-        .finally(() => this.loadingTextures.delete(id));
+        .finally(() => this.loadingTextures.delete(key));
     }
     return null;
   }
 
-  // After a texture finishes loading, fill it into any mesh whose entity has an
-  // enabled Image layer pointing at this id and an empty slot for it.
-  private assignLoadedTextureToMeshes(textureAssetId: string): void {
-    const texture = this.textureCache.get(textureAssetId);
-    if (!texture) return;
+  // After a picture finishes loading, every mesh whose layers want it gets it.
+  private assignLoadedTexture(key: string): void {
     const { byId } = getEntityIndex(this.source.getEntities());
     for (const [entityId, obj] of this.meshMap) {
       if (!(obj instanceof THREE.Mesh)) continue;
       const layers = byId.get(entityId)?.materialLayers;
-      if (!layers) continue;
-      const material = obj.material as THREE.Material;
-      let changed = false;
-      for (const layer of layers) {
-        if (layer.type === "image" && layer.enabled && layer.textureAssetId === textureAssetId) {
-          if (this.assignTextureToSlot(material, layer.slot, texture)) changed = true;
-        }
+      if (layers && [...textureBindings(layers).values()].some((binding) => textureKey(binding) === key)) {
+        this.applyTextures(obj.material as THREE.Material, layers);
       }
-      if (changed) material.needsUpdate = true;
     }
   }
 
-  // Reconciles a material's texture slots with the entity's Image layers: fills
-  // empty slots for enabled layers (loading the texture on demand) and clears
-  // slots for disabled ones. Deliberately does NOT replace a map that's already
-  // present, so imported meshes keep their untouched parsed glTF textures on the
-  // common path and only the rebuild/re-enable cases pull from the OPFS store.
-  private applyImageLayers(material: THREE.Material, layers: MaterialLayer[] | undefined): void {
-    if (!layers) return;
+  // Brings a material's pictures in line with its layers (textureBindings). Which picture each
+  // property holds is kept in the material's userData (`textureKeys`). A picture an imported model's
+  // material already holds is kept on the first sync (it's the one its layers name: they were
+  // derived from it), so the parsed glTF textures stay; one the layers no longer name is taken off
+  // only when it was put on here, so a picture the import couldn't keep isn't lost. Properties the
+  // material's class doesn't have (Phong has no roughnessMap) are skipped.
+  private applyTextures(material: THREE.Material, layers: MaterialLayer[] | undefined): void {
+    const target = material as unknown as Record<string, unknown>;
+    const keys: Record<string, string> = (material.userData.textureKeys ??= {});
+    const bindings = textureBindings(layers);
     let changed = false;
-    for (const layer of layers) {
-      if (layer.type !== "image") continue;
-      if (layer.enabled) {
-        if (!this.slotNeedsTexture(material, layer.slot)) continue;
-        const texture = this.getTextureForLayer(layer);
-        // Still loading, or it couldn't be had: the object is tried again on the next sync.
-        if (!texture) this.textureWasMissing = true;
-        if (texture && this.assignTextureToSlot(material, layer.slot, texture)) changed = true;
-      } else if (this.clearTextureSlot(material, layer.slot)) {
+    for (const prop of TEXTURE_PROPS) {
+      if (!(prop in material)) continue;
+      const binding = bindings.get(prop);
+      if (!binding) {
+        if (keys[prop] !== undefined) {
+          delete keys[prop];
+          if (target[prop]) {
+            target[prop] = null;
+            changed = true;
+          }
+        }
+        continue;
+      }
+      const key = textureKey(binding);
+      if (keys[prop] === key) {
+        if (target[prop]) continue;
+      } else if (keys[prop] === undefined && target[prop]) {
+        keys[prop] = key;
+        continue;
+      }
+      const texture = this.getTexture(binding);
+      if (!texture) {
+        this.textureWasMissing = true;
+        continue;
+      }
+      if (target[prop] !== texture) {
+        target[prop] = texture;
         changed = true;
       }
+      keys[prop] = key;
     }
     if (changed) material.needsUpdate = true;
   }
 
-  private applyLightingProperties(
-    material: LayeredMaterial,
-    lightingLayer: LightingLayer | undefined,
-    model: LightingLayer["model"]
-  ): void {
+  private applyLightingProperties(material: LayeredMaterial, lightingLayer: LightingLayer | undefined, model: LightingLayer["model"]): void {
     if (model === "physical" && flag(material, "isMeshStandardMaterial")) {
       const standard = material as MeshStandardNodeMaterial;
       standard.roughness = lightingLayer?.roughness ?? DEFAULT_ROUGHNESS;
       standard.metalness = lightingLayer?.metalness ?? DEFAULT_METALNESS;
     }
-    // Left alone when the layer has no value, so an imported glTF clearcoat survives layers made
-    // before clearcoat was one. Turning it back to 0 keeps the physical material: three compiles it
-    // without the coat, and swapping materials mid-drag would recompile anyway.
-    if (model === "physical" && flag(material, "isMeshPhysicalMaterial") && lightingLayer?.clearcoat !== undefined) {
+    // Each is left alone when the layer has no value, so an imported glTF clearcoat (or sheen, …)
+    // survives layers made before it was one. Turning one back to its default keeps the physical
+    // material: three compiles it without it, and swapping materials mid-drag would recompile anyway.
+    if (model === "physical" && flag(material, "isMeshPhysicalMaterial") && lightingLayer) {
       const physical = material as MeshPhysicalNodeMaterial;
-      physical.clearcoat = lightingLayer.clearcoat;
-      physical.clearcoatRoughness = lightingLayer.clearcoatRoughness ?? 0;
+      if (lightingLayer.clearcoat !== undefined) {
+        physical.clearcoat = lightingLayer.clearcoat;
+        physical.clearcoatRoughness = lightingLayer.clearcoatRoughness ?? 0;
+      }
+      if (lightingLayer.sheen !== undefined) {
+        physical.sheen = lightingLayer.sheen;
+        physical.sheenColor.set(0xffffff);
+      }
+      if (lightingLayer.iridescence !== undefined) physical.iridescence = lightingLayer.iridescence;
+      if (lightingLayer.ior !== undefined) physical.ior = lightingLayer.ior;
+      if (lightingLayer.reflectivity !== undefined) physical.specularIntensity = lightingLayer.reflectivity;
     }
     if (model === "phong" && flag(material, "isMeshPhongMaterial")) {
-      (material as MeshPhongNodeMaterial).shininess = lightingLayer?.shininess ?? 30;
+      const phong = material as MeshPhongNodeMaterial;
+      phong.shininess = lightingLayer?.shininess ?? 30;
+      phong.specular.set(lightingLayer?.specular ?? "#111111");
     }
     if (model !== "none" && "emissive" in material) {
       (material as MeshStandardNodeMaterial).emissive.set(lightingLayer?.emissive ?? "#000000");
       (material as MeshStandardNodeMaterial).emissiveIntensity = lightingLayer?.emissiveIntensity ?? 1;
     }
+    if ("bumpScale" in material) (material as MeshStandardNodeMaterial).bumpScale = lightingLayer?.bumpScale ?? 1;
   }
 
   /**
@@ -340,8 +353,8 @@ export class EntityMaterials {
    * For a mesh whose entity has layers. An imported mesh still waiting for its layers to be derived
    * keeps its own material untouched: the caller skips it.
    *
-   * @returns True when an Image layer's texture isn't there yet (still loading, or it couldn't be
-   *   had), so the caller knows to sync this mesh again.
+   * @returns True when a picture isn't there yet (still loading, or it couldn't be had), so the
+   *   caller knows to sync this mesh again.
    */
   public syncMaterial(obj: THREE.Mesh, entity: Entity): boolean {
     this.textureWasMissing = false;
@@ -365,28 +378,28 @@ export class EntityMaterials {
 
     // A parsed glTF PBR material is often physical (a subclass of standard). Treat that as already
     // matching "physical" so we take the in-place branch and keep its textures/advanced features,
-    // rather than rebuilding it into a plain textureless standard material on first sync. A
-    // clearcoat needs the physical one, so a standard material is rebuilt when one is added.
+    // rather than rebuilding it into a plain textureless standard material on first sync. Something
+    // only physical has needs the physical one, so a standard material is rebuilt when one is set.
     const materialMatches =
       model === "physical"
-        ? obj.material instanceof (wantsClearcoat(lightingLayer) ? MeshPhysicalNodeMaterial : MeshStandardNodeMaterial)
+        ? obj.material instanceof (wantsPhysical(lightingLayer) ? MeshPhysicalNodeMaterial : MeshStandardNodeMaterial)
         : obj.material.constructor === MaterialClass;
 
     if (!materialMatches) {
       const oldMaterial = obj.material as THREE.Material;
       obj.material = this.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1);
       if (obj instanceof PathMesh) obj.shareMaterialWithCaps();
+      this.bindMesh(obj, entity);
       oldMaterial.dispose();
     } else {
       const material = obj.material as LayeredMaterial;
       const plan = planStack(entity.materialLayers);
       const surface = surfaceOf(entity.materialLayers);
-      EntityMaterials.setStackColor(material, plan);
-      const opacity = (entity.opacity ?? 1) * plan.alpha;
-      const alphaState = this.computeAlphaBlendState(surface, opacity);
+      const opacity = EntityMaterials.stackColor(material, plan, entity.opacity ?? 1);
+      const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque);
       const newSide = surface.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
-      // A change to the stack's shape (a blend mode, an eye, the order) builds another shader.
-      const stackReshaped = syncLayerNodes(material, plan, lightingStrength(lightingLayer));
+      // A change to the stack's shape (a type, a blend mode, an eye, the order) builds another shader.
+      const stackReshaped = syncLayerNodes(material, plan, spaceOf(obj));
       // Only transparent/alphaTest/side changes force a shader recompile; color,
       // opacity, roughness, etc. do not. This runs for the gizmo's object on every
       // frame of a drag (and ran for every entity on every store change before
@@ -407,9 +420,8 @@ export class EntityMaterials {
       setWireframe(material, this.source.isWireframe());
       if (needsRecompile) material.needsUpdate = true;
       this.applyLightingProperties(material, lightingLayer, model);
-      this.applyImageLayers(material, entity.materialLayers);
+      this.applyTextures(material, entity.materialLayers);
     }
-    this.applyDepthLayer(obj, entity);
     return this.textureWasMissing;
   }
 }

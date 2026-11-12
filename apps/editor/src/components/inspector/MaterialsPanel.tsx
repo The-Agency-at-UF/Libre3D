@@ -2,11 +2,13 @@
  * PURPOSE: Inspector panel for the selected objects' material: their opacity and their layer stack
  * (scene/layerStack.ts), one row per layer, top of the stack first.
  *
- * A row, left to right: the layer's type (a dropdown switches Color ↔ Depth), its icon (opens the
- * layer's settings in a drawer beside the sidebar; dragging it reorders the stack), its opacity,
- * its blend mode, its eye, and ×. The stack's rules decide what can be removed, switched or moved:
- * Lighting stays on top and can't be removed; a Color layer goes only while another colour layer
- * stays; an imported model's Image layers fill their texture slots and stay at the bottom.
+ * A row, left to right: the layer's type (a dropdown switches among the colour types), its icon
+ * (opens the layer's settings in a drawer beside the sidebar, LayerSettings.tsx; dragging it moves
+ * the layer), its opacity, its blend mode, its eye, and ×. The stack's rules decide what can be
+ * removed, switched or moved: Lighting can't be removed, and layers over it are drawn unshaded; a
+ * layer that paints goes only while another one stays; a layer in Mask mode (purple, with an arrow
+ * to the layer it masks) shows that layer only where it's light; an imported model's Image layer
+ * stays at the bottom.
  *
  * Several selected objects with the same layers in the same order are edited row by row; with
  * different stacks, their Lighting and top Color layers are.
@@ -14,301 +16,23 @@
 
 import { useState, useEffect, useRef, useLayoutEffect, type DragEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import * as THREE from "three";
-import {
-  useEditorStore,
-  type BlendMode,
-  type ColorLayer,
-  type Entity,
-  type LightingLayer,
-  type LightingModel,
-  type MaterialLayer as MaterialLayerData,
-  type MaterialLayerType,
-  type ImageLayer,
-  type ImageSlot,
-  type DepthLayer,
-} from "../../store/useEditorStore";
-import { colorLayerOf, lightingLayerOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../../scene/layers";
-import { BLEND_MODES, canSwitchLayerType, movableRange, removeBlockedReason, SWITCHABLE_LAYER_TYPES } from "../../scene/layerStack";
-import { loadTextureForScene } from "../../utils/assetTransfers";
-import { depthReach } from "../../utils/depthColors";
-import { getLiveScene } from "../../viewport/liveViewport";
+import { useEditorStore, type Entity, type ImageLayer, type MaterialLayer as MaterialLayerData, type MaterialLayerType } from "../../store/useEditorStore";
+import type { PaintLayerType } from "../../scene/entityFactories";
+import { BLEND_MODES, canSwitchLayerType, maskTarget, movableRange, removeBlockedReason, SWITCHABLE_LAYER_TYPES } from "../../scene/layerStack";
 import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
-import { Slider } from "../ui/Slider";
-import { Select } from "../ui/Select";
-import { Switch } from "../ui/Switch";
-import { Vector3Input } from "../ui/Vector3Input";
-import { DepthRamp } from "./DepthRamp";
-import { editDepth } from "../../viewport/hooks/useViewportDepthGizmo";
-
-// ─── Names and icons ─────────────────────────────────────────────────────────
-
-const LAYER_TYPE_NAMES: Record<MaterialLayerType, string> = {
-  color: "Color",
-  lighting: "Lighting",
-  image: "Image",
-  depth: "Depth",
-};
-
-const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
-  color: "ti-palette",
-  lighting: "ti-bulb",
-  image: "ti-photo",
-  depth: "ti-circles",
-};
-
-const BLEND_MODE_NAMES: Record<BlendMode, string> = {
-  normal: "Normal",
-  multiply: "Multiply",
-  screen: "Screen",
-  overlay: "Overlay",
-};
-
-// Multiply darkens, Screen lightens, Overlay does both.
-const BLEND_MODE_ICONS: Record<BlendMode, string> = {
-  normal: "ti-circle",
-  multiply: "ti-moon",
-  screen: "ti-sun",
-  overlay: "ti-contrast",
-};
-
-// Labelled "Base Color" (not "Color") so an image row reads distinctly from a Color layer.
-const IMAGE_SLOT_LABELS: Record<ImageSlot, string> = {
-  color: "Base Color",
-  normal: "Normal",
-  metallicRoughness: "Metallic / Roughness",
-  emissive: "Emissive",
-  ao: "Ambient Occlusion",
-};
-
-const LIGHTING_MODEL_OPTIONS: { label: string; value: LightingModel }[] = [
-  { label: "None", value: "none" },
-  { label: "Lambert", value: "lambert" },
-  { label: "Phong", value: "phong" },
-  { label: "Physical", value: "physical" },
-  { label: "Toon", value: "toon" },
-];
-
-type AlphaMode = NonNullable<LightingLayer["alphaMode"]>;
-
-// Mirrors glTF's alphaMode. Opaque ignores alpha; Mask is a hard alpha-tested
-// cutout (writes depth, so it sorts correctly); Blend is true translucency
-// (disables depth-write). Exporters frequently mis-flag a hard-edged cutout as
-// Blend, which then clips against opaque geometry behind it -- switching such a
-// material to Mask is the fix.
-const ALPHA_MODE_OPTIONS: { label: string; value: AlphaMode }[] = [
-  { label: "Opaque", value: "OPAQUE" },
-  { label: "Mask", value: "MASK" },
-  { label: "Blend", value: "BLEND" },
-];
-
-const DEPTH_TYPE_OPTIONS: { label: string; value: DepthLayer["gradientType"] }[] = [
-  { label: "Radial", value: "radial" },
-  { label: "Linear", value: "linear" },
-];
-
-const BLENDING_OPTIONS: { label: string; value: "linear" | "smooth" }[] = [
-  { label: "Linear", value: "linear" },
-  { label: "Smooth", value: "smooth" },
-];
-
-// How far a new Depth layer on `entityId` reaches: its mesh's farthest point, measured in the live
-// scene (only a mesh takes depth paint). Undefined, for the default, while it isn't drawn yet.
-const liveDepthReach = (entityId: string): number | undefined => {
-  let mesh: THREE.Mesh | undefined;
-  getLiveScene()?.traverse((object) => {
-    if (!mesh && object instanceof THREE.Mesh && object.userData.entityId === entityId) mesh = object;
-  });
-  return (mesh && depthReach(mesh.geometry)) ?? undefined;
-};
-
-// Several store actions as one undo step: the first records it, the rest join it.
-const asOneUndoStep = (actions: Array<() => void>): void => {
-  const [first, ...rest] = actions;
-  if (!first) return;
-  first();
-  if (rest.length === 0) return;
-  const history = useEditorStore.temporal.getState();
-  history.pause();
-  try {
-    rest.forEach((action) => action());
-  } finally {
-    history.resume();
-  }
-};
-
-// ─── Fields ──────────────────────────────────────────────────────────────────
-
-// Compound swatch + hex control that sits in the control column of a standard
-// label/control row (the shared Slider/Select/Switch render the same `.prop` row,
-// so everything lines up on the shared label width).
-function ColorSwatchField({
-  label,
-  value,
-  mixed,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  mixed: boolean;
-  onChange: (color: string) => void;
-}) {
-  const [localValue, setLocalValue] = useState(value);
-  // What the picker shows: the colour it was last moved to, which the store catches up with a frame later.
-  const [pickedColor, setPickedColor] = useState(value);
-
-  useEffect(() => {
-    setLocalValue(value);
-  }, [value]);
-
-  // The native picker fires on every move of a drag. The store gets one write per frame, and the whole
-  // drag is one undo step: its first colour records the step, and history resumes when the picker
-  // closes (its `change` event).
-  const picker = useRef<HTMLInputElement>(null);
-  const latestOnChange = useRef(onChange);
-  latestOnChange.current = onChange;
-  const shown = useRef(value);
-  const pending = useRef<string | null>(null);
-  const written = useRef<string | null>(null); // the colour this picker last wrote, while it's open
-  const frame = useRef<number | null>(null);
-  const historyPaused = useRef(false);
-
-  const flush = () => {
-    frame.current = null;
-    const color = pending.current;
-    if (color === null) return;
-    pending.current = null;
-    written.current = color;
-    latestOnChange.current(color);
-  };
-
-  const endPicking = () => {
-    if (frame.current !== null) window.cancelAnimationFrame(frame.current);
-    flush();
-    written.current = null;
-    if (historyPaused.current) {
-      historyPaused.current = false;
-      useEditorStore.temporal.getState().resume();
-    }
-  };
-
-  useEffect(() => {
-    const input = picker.current;
-    input?.addEventListener("change", endPicking);
-    return () => {
-      input?.removeEventListener("change", endPicking);
-      endPicking();
-    };
-    // Set up once: endPicking reads only refs and the store.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    // The store catching up with the colours being dragged (a frame behind) leaves the picker alone.
-    if (value === written.current) return;
-    shown.current = value;
-    setPickedColor(value);
-  }, [value]);
-
-  const pickColor = (color: string) => {
-    // The picker's change event fires again with the colour already shown: nothing to do.
-    if (color === shown.current) return;
-    shown.current = color;
-    setLocalValue(color);
-    setPickedColor(color);
-    if (!historyPaused.current) {
-      latestOnChange.current(color);
-      useEditorStore.temporal.getState().pause();
-      historyPaused.current = true;
-      return;
-    }
-    pending.current = color;
-    if (frame.current === null) frame.current = window.requestAnimationFrame(flush);
-  };
-
-  const hexRegex = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-
-  const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let val = e.target.value.replace(/^#+/, "");
-    val = val.length > 0 ? "#" + val : "#";
-    setLocalValue(val);
-    if (hexRegex.test(val)) onChange(val);
-  };
-
-  const handleBlur = () => {
-    if (!hexRegex.test(localValue)) setLocalValue(value);
-  };
-
-  return (
-    <div className="prop">
-      <span className="prop-label">{label}</span>
-      <div className="inspector-color-field">
-        <div
-          className="inspector-color-swatch"
-          style={{ background: mixed ? "repeating-linear-gradient(45deg, #444 0 4px, #666 4px 8px)" : value }}
-        >
-          <input
-            ref={picker}
-            type="color"
-            value={mixed ? "#ffffff" : pickedColor}
-            onChange={(e) => pickColor(e.target.value)}
-            aria-label={`${label} picker`}
-          />
-        </div>
-        <input
-          type="text"
-          className="hex-input"
-          value={mixed ? "Mixed" : localValue}
-          onChange={handleTextChange}
-          onBlur={handleBlur}
-          onFocus={(e) => e.currentTarget.select()}
-          aria-label={`${label} hex value`}
-        />
-      </div>
-    </div>
-  );
-}
-
-// Two or three choices side by side, in a label/control row.
-function SegmentedRow<T extends string>({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: { label: string; value: T }[];
-  value: T;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div className="prop">
-      <span className="prop-label">{label}</span>
-      <div className="seg" style={{ flex: 1 }}>
-        {options.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className={`seg-btn ${option.value === value ? "on" : ""}`}
-            onClick={() => onChange(option.value)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function NumberRow({ label, value, min, onChange }: { label: string; value: number; min?: number; onChange: (value: number) => void }) {
-  return (
-    <div className="prop">
-      <span className="prop-label">{label}</span>
-      <NumberField label={label} value={value} min={min} onChange={onChange} />
-    </div>
-  );
-}
+import { ColorSettings, DepthSettings, FresnelSettings, GradientSettings, ImageSettings, LightingSettings, NoiseSettings } from "./LayerSettings";
+import {
+  asOneUndoStep,
+  BLEND_MODE_ICONS,
+  BLEND_MODE_NAMES,
+  LAYER_TYPE_ICONS,
+  LAYER_TYPE_NAMES,
+  liveDepthReach,
+  rowsFor,
+  rowTitle,
+  type LayerRowData,
+} from "./materialRows";
 
 // A small menu under a row control: a list of choices, the current one marked. Closes on a choice,
 // a click outside it, or Escape.
@@ -391,44 +115,6 @@ function RowMenu<T extends string>({
 
 // ─── Rows ────────────────────────────────────────────────────────────────────
 
-/** One row of the panel: the same layer on each selected object it edits. */
-interface LayerRowData {
-  key: string;
-  type: MaterialLayerType;
-  pairs: Array<{ entity: Entity; layer: MaterialLayerData }>;
-  // Where it is in the stack, when one object's stack (or several identical ones) is shown; null otherwise.
-  index: number | null;
-}
-
-// Several selected objects are shown row by row when their stacks have the same types in the same
-// order; otherwise their Lighting layers and top Color layers are.
-const rowsFor = (entities: Entity[]): LayerRowData[] => {
-  const shape = (entity: Entity) => entity.materialLayers!.map((layer) => layer.type).join(",");
-  if (entities.every((entity) => shape(entity) === shape(entities[0]))) {
-    return entities[0].materialLayers!.map((layer, index) => ({
-      key: entities.length === 1 ? layer.id : `${index}:${layer.type}`,
-      type: layer.type,
-      pairs: entities.map((entity) => ({ entity, layer: entity.materialLayers![index] })),
-      index,
-    }));
-  }
-  const byType = (key: string, find: (entity: Entity) => MaterialLayerData | undefined, type: MaterialLayerType): LayerRowData | null => {
-    const pairs = entities.flatMap((entity) => {
-      const layer = find(entity);
-      return layer ? [{ entity, layer }] : [];
-    });
-    return pairs.length > 0 ? { key, type, pairs, index: null } : null;
-  };
-  return [byType("lighting", (e) => lightingLayerOf(e.materialLayers), "lighting"), byType("color", (e) => colorLayerOf(e.materialLayers), "color")].filter(
-    (row): row is LayerRowData => row !== null,
-  );
-};
-
-const rowTitle = (row: LayerRowData): string => {
-  const layer = row.pairs[0].layer;
-  return layer.type === "image" ? IMAGE_SLOT_LABELS[layer.slot] : LAYER_TYPE_NAMES[row.type];
-};
-
 function LayerRow({
   row,
   drawerOpen,
@@ -470,11 +156,18 @@ function LayerRow({
   const switchable = SWITCHABLE_LAYER_TYPES.includes(row.type);
   const enabled = !mixed((layer) => layer.enabled) ? first.enabled : true;
   const name = rowTitle(row);
+  // In Mask mode: it masks the layer under it, or nothing (under it is Lighting, a mask, or nothing).
+  const masking = first.mask
+    ? row.pairs.every(({ entity, layer }) => maskTarget(entity.materialLayers!, entity.materialLayers!.indexOf(layer)) !== null)
+      ? "mask"
+      : "mask idle"
+    : "";
 
   return (
     <div
       ref={rowRef}
-      className={`mat-row ${drawerOpen ? "open" : ""} ${enabled ? "" : "off"} ${dropEdge ? `drop-${dropEdge}` : ""}`}
+      className={`mat-row ${masking} ${drawerOpen ? "open" : ""} ${enabled ? "" : "off"} ${dropEdge ? `drop-${dropEdge}` : ""}`}
+      title={masking === "mask" ? "Mask: shows the layer under it where it's light" : masking ? "This mask has nothing to mask: put a colour layer right under it" : undefined}
       data-layer-type={row.type}
       onDragOver={onDragOver}
       onDrop={(event) => {
@@ -489,6 +182,7 @@ function LayerRow({
           triggerClassName="mat-row-type"
           trigger={
             <>
+              {masking && <i className="ti ti-corner-left-down mat-row-mask-arrow" aria-label="Mask"></i>}
               <span className="mat-row-name">{name}</span>
               <i className="ti ti-chevron-down"></i>
             </>
@@ -503,7 +197,7 @@ function LayerRow({
           onSelect={(type) =>
             asOneUndoStep(
               row.pairs.map(({ entity, layer }) => () =>
-                switchMaterialLayerType(entity.id, layer.id, type as "color" | "depth", type === "depth" ? liveDepthReach(entity.id) : undefined),
+                switchMaterialLayerType(entity.id, layer.id, type as PaintLayerType, type === "depth" ? liveDepthReach(entity.id) : undefined),
               ),
             )
           }
@@ -546,7 +240,7 @@ function LayerRow({
 
       <RowMenu
         label={`${name} blend mode`}
-        title={isLighting ? "Lighting shades everything under it" : isImage ? "Comes with the imported model" : `Blend mode: ${mixed((layer) => layer.blendMode) ? "mixed" : BLEND_MODE_NAMES[first.blendMode]}`}
+        title={isLighting ? "Lighting shades the layers under it; the ones over it are drawn as they are" : isImage ? "Comes with the imported model" : `Blend mode: ${mixed((layer) => layer.blendMode) ? "mixed" : BLEND_MODE_NAMES[first.blendMode]}`}
         triggerClassName="mat-icon-btn"
         trigger={<i className={`ti ${mixed((layer) => layer.blendMode) ? "ti-blend-mode" : BLEND_MODE_ICONS[first.blendMode]}`}></i>}
         disabled={isLighting || isImage}
@@ -578,218 +272,6 @@ function LayerRow({
       </button>
     </div>
   );
-}
-
-// ─── Settings drawers ────────────────────────────────────────────────────────
-
-function ColorSettings({ row }: { row: LayerRowData }) {
-  const update = useRowUpdate(row);
-  const first = row.pairs[0].layer as ColorLayer;
-  const mixed = row.pairs.some(({ layer }) => (layer as ColorLayer).color !== first.color);
-  return <ColorSwatchField label="Color" value={first.color} mixed={mixed} onChange={(color) => update({ color })} />;
-}
-
-function LightingSettings({ row }: { row: LayerRowData }) {
-  const update = useRowUpdate(row);
-  const layers = row.pairs.map(({ layer }) => layer as LightingLayer);
-  const first = layers[0];
-  const mixed = (read: (layer: LightingLayer) => unknown) => layers.some((layer) => read(layer) !== read(first));
-  const modelMixed = mixed((layer) => layer.model);
-  const alphaMode: AlphaMode = first.alphaMode ?? "OPAQUE";
-  const alphaModeMixed = mixed((layer) => layer.alphaMode ?? "OPAQUE");
-
-  return (
-    <>
-      <Select
-        label="Model"
-        options={modelMixed ? [{ label: "Mixed", value: "" }, ...LIGHTING_MODEL_OPTIONS] : LIGHTING_MODEL_OPTIONS}
-        value={modelMixed ? "" : first.model}
-        onChange={(val) => {
-          if (val) update({ model: val as LightingModel });
-        }}
-      />
-
-      {!modelMixed && first.model !== "none" && (
-        <>
-          {first.model === "physical" && (
-            <>
-              <Slider label="Roughness" min={0} max={1} step={0.01} value={first.roughness ?? DEFAULT_ROUGHNESS} onChange={(roughness) => update({ roughness })} />
-              <Slider label="Metalness" min={0} max={1} step={0.01} value={first.metalness ?? DEFAULT_METALNESS} onChange={(metalness) => update({ metalness })} />
-              <Slider label="Clearcoat" min={0} max={1} step={0.01} value={first.clearcoat ?? 0} onChange={(clearcoat) => update({ clearcoat })} />
-              {(first.clearcoat ?? 0) > 0 && (
-                <Slider
-                  label="Coat Rough."
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  value={first.clearcoatRoughness ?? 0}
-                  onChange={(clearcoatRoughness) => update({ clearcoatRoughness })}
-                />
-              )}
-            </>
-          )}
-          {first.model === "phong" && (
-            <Slider label="Shininess" min={0} max={100} step={1} value={first.shininess ?? 30} onChange={(shininess) => update({ shininess })} />
-          )}
-          <ColorSwatchField label="Emissive" value={first.emissive ?? "#000000"} mixed={mixed((layer) => layer.emissive)} onChange={(emissive) => update({ emissive })} />
-          <Slider
-            label="Emissive Int."
-            min={0}
-            max={5}
-            step={0.1}
-            value={first.emissiveIntensity ?? 1}
-            onChange={(emissiveIntensity) => update({ emissiveIntensity })}
-          />
-        </>
-      )}
-
-      <div className="mat-drawer-heading">Surface</div>
-      <Select
-        label="Alpha Mode"
-        options={alphaModeMixed ? [{ label: "Mixed", value: "" }, ...ALPHA_MODE_OPTIONS] : ALPHA_MODE_OPTIONS}
-        value={alphaModeMixed ? "" : alphaMode}
-        onChange={(val) => {
-          if (!val) return;
-          // Seed a sensible cutoff when entering Mask so an alpha-tested cutout has something to test against.
-          update(val === "MASK" ? { alphaMode: "MASK", alphaCutoff: first.alphaCutoff ?? 0.5 } : { alphaMode: val as AlphaMode });
-        }}
-      />
-      {!alphaModeMixed && alphaMode === "MASK" && (
-        <Slider label="Alpha Cutoff" min={0} max={1} step={0.01} value={first.alphaCutoff ?? 0.5} onChange={(alphaCutoff) => update({ alphaCutoff })} />
-      )}
-      <Switch
-        label="Double Sided"
-        checked={mixed((layer) => layer.doubleSided ?? false) ? false : (first.doubleSided ?? false)}
-        onChange={(doubleSided) => update({ doubleSided })}
-      />
-    </>
-  );
-}
-
-// The Depth layer of one object (utils/depthColors.ts says how it colours). The picked stop is this
-// drawer's own state; it starts on the first stop for each layer (the drawer is keyed by layer).
-function DepthSettings({ entity, layer }: { entity: Entity; layer: DepthLayer }) {
-  const updateMaterialLayer = useEditorStore((state) => state.updateMaterialLayer);
-  const depthEdit = useEditorStore((state) => state.depthEdit);
-  const setDepthEdit = useEditorStore((state) => state.setDepthEdit);
-  const onUpdate = (updates: Partial<DepthLayer>) => updateMaterialLayer(entity.id, layer.id, updates);
-  const isEditing = depthEdit === entity.id;
-  const [selected, setSelected] = useState(0);
-  const index = Math.min(selected, layer.stops.length - 1);
-  const stop = layer.stops[index];
-
-  const setVector = (key: "origin" | "direction", axis: number, value: number) => {
-    if (value === layer[key][axis]) return;
-    const next: [number, number, number] = [...layer[key]];
-    next[axis] = value;
-    onUpdate({ [key]: next });
-  };
-
-  const setStop = (updates: Partial<DepthLayer["stops"][number]>) =>
-    onUpdate({ stops: layer.stops.map((each, i) => (i === index ? { ...each, ...updates } : each)) });
-
-  return (
-    <>
-      <div className="prop">
-        <span className="prop-label">Viewport</span>
-        <button
-          type="button"
-          className={`mat-drawer-btn ${isEditing ? "on" : ""}`}
-          title={isEditing ? "Stop editing in the viewport (Enter)" : "Edit in the viewport: the gizmo moves the origin"}
-          aria-pressed={isEditing}
-          onClick={() => (isEditing ? setDepthEdit(null) : editDepth(entity.id))}
-        >
-          <i className="ti ti-pointer"></i>
-          <span>{isEditing ? "Editing" : "Edit"}</span>
-        </button>
-      </div>
-      <SegmentedRow label="Type" options={DEPTH_TYPE_OPTIONS} value={layer.gradientType} onChange={(gradientType) => onUpdate({ gradientType })} />
-      <SegmentedRow
-        label="Blending"
-        options={BLENDING_OPTIONS}
-        value={layer.smooth ? "smooth" : "linear"}
-        onChange={(value) => onUpdate({ smooth: value === "smooth" })}
-      />
-      <DepthRamp layer={layer} selected={index} onSelect={setSelected} onChange={(stops) => onUpdate({ stops })} />
-      {stop && (
-        <>
-          <ColorSwatchField label="Stop Color" value={stop.color} mixed={false} onChange={(color) => setStop({ color })} />
-          <div className="prop">
-            <span className="prop-label">Stop Position</span>
-            <NumberField
-              label="Stop position"
-              min={0}
-              max={100}
-              step={1}
-              integer
-              value={Math.round(stop.position * 100)}
-              onChange={(percent) => setStop({ position: percent / 100 })}
-            />
-            <button
-              type="button"
-              className="mat-icon-btn"
-              disabled={layer.stops.length <= 2}
-              title={layer.stops.length <= 2 ? "A ramp needs two stops" : "Remove this stop"}
-              aria-label="Remove this stop"
-              onClick={() => {
-                onUpdate({ stops: layer.stops.filter((_, i) => i !== index) });
-                setSelected(Math.max(0, index - 1));
-              }}
-            >
-              <i className="ti ti-trash"></i>
-            </button>
-          </div>
-        </>
-      )}
-      <Vector3Input label="Origin" values={layer.origin} onChange={(axis, value) => setVector("origin", axis, value)} />
-      {layer.gradientType === "linear" && (
-        <Vector3Input label="Direction" values={layer.direction} onChange={(axis, value) => setVector("direction", axis, value)} />
-      )}
-      <NumberRow label="Near" value={layer.near} min={0} onChange={(near) => onUpdate({ near })} />
-      <NumberRow label="Far" value={layer.far} min={0} onChange={(far) => onUpdate({ far })} />
-    </>
-  );
-}
-
-// An imported texture map: its thumbnail, loaded lazily from the texture store (the pixels never
-// live in the store), so an object URL is made while it shows.
-function ImageSettings({ layer }: { layer: ImageLayer }) {
-  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    let objectUrl: string | null = null;
-    let cancelled = false;
-    loadTextureForScene(layer.textureAssetId)
-      .then((blob) => {
-        if (cancelled || !blob) return;
-        objectUrl = URL.createObjectURL(blob);
-        setThumbUrl(objectUrl);
-      })
-      .catch(() => {
-        /* thumbnail is best-effort; a missing asset just shows the placeholder */
-      });
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [layer.textureAssetId]);
-
-  return (
-    <>
-      <div className="mat-drawer-thumb" style={{ backgroundImage: thumbUrl ? `url(${thumbUrl})` : undefined }} />
-      <p className="mat-drawer-note">
-        From the imported model: fills its {IMAGE_SLOT_LABELS[layer.slot]} map. Its eye shows or hides the map.
-      </p>
-    </>
-  );
-}
-
-function useRowUpdate(row: LayerRowData) {
-  const updateMultipleEntityMaterialLayers = useEditorStore((state) => state.updateMultipleEntityMaterialLayers);
-  return (updates: Partial<MaterialLayerData>) =>
-    updateMultipleEntityMaterialLayers(
-      Object.fromEntries(row.pairs.map(({ entity, layer }) => [entity.id, { layerId: layer.id, updates }])),
-    );
 }
 
 /**
@@ -830,7 +312,6 @@ function LayerDrawer({ row, anchor, onClose }: { row: LayerRowData; anchor: HTML
   }, [onClose]);
 
   const name = rowTitle(row);
-  const single = row.pairs.length === 1 ? row.pairs[0] : null;
 
   return createPortal(
     <div
@@ -850,12 +331,10 @@ function LayerDrawer({ row, anchor, onClose }: { row: LayerRowData; anchor: HTML
       <fieldset className="mat-drawer-body inspector-fieldset" disabled={isReadOnly}>
         {row.type === "color" && <ColorSettings row={row} />}
         {row.type === "lighting" && <LightingSettings row={row} />}
-        {row.type === "depth" &&
-          (single ? (
-            <DepthSettings key={single.layer.id} entity={single.entity} layer={single.layer as DepthLayer} />
-          ) : (
-            <p className="mat-drawer-note">Select one object to edit its Depth layer.</p>
-          ))}
+        {row.type === "depth" && <DepthSettings row={row} />}
+        {row.type === "gradient" && <GradientSettings row={row} />}
+        {row.type === "noise" && <NoiseSettings row={row} />}
+        {row.type === "fresnel" && <FresnelSettings row={row} />}
         {row.type === "image" && <ImageSettings layer={row.pairs[0].layer as ImageLayer} />}
       </fieldset>
     </div>,

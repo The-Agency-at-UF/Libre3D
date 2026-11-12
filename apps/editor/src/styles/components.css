@@ -2106,34 +2106,58 @@ input[type="range"]::-moz-range-thumb {
   border-left: 1px solid var(--border);
 }
 
-/* The Depth layer's ramp (DepthRamp): a colour bar with a handle per stop */
-.depth-ramp {
+/* A ramp (RampEditor: Depth, Gradient): a colour bar over a checkerboard with a handle per stop, as Spline's */
+.ramp-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ramp-reverse {
+  width: 20px;
+  height: 20px;
+}
+
+.ramp-bar {
   position: relative;
   flex: 1;
-  height: 16px;
-  margin: 0 7px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
+  height: 26px;
+  margin: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--checker);
   cursor: copy;
 }
 
-.depth-ramp-stop {
+.ramp-bar-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.ramp-stop {
   position: absolute;
   top: 50%;
-  width: 12px;
-  height: 20px;
+  width: 14px;
+  height: 30px;
   padding: 0;
   transform: translate(-50%, -50%);
-  border: 2px solid #ffffff;
-  border-radius: 4px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+  border: 3px solid #ffffff;
+  border-radius: 7px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
   cursor: ew-resize;
   touch-action: none;
 }
 
-.depth-ramp-stop.selected {
+.ramp-stop.selected {
+  border-color: #000000;
+  box-shadow: 0 0 0 2px #ffffff;
+}
+
+.ramp-stop:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 /* Property rows: fixed label column so every control lines up */
@@ -2421,8 +2445,9 @@ input[type="range"]::-moz-range-thumb {
 .mat-drawer {
   position: fixed;
   z-index: 30;
-  width: 280px;
+  width: 300px;
   max-height: calc(100vh - 16px);
+  overflow-x: hidden;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -2463,9 +2488,9 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .mat-drawer-body .prop-label {
-  flex: 0 0 84px;
-  width: 84px;
-  min-width: 84px;
+  flex: 0 0 76px;
+  width: 76px;
+  min-width: 76px;
   font-size: 11px;
   color: var(--text-secondary);
 }
@@ -3083,4 +3108,235 @@ input[type="range"]::-moz-range-thumb {
   margin-top: 16px;
   color: var(--text-secondary);
   font-size: 12px;
+}
+
+
+/* ── COLOUR PICKER (components/ui/ColorPicker.tsx, ColorField.tsx) ── */
+
+.color-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.color-picker-square {
+  position: relative;
+  height: 160px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-picker-thumb {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-picker-sliders {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-picker-eyedropper {
+  flex-shrink: 0;
+}
+
+.color-picker-bars {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.color-picker-hue,
+.color-picker-alpha {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.color-picker-hue {
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+
+.color-picker-alpha {
+  background: var(--checker);
+}
+
+.color-picker-alpha-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.color-picker-handle {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 18px;
+  border: 2px solid #fff;
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-picker-values {
+  display: flex;
+  gap: 6px;
+}
+
+.color-picker-format {
+  flex: 0 0 58px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.color-picker-hex {
+  flex: 1;
+  min-width: 0;
+}
+
+.color-picker-channel {
+  flex: 1;
+  min-width: 0;
+}
+
+.color-picker-percent {
+  flex: 0 0 48px;
+  width: 48px;
+}
+
+.color-popover {
+  position: fixed;
+  z-index: 31;
+  width: 248px;
+  padding: 12px;
+  background: var(--bg-panel);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px var(--backdrop-bg);
+}
+
+.color-field {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.color-field-swatch {
+  flex: 0 0 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.color-field-swatch.on {
+  border-color: var(--accent);
+}
+
+.color-field-hex {
+  flex: 1;
+  min-width: 0;
+}
+
+.color-field-percent {
+  flex: 0 0 44px;
+  width: 44px;
+}
+
+
+/* Drawer rows (LayerSettings.tsx): numbers with their letter, as Spline's (X 0  Y 0  Z 0) */
+.axes-row {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+
+.axes-row-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.axes-row-field > span {
+  position: absolute;
+  left: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  color: var(--text-tertiary);
+  pointer-events: none;
+}
+
+.axes-row-field input {
+  box-sizing: border-box;
+  padding-right: 4px;
+  text-align: left;
+  width: 100%;
+  padding-left: 18px;
+}
+
+.drawer-number {
+  flex: 1;
+  min-width: 0;
+}
+
+.mat-drawer-divider {
+  height: 1px;
+  margin: 4px -12px;
+  background: var(--border);
+}
+
+/* A layer in Mask mode: purple, with an arrow down to the layer it masks (Spline's look) */
+.mat-row.mask .mat-row-type,
+.mat-row.mask .mat-row-icon {
+  color: #b48cff;
+}
+
+.mat-row.mask {
+  background: rgba(150, 100, 255, 0.12);
+}
+
+.mat-row.mask.idle {
+  background: transparent;
+}
+
+.mat-row.mask.idle .mat-row-type,
+.mat-row.mask.idle .mat-row-icon {
+  color: var(--text-tertiary);
+}
+
+.mat-row-mask-arrow {
+  margin-right: 2px;
+  font-size: 13px;
+}
+
+.color-field input,
+.axes-row input,
+.color-picker-values input {
+  width: 100%;
+  min-width: 0;
 }

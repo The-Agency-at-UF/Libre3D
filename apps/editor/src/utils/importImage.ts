@@ -1,5 +1,6 @@
 import { showAlert } from "../components/ui/Dialog";
-import { useEditorStore } from "../store/useEditorStore";
+import { RepeatWrapping } from "three";
+import { useEditorStore, type TextureRef } from "../store/useEditorStore";
 import { hasTransparentPixels } from "./imagePlane";
 import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
 import { saveTextureAsset } from "./textureAssetStore";
@@ -52,4 +53,25 @@ export async function importImageFile(file: File): Promise<void> {
   const textureAssetId = await hashAsset(file);
   await saveTextureAsset(textureAssetId, file);
   useEditorStore.getState().addImagePlane(file.name.replace(IMAGE_EXTENSION, ""), textureAssetId, aspect, transparent);
+}
+
+/**
+ * A picture picked for a Lighting map (normal, roughness, …; LayerSettings.tsx): kept in the texture
+ * store under its hash, like an image plane's, so it's saved with the scene. Repeats across the
+ * object, the way up it was made. Null when it's too large or can't be read (the person is told).
+ */
+export async function importMapFile(file: File): Promise<TextureRef | null> {
+  if (file.size > MAX_ASSET_BYTES) {
+    void showAlert(`This image is too large. Images can be up to ${MAX_ASSET_BYTES / (1024 * 1024)} MB.`);
+    return null;
+  }
+  try {
+    (await createImageBitmap(file)).close();
+  } catch {
+    void showAlert("This image couldn't be read.");
+    return null;
+  }
+  const textureAssetId = await hashAsset(file);
+  await saveTextureAsset(textureAssetId, file);
+  return { textureAssetId, name: file.name.replace(IMAGE_EXTENSION, ""), wrapS: RepeatWrapping, wrapT: RepeatWrapping, flipY: true };
 }
