@@ -248,7 +248,7 @@ Used by the `*.test.ts` files (which sit next to the module they cover); nothing
 
 ## `apps/editor/src/styles/`
 
-- **`components.css`** — The bulk of the app's hand-written CSS (~2,777 lines): styling for the editor shell, sidebars, inspector panels, modals, toolbars, hierarchy tree, form controls, and other UI components.
+- **`components.css`** — The bulk of the app's hand-written CSS (~2,750 lines): styling for the editor shell, sidebars, inspector panels, modals, toolbars, hierarchy tree, form controls, and other UI components.
 - **`index.css`** — The global stylesheet entry point, imported by `main.tsx`; pulls in `tokens.css`, `reset.css`, `layout.css`, `components.css`, and `pages.css`.
 - **`pages.css`** — Placeholder styling for the pages outside the editor (landing, gallery, status screens), meant to be replaced by a design system: every value comes from `tokens.css`; `ui-` classes style the primitives, `page-` the shared frame, `landing-`/`gallery-` one page each.
 - **`layout.css`** — High-level page/grid layout rules for arranging the three-pane editor shell (sidebars + viewport).
