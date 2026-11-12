@@ -13,6 +13,7 @@ import {
   type FresnelLayer,
   type GradientLayer,
   type ImageLayer,
+  type ImageProjection,
   type LightingLayer,
   type LightingMapSlot,
   type LightingModel,
@@ -315,7 +316,7 @@ const scenePictures = (entities: Entity[]): Array<TextureRef & { name: string }>
   for (const entity of entities) {
     for (const layer of entity.materialLayers ?? []) {
       if (layer.type === "image" && !pictures.has(layer.textureAssetId)) {
-        pictures.set(layer.textureAssetId, { textureAssetId: layer.textureAssetId, wrapS: layer.wrapS, wrapT: layer.wrapT, name: entity.name });
+        pictures.set(layer.textureAssetId, { textureAssetId: layer.textureAssetId, wrapS: layer.wrapS, wrapT: layer.wrapT, flipY: layer.flipY, name: layer.name ?? entity.name });
       }
       if (layer.type !== "lighting") continue;
       for (const [slot, ref] of Object.entries(layer.maps ?? {})) {
@@ -558,35 +559,175 @@ export function FresnelSettings({ row }: { row: LayerRowData }) {
   );
 }
 
-// An imported texture map: its thumbnail, loaded lazily from the texture store (the pixels never
-// live in the store), so an object URL is made while it shows.
-export function ImageSettings({ layer }: { layer: ImageLayer }) {
-  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
-
+// A picture from the texture store as an object URL, for a thumbnail, while it shows; null while it
+// loads (or when it can't be had).
+function usePictureUrl(textureAssetId: string): string | null {
+  const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
+    setUrl(null);
+    if (!textureAssetId) return;
     let objectUrl: string | null = null;
     let cancelled = false;
-    loadTextureForScene(layer.textureAssetId)
+    loadTextureForScene(textureAssetId)
       .then((blob) => {
         if (cancelled || !blob) return;
         objectUrl = URL.createObjectURL(blob);
-        setThumbUrl(objectUrl);
+        setUrl(objectUrl);
       })
       .catch(() => {
-        /* thumbnail is best-effort; a missing asset just shows the placeholder */
+        /* a thumbnail is best-effort; a missing picture just shows the empty frame */
       });
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [layer.textureAssetId]);
+  }, [textureAssetId]);
+  return url;
+}
 
+/** Custom / Assets at the top of a picture drawer (Image, Matcap), as Spline's. */
+export function DrawerTabs<T extends string>({ tabs, value, onChange }: { tabs: { value: T; label: string }[]; value: T; onChange: (value: T) => void }) {
+  return (
+    <div className="mat-drawer-tabs" role="tablist">
+      {tabs.map((tab) => (
+        <button key={tab.value} type="button" role="tab" aria-selected={tab.value === value} className={tab.value === value ? "on" : ""} onClick={() => onChange(tab.value)}>
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A picture's frame: its thumbnail, with an Upload button over it (a PNG or JPEG from the computer). */
+function PictureFrame({ textureAssetId, label, onUpload }: { textureAssetId: string; label: string; onUpload: (ref: TextureRef) => void }) {
+  const url = usePictureUrl(textureAssetId);
+  const file = useRef<HTMLInputElement>(null);
+  return (
+    <div className="mat-picture-frame" style={{ backgroundImage: url ? `url(${url})` : undefined }}>
+      <button type="button" className="mat-picture-upload" onClick={() => file.current?.click()}>
+        {label}
+      </button>
+      <input
+        ref={file}
+        type="file"
+        accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+        hidden
+        aria-label={label}
+        onChange={(event) => {
+          const picked = event.target.files?.[0];
+          event.target.value = "";
+          if (picked) void importMapFile(picked).then((ref) => ref && onUpload(ref));
+        }}
+      />
+    </div>
+  );
+}
+
+/** The scene's pictures as thumbnails to pick from (a picture drawer's Assets tab). */
+function PictureGrid({ current, onPick }: { current: string; onPick: (picture: TextureRef & { name: string }) => void }) {
+  const entities = useEditorStore((state) => state.entities);
+  const pictures = scenePictures(entities);
+  if (pictures.length === 0) return <p className="mat-drawer-note">No pictures in the scene yet: upload one under Custom.</p>;
+  return (
+    <div className="mat-picture-grid">
+      {pictures.map((picture) => (
+        <PictureChoice key={picture.textureAssetId} picture={picture} on={picture.textureAssetId === current} onPick={() => onPick(picture)} />
+      ))}
+    </div>
+  );
+}
+
+function PictureChoice({ picture, on, onPick }: { picture: TextureRef & { name: string }; on: boolean; onPick: () => void }) {
+  const url = usePictureUrl(picture.textureAssetId);
+  return (
+    <button
+      type="button"
+      className={`mat-picture-choice ${on ? "on" : ""}`}
+      title={picture.name}
+      aria-label={picture.name}
+      aria-pressed={on}
+      style={{ backgroundImage: url ? `url(${url})` : undefined }}
+      onClick={onPick}
+    />
+  );
+}
+
+const PROJECTION_OPTIONS: { label: string; value: ImageProjection }[] = [
+  { label: "UV", value: "uv" },
+  { label: "Planar", value: "planar" },
+  { label: "Spherical", value: "spherical" },
+  { label: "Cylindrical", value: "cylindrical" },
+  { label: "Triplanar", value: "triplanar" },
+];
+
+const AXIS_OPTIONS = [
+  { label: "X", value: "x" },
+  { label: "Y", value: "y" },
+  { label: "Z", value: "z" },
+];
+
+// three's wrap constants: Repeat, Clamp (to the edge), Mirror (repeat mirrored).
+const WRAPPING_OPTIONS = [
+  { label: "Repeat", value: "1000" },
+  { label: "Clamp", value: "1001" },
+  { label: "Mirror", value: "1002" },
+];
+
+const SHARPNESS_OPTIONS = [
+  { label: "Smooth", value: "smooth" },
+  { label: "Pixelated", value: "pixelated" },
+];
+
+const YES_NO = [
+  { label: "Yes", value: "yes" },
+  { label: "No", value: "no" },
+];
+
+// An Image layer, as Spline's Texture drawer: Custom (its picture, Upload) or Assets (the scene's
+// pictures), Mode, and how it's placed. An uploaded or picked picture is drawn the way up it was
+// made on three's primitives (flipY); an image plane's and an import's own keep glTF's way.
+export function ImageSettings({ row }: { row: LayerRowData }) {
+  const update = useRowUpdate(row);
+  const layer = row.pairs[0].layer as ImageLayer;
+  const [tab, setTab] = useState<"custom" | "assets">("custom");
+  const setPicture = (picture: TextureRef) =>
+    update({ textureAssetId: picture.textureAssetId, name: picture.name, flipY: true } as Partial<ImageLayer>);
+  const setPair = (key: "scale" | "offset", axis: number, value: number) => {
+    if (value === layer[key][axis]) return;
+    const next: [number, number] = [...layer[key]];
+    next[axis] = value;
+    update({ [key]: next });
+  };
+  const axial = layer.projection === "planar" || layer.projection === "cylindrical";
   return (
     <>
-      <div className="mat-drawer-thumb" style={{ backgroundImage: thumbUrl ? `url(${thumbUrl})` : undefined }} />
-      <p className="mat-drawer-note">
-        A picture, at the object's UVs.
-      </p>
+      <DrawerTabs
+        tabs={[
+          { value: "custom", label: "Custom" },
+          { value: "assets", label: "Assets" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      <ModeRow row={row} />
+      {tab === "custom" ? (
+        <PictureFrame textureAssetId={layer.textureAssetId} label="Upload" onUpload={setPicture} />
+      ) : (
+        <PictureGrid current={layer.textureAssetId} onPick={setPicture} />
+      )}
+      <Select label="Projection" options={PROJECTION_OPTIONS} value={layer.projection} onChange={(value) => update({ projection: value as ImageProjection })} />
+      {axial && <Select label="Axis" options={AXIS_OPTIONS} value={layer.axis} onChange={(value) => update({ axis: value as ImageLayer["axis"] })} />}
+      <Select
+        label="Wrapping"
+        options={WRAPPING_OPTIONS}
+        value={String(layer.wrapS)}
+        onChange={(value) => update({ wrapS: Number(value), wrapT: Number(value) })}
+      />
+      <Select label="Sharpness" options={SHARPNESS_OPTIONS} value={layer.sharpness} onChange={(value) => update({ sharpness: value as ImageLayer["sharpness"] })} />
+      <SegmentedRow label="Crop" options={YES_NO} value={layer.crop ? "yes" : "no"} onChange={(value) => update({ crop: value === "yes" })} />
+      <AxesRow label="Scale" axes={["X", "Y"]} values={layer.scale} step={0.1} onChange={(axis, value) => setPair("scale", axis, value)} />
+      <AxesRow label="Offset" axes={["X", "Y"]} values={layer.offset} step={0.01} onChange={(axis, value) => setPair("offset", axis, value)} />
+      <NumberRow label="Rotation" value={layer.rotation} step={1} onChange={(rotation) => update({ rotation })} />
     </>
   );
 }

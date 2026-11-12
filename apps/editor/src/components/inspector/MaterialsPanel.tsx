@@ -335,7 +335,7 @@ function LayerDrawer({ row, anchor, onClose }: { row: LayerRowData; anchor: HTML
         {row.type === "gradient" && <GradientSettings row={row} />}
         {row.type === "noise" && <NoiseSettings row={row} />}
         {row.type === "fresnel" && <FresnelSettings row={row} />}
-        {row.type === "image" && <ImageSettings layer={row.pairs[0].layer as ImageLayer} />}
+        {row.type === "image" && <ImageSettings row={row} />}
       </fieldset>
     </div>,
     document.body,
