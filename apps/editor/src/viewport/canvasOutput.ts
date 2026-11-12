@@ -21,7 +21,7 @@
 import * as THREE from "three";
 import type { Material } from "three";
 import type { NodeMaterial, Renderer } from "three/webgpu";
-import { diffuseColor, Fn, float, materialEmissive, mix, output, positionView, select, smoothstep, sRGBTransferOETF, toneMapping, uniform, vec4 } from "three/tsl";
+import { diffuseColor, Fn, float, materialEmissive, mix, output, positionView, rand, screenCoordinate, select, smoothstep, sRGBTransferOETF, toneMapping, uniform, vec4 } from "three/tsl";
 import { applyLayerNodes } from "./layerNodes";
 
 // The exposure the scene is tone-mapped with. It was read off <model-viewer> 4.0.0 when that played
@@ -80,7 +80,12 @@ const canvasOutput = (toneMapped: boolean, fogged: boolean, source: typeof outpu
   Fn(() => {
     const color = toneMapped ? toneMapping(THREE.NeutralToneMapping, float(SCENE_EXPOSURE), source).rgb : source.rgb;
     const finished = mix(source.rgb, sRGBTransferOETF(color), toCanvas);
-    return vec4(fogged ? mix(finished, fogColor, fogFactor()) : finished, source.a);
+    const fogApplied = fogged ? mix(finished, fogColor, fogFactor()) : finished;
+    // Dithering, as WebGLRenderer's `dithering` did: a shift of up to half a step of the canvas's
+    // 8 bits, different for each pixel, so a slow gradient (a Depth fade into the dark) turns into
+    // fine grain instead of visible bands. Only on the way to the canvas.
+    const dither = rand(screenCoordinate.xy).sub(0.5).mul(1 / 255).mul(toCanvas);
+    return vec4(fogApplied.add(dither), source.a);
   })();
 const endings = {
   toneMapped: { fogged: canvasOutput(true, true), clear: canvasOutput(true, false) },
