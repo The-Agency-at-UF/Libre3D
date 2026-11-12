@@ -26,7 +26,7 @@ import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
 import { pickEntityAt } from "./pickEntity";
-import { createSceneRenderer } from "./rendererSettings";
+import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
 import { SceneManager } from "./SceneManager";
 import type { SceneSource } from "./sceneSource";
@@ -57,25 +57,22 @@ export const viewerCamera = (content: StoredSceneContent): Pick<CameraProfile, "
 
 export class SceneViewer {
   /** The viewer's own renderer. Handed to what needs it here; the viewer never puts it on `window`. */
-  readonly renderer: THREE.WebGLRenderer;
+  readonly renderer: SceneRenderer;
   private readonly disposers: (() => void)[] = [];
   private frameId = 0;
+  private disposed = false;
 
   constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false } = {}) {
     const renderer = createSceneRenderer();
     this.renderer = renderer;
     container.appendChild(renderer.domElement);
-    this.disposers.push(() => {
-      renderer.dispose();
-      renderer.forceContextLoss();
-      renderer.domElement.remove();
-    });
+    this.disposers.push(() => disposeSceneRenderer(renderer));
     const canvas = renderer.domElement;
 
     const sceneManager = new SceneManager(viewerSceneSettings(content.sceneSettings), { editorHelpers: false });
-    const environment = createRoomEnvironment(renderer);
-    sceneManager.setEnvironmentMap(environment.texture);
     const scene = sceneManager.scene;
+    // Made once the renderer has started, below.
+    let environment: THREE.RenderTarget | null = null;
 
     const objects = new ObjectManager(scene, new Map(), source, { getRenderer: () => renderer, editorHelpers: false });
     objects.syncMeshes(content.entities, null, false);
@@ -83,7 +80,7 @@ export class SceneViewer {
     this.disposers.push(() => {
       objects.syncMeshes([], null, false);
       sceneManager.setEnvironmentMap(null);
-      environment.dispose();
+      environment?.dispose();
       sceneManager.dispose();
     });
 
@@ -130,7 +127,7 @@ export class SceneViewer {
       canvas.removeEventListener("pointerleave", onPointerLeave);
     });
 
-    let lastTime = performance.now();
+    let lastTime = 0;
     const animate = () => {
       this.frameId = window.requestAnimationFrame(animate);
       const now = performance.now();
@@ -149,10 +146,23 @@ export class SceneViewer {
 
       renderer.render(scene, camera.camera);
     };
-    animate();
+
+    // Nothing can be drawn until the renderer has started. Start events fired above, but their
+    // transitions only move with the frames, so they play from their beginning once it has.
+    whenRendererReady(renderer).then(
+      () => {
+        if (this.disposed) return;
+        environment = createRoomEnvironment(renderer);
+        sceneManager.setEnvironmentMap(environment.texture);
+        lastTime = performance.now();
+        animate();
+      },
+      (error) => console.error("[Libre3D] The renderer could not start:", error),
+    );
   }
 
   dispose(): void {
+    this.disposed = true;
     window.cancelAnimationFrame(this.frameId);
     // Last in, first out: listeners and objects go before the renderer they draw with.
     for (const dispose of this.disposers.reverse()) dispose();

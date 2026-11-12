@@ -22,6 +22,7 @@
 import * as THREE from "three";
 import type { Entity } from "../scene/types";
 import { getEntityIndex, isEffectivelyLocked } from "../scene/entityIndex";
+import type { SceneRenderer } from "./rendererSettings";
 import type { SceneSource } from "./sceneSource";
 import { forgetBasePose, rememberBasePose } from "./basePoses";
 import type { Pose } from "../animation/objectStates";
@@ -64,7 +65,7 @@ export interface ObjectManagerOptions {
    * The renderer the scene is drawn with, asked for when an imported model is parsed (its KTX2
    * textures need one). A function, because the editor builds its renderer after its managers.
    */
-  getRenderer: () => THREE.WebGLRenderer | null;
+  getRenderer: () => SceneRenderer | null;
   /**
    * Whether to build the editor's own objects: each object's selection outline, each light's
    * helper, the red box of a model that failed to load. True unless given; the share-link viewer

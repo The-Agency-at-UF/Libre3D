@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import type { SceneSettingsConfig } from "../scene/types";
 import { getSafeColor } from "../utils/sceneColor";
+import { canvasColor } from "./canvasOutput";
 import { InfiniteGrid } from "./InfiniteGrid";
 
 export class SceneManager {
@@ -18,7 +19,7 @@ export class SceneManager {
   constructor(initialSettings: SceneSettingsConfig, { editorHelpers = true }: { editorHelpers?: boolean } = {}) {
     this.scene = new THREE.Scene();
 
-    const initialBgColor = new THREE.Color(getSafeColor(initialSettings.bgColor));
+    const initialBgColor = canvasColor(new THREE.Color(getSafeColor(initialSettings.bgColor)));
     this.scene.background = initialBgColor;
 
     if (initialSettings.fogEnabled) {
@@ -41,7 +42,8 @@ export class SceneManager {
   }
 
   public updateBackground(color: string) {
-    const nextColor = new THREE.Color(getSafeColor(color));
+    // As the canvas takes it: three writes the background there without converting it.
+    const nextColor = canvasColor(new THREE.Color(getSafeColor(color)));
     if (this.scene.background instanceof THREE.Color) {
       if (!this.scene.background.equals(nextColor)) {
         this.scene.background.set(nextColor);

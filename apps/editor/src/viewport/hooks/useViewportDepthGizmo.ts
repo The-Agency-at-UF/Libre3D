@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import type { SceneRenderer } from "../rendererSettings";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { useEditorStore, type DepthLayer, type EditorState } from "../../store/useEditorStore";
 import { getEntityIndex } from "../../scene/entityIndex";
@@ -74,7 +75,7 @@ const pool = <T extends SVGElement>(group: SVGGElement, count: number, make: () 
 export function useViewportDepthGizmo(
   frameRef: React.MutableRefObject<(() => void) | null>,
   cameraRef: React.RefObject<THREE.Camera>,
-  rendererRef: React.RefObject<THREE.WebGLRenderer | null>,
+  rendererRef: React.RefObject<SceneRenderer | null>,
   scene: THREE.Scene,
   objectManager: ObjectManager,
   transformControlsRef: React.RefObject<TransformControls | null>,

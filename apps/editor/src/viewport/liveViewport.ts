@@ -18,10 +18,11 @@
  */
 
 import type * as THREE from "three";
+import type { SceneRenderer } from "./rendererSettings";
 import { exposeConsoleHandle } from "../utils/consoleHandle";
 
 let liveScene: THREE.Scene | null = null;
-let liveRenderer: THREE.WebGLRenderer | null = null;
+let liveRenderer: SceneRenderer | null = null;
 
 export const getLiveScene = (): THREE.Scene | null => liveScene;
 
@@ -35,10 +36,10 @@ export const setLiveScene = (scene: THREE.Scene): (() => void) => {
   };
 };
 
-export const getLiveRenderer = (): THREE.WebGLRenderer | null => liveRenderer;
+export const getLiveRenderer = (): SceneRenderer | null => liveRenderer;
 
 /** Makes `renderer` the live one. Returns a function that clears it, if it's still this one. */
-export const setLiveRenderer = (renderer: THREE.WebGLRenderer): (() => void) => {
+export const setLiveRenderer = (renderer: SceneRenderer): (() => void) => {
   liveRenderer = renderer;
   const removeHandle = exposeConsoleHandle("__libre3dRenderer", renderer);
   return () => {

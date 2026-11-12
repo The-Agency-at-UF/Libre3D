@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { ViewportGizmo } from "three-viewport-gizmo";
 import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { useEditorStore } from "../../store/useEditorStore";
+import { SCENE_EXPOSURE } from "../canvasOutput";
 import { buildGizmoTheme } from "../gizmoTheme";
 
 /** CSS class stamped onto the gizmo's own DOM element (via `options.className`)
@@ -61,17 +62,16 @@ function gizmoOptions(container: HTMLElement) {
  * `rendererRef` refs per `conventions.md` §5 ("shared refs over cached
  * values for the active camera").
  *
- * ── Render ordering ───────────────────────────────────────────────────────
- * `ViewportGizmo.render()` draws itself into a scissored corner of the
- * *same* `WebGLRenderer`/canvas the main scene uses, so it must run
- * strictly after `renderer.render(scene, camera)` each frame, not before.
- * `useViewportRenderer.ts` was extended with an `onAfterRender` callback for
- * exactly this (see its own doc comment) — `ViewportCanvas.tsx` wires
- * `() => gizmoRef.current?.render()` into that slot via a ref, since this
- * hook (which actually owns the `ViewportGizmo` instance) necessarily runs
- * *after* `useViewportRenderer`'s call in that component, and the ref
- * indirection lets the render loop started earlier still pick it up once it
- * exists.
+ * ── Its own small canvas ──────────────────────────────────────────────────
+ * The library (2.2.0, the latest) draws with WebGL only: its axis lines are a
+ * GLSL material, which the scene's WebGPURenderer refuses, and it places
+ * itself counting pixels from the canvas's bottom edge, where that renderer
+ * counts from the top. So the gizmo no longer draws into the scene's canvas.
+ * It gets a small canvas of its own, laid exactly over the library's DOM
+ * element, with a plain `WebGLRenderer`: the widget looks as it always has,
+ * whichever way the scene itself is drawn. `ViewportCanvas.tsx` still calls
+ * `gizmoRef.current?.render()` once a frame (useViewportRenderer's
+ * `onAfterRender`), through a ref since this hook runs after that one.
  *
  * ── Camera swaps ──────────────────────────────────────────────────────────
  * Unlike `OrbitControls`, `ViewportGizmo` is constructed against one
@@ -91,7 +91,8 @@ function gizmoOptions(container: HTMLElement) {
 export function useViewportGizmo(
   gizmoRef: React.RefObject<ViewportGizmo | null>,
   cameraRef: React.RefObject<THREE.Camera>,
-  rendererRef: React.RefObject<THREE.WebGLRenderer | null>,
+  // The scene's renderer: only waited for, so the gizmo is made once the viewport is.
+  rendererRef: React.RefObject<unknown>,
   orbitControlsRef: React.RefObject<OrbitControls | null>,
   containerRef: React.RefObject<HTMLDivElement | null>
 ) {
@@ -102,12 +103,51 @@ export function useViewportGizmo(
     const camera = cameraRef.current;
     if (!renderer || !container || !orbitControls || !camera) return;
 
+    const gizmoRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    gizmoRenderer.setPixelRatio(window.devicePixelRatio || 1);
+    // Tone-mapped as the scene is: the widget was drawn by the scene's renderer before, and its
+    // background disc's colour was chosen under that.
+    gizmoRenderer.toneMapping = THREE.NeutralToneMapping;
+    gizmoRenderer.toneMappingExposure = SCENE_EXPOSURE;
+    const canvas = gizmoRenderer.domElement;
+    // Over the library's element and nothing else; that element takes the pointer, not this.
+    canvas.style.cssText = "position:absolute;inset:0;width:100%;height:100%;border-radius:50%;pointer-events:none;";
+
     const gizmo = new ViewportGizmo(
       camera as THREE.PerspectiveCamera | THREE.OrthographicCamera,
-      renderer,
+      gizmoRenderer,
       gizmoOptions(container)
     );
     gizmo.attachControls(orbitControls);
+
+    // Keeps the canvas inside the library's element (a theme change may rebuild it) and as big as it.
+    // Called every frame, so the element is only looked up again when the canvas has left the page.
+    const size = new THREE.Vector2();
+    const fitCanvas = () => {
+      let element = canvas.parentElement;
+      if (!element?.isConnected) {
+        element = container.querySelector<HTMLElement>(`.${GIZMO_CLASS_NAME}`);
+        if (!element) return;
+        element.appendChild(canvas);
+      }
+      const { clientWidth: width, clientHeight: height } = element;
+      gizmoRenderer.getSize(size);
+      if (width > 0 && height > 0 && (size.x !== width || size.y !== height)) {
+        gizmoRenderer.setSize(width, height, false);
+        gizmo.update();
+      }
+    };
+    fitCanvas();
+    gizmo.update();
+
+    // The library draws over what its renderer last drew (in the scene's canvas, that was the
+    // scene). On its own canvas, that's its own last frame: wipe it first.
+    const drawGizmo = gizmo.render.bind(gizmo);
+    gizmo.render = () => {
+      fitCanvas();
+      gizmoRenderer.clear();
+      return drawGizmo();
+    };
     gizmoRef.current = gizmo;
 
     // Re-theme on dark/light toggle. App.tsx flips a `.light-theme` class on
@@ -160,6 +200,9 @@ export function useViewportGizmo(
       themeObserver.disconnect();
       gizmo.detachControls();
       gizmo.dispose();
+      canvas.remove();
+      gizmoRenderer.dispose();
+      gizmoRenderer.forceContextLoss();
       if (gizmoRef.current === gizmo) gizmoRef.current = null;
     };
     // Created once against the initial renderer/container/controls instances

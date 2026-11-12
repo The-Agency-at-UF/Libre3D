@@ -1,4 +1,4 @@
-import type * as THREE from "three";
+import type { SceneRenderer } from "../viewport/rendererSettings";
 import type { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 
 // Builds a GLTFLoader wired for the three compressed-asset extensions a modern
@@ -13,10 +13,11 @@ import type { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 // pulled in the first time something actually imports a model.
 //
 // `renderer` is the one the model will be drawn with: KTX2Loader asks it which
-// GPU-compressed texture formats this device supports. The caller hands it over
+// GPU-compressed texture formats this device supports (waiting for the renderer
+// to finish starting, if it still is). The caller hands it over
 // (the editor's from viewport/liveViewport.ts, the share-link viewer its own), so
 // this never looks one up.
-export async function createConfiguredGltfLoader(renderer: THREE.WebGLRenderer | null): Promise<GLTFLoader> {
+export async function createConfiguredGltfLoader(renderer: SceneRenderer | null): Promise<GLTFLoader> {
   const [{ GLTFLoader }, { DRACOLoader }, { KTX2Loader }, { MeshoptDecoder }] = await Promise.all([
     import("three/examples/jsm/loaders/GLTFLoader.js"),
     import("three/examples/jsm/loaders/DRACOLoader.js"),
@@ -35,7 +36,7 @@ export async function createConfiguredGltfLoader(renderer: THREE.WebGLRenderer |
 
   loader.setMeshoptDecoder(MeshoptDecoder);
 
-  // KTX2Loader.detectSupport() needs a real WebGLRenderer to query supported
+  // KTX2Loader needs the real renderer to query supported
   // compressed-texture formats before it can transcode. If the viewport hasn't
   // mounted yet (shouldn't normally happen on an import), skip KTX2 for this
   // parse rather than throw — a KTX2-textured .glb will fail, but loudly and
@@ -43,11 +44,11 @@ export async function createConfiguredGltfLoader(renderer: THREE.WebGLRenderer |
   if (renderer) {
     const ktx2Loader = new KTX2Loader();
     ktx2Loader.setTranscoderPath("/basis/");
-    ktx2Loader.detectSupport(renderer);
+    await ktx2Loader.detectSupportAsync(renderer);
     loader.setKTX2Loader(ktx2Loader);
   } else {
     console.warn(
-      "[Libre3D] WebGLRenderer not available while configuring GLTFLoader; " +
+      "[Libre3D] Renderer not available while configuring GLTFLoader; " +
         "KTX2/Basis-compressed textures will fail to transcode for this parse.",
     );
   }
