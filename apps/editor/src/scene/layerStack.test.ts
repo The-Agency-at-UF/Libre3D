@@ -266,6 +266,10 @@ describe("fresnelAmount", () => {
     expect(fresnelAmount(fresnel(), 0.5)).toBeCloseTo(0.35, 9); // 0.1 + 0.5²
     expect(fresnelAmount(fresnel({ factor: 0.5 }), 0)).toBe(0.5);
     expect(fresnelAmount(fresnel({ bias: 1 }), 1)).toBe(1); // a flat colour
+    // A negative bias pulls the rim in: nothing facing the camera, less part way round.
+    expect(fresnelAmount(fresnel({ bias: -0.5 }), 1)).toBe(0);
+    expect(fresnelAmount(fresnel({ bias: -0.5 }), 0.5)).toBe(0); // -0.5 + 0.25
+    expect(fresnelAmount(fresnel({ bias: -0.5 }), 0)).toBeCloseTo(0.5, 9);
   });
 });
 

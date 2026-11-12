@@ -549,7 +549,8 @@ export function FresnelSettings({ row }: { row: LayerRowData }) {
     <>
       <ModeRow row={row} />
       <ColorField label="Color" color={layer.color} alpha={layer.alpha ?? 1} onChange={(change) => update(change.color !== undefined ? { color: change.color } : { alpha: change.alpha })} />
-      <Slider label="Bias" min={0} max={1} step={0.01} value={layer.bias} onChange={(bias) => update({ bias })} />
+      {/* No bounds: a negative bias pulls the rim in, leaving more of the middle clear. */}
+      <NumberRow label="Bias" value={layer.bias} step={0.01} onChange={(bias) => update({ bias })} />
       <NumberRow label="Scale" value={layer.scale} step={0.1} onChange={(scale) => update({ scale })} />
       <NumberRow label="Intensity" value={layer.intensity} min={0} step={0.1} onChange={(intensity) => update({ intensity })} />
       <NumberRow label="Factor" value={layer.factor} min={0} step={0.1} onChange={(factor) => update({ factor })} />
