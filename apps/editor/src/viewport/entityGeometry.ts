@@ -16,7 +16,8 @@ import { createImagePlaneGeometry } from "../utils/imagePlane";
 export function createPrimitiveGeometry(entity: Entity): THREE.BufferGeometry {
   switch (entity.type) {
     case "sphere":
-      return new THREE.SphereGeometry(0.5, 32, 16);
+      // 64 × 64 segments, as Spline's default sphere, so big spheres keep a round outline.
+      return new THREE.SphereGeometry(0.5, 64, 64);
     case "torus":
       return new THREE.TorusGeometry(0.55, 0.2, 16, 48);
     case "plane":

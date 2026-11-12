@@ -73,8 +73,26 @@ export class SceneManager {
 
   public updateEnvironment(enabled: boolean, intensity: number) {
     this.environmentEnabled = enabled;
-    this.scene.environmentIntensity = intensity;
+    if (this.scene.environmentIntensity !== intensity) {
+      this.scene.environmentIntensity = intensity;
+      this.refreshEnvironmentIntensity(intensity);
+    }
     this.applyLighting();
+  }
+
+  // Three hands a material the scene's environment intensity in a uniform it only refreshes for an
+  // object whose material or matrix changed (NodeMaterialObserver), not when the scene's value
+  // does: in the editor, which draws the same objects frame after frame, only the first object
+  // drawn each frame took a new intensity. The observer does compare `envMapIntensity`, so every
+  // material without an environment map of its own (which then ignores that value) is given it.
+  private refreshEnvironmentIntensity(intensity: number) {
+    this.scene.traverse((object) => {
+      const material = (object as THREE.Mesh).material;
+      for (const each of Array.isArray(material) ? material : material ? [material] : []) {
+        const lit = each as THREE.MeshStandardMaterial;
+        if ("envMapIntensity" in lit && !lit.envMap) lit.envMapIntensity = intensity;
+      }
+    });
   }
 
   /** The environment the renderer made (sceneEnvironment.ts), or null when it's gone. */

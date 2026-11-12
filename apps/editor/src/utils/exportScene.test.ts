@@ -277,3 +277,24 @@ describe("createSceneExportBlob with paths", () => {
     expect(path.visible).toBe(true);
   });
 });
+
+describe("directional lights in an export", () => {
+  it("writes a light turned toward the world origin, whatever its rotation, and puts the rotation back", async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await loadModules();
+    const scene = new THREE.Scene();
+    const meshMap = new Map<string, THREE.Object3D>();
+    const lightEntity = useEditorStore.getState().entities.find((entity) => entity.type === "directionalLight")!;
+    useEditorStore.getState().updateEntityTransform(lightEntity.id, { position: [0, 5, 0], rotation: [0.4, 1.2, -0.3] });
+    createObjectManager(scene, meshMap).syncMeshes(useEditorStore.getState().entities, null, false);
+    const light = meshMap.get(lightEntity.id)!;
+    const turned = light.quaternion.clone();
+
+    const { nodes } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+    const node = nodes.find((each: { extensions?: Record<string, unknown> }) => each.extensions?.KHR_lights_punctual);
+
+    // glTF lights shine down their node's -Z: straight down from (0, 5, 0) to the origin.
+    const shines = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(...node.rotation));
+    expect(shines.y).toBeCloseTo(-1, 5);
+    expect(light.quaternion.equals(turned)).toBe(true);
+  });
+});

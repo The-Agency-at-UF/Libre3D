@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { PathMesh } from "../paths/PathMesh";
 import { showBasePoses } from "../viewport/basePoses";
 import { hideEditorOnlyObjects } from "../viewport/editorOnly";
+import { aimLightsAtOrigin } from "../viewport/lightTargets";
 
 type GLTFExporterResult = ArrayBuffer | Blob | string | Record<string, unknown>;
 
@@ -202,6 +203,8 @@ export const createSceneExportBlob = async (
   // A glTF material can't hold layers drawn per pixel (Depth, Gradient, Noise, Fresnel): those go
   // out as the material's own colour. (.glb export goes with task G.)
   const restoreMaterials = standardMaterialsForExport(scene);
+  // glTF reads a light's direction from its rotation; the editor's lights shine at the origin.
+  const restoreLights = aimLightsAtOrigin(scene);
 
   try {
     const result = await parseScene(
@@ -247,6 +250,7 @@ export const createSceneExportBlob = async (
     restorePoses();
     restoreEditorUserData();
     restoreMaterials();
+    restoreLights();
   }
 };
 
