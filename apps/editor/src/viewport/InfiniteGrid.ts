@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { MeshBasicNodeMaterial, type Node } from "three/webgpu";
+import { Fn, abs, cameraPosition, clamp, color as color3, float, floor, fract, fwidth, length, log2, max, min, mix, mod, positionWorld, pow, smoothstep, uniform, vec2, vec4, type ShaderNodeObject } from "three/tsl";
 
 // Shader-drawn XZ grid that reads as infinite, in the style of Blender's
 // overlay grid. One quad, one draw call: the fragment shader decides per pixel
@@ -15,11 +17,16 @@ import * as THREE from "three";
 //   camera height), so its edge is never visible. Line positions come from the
 //   interpolated *world* position, so moving the quad doesn't move the lines.
 //
-// Uniforms are refreshed in onBeforeRender from whichever camera is rendering,
-// so perspective ↔ orthographic swaps through cameraRef need no extra wiring.
+// The quad and its fade distance are refreshed in onBeforeRender from whichever
+// camera is rendering, so perspective ↔ orthographic swaps through cameraRef need
+// no extra wiring. The shader is written in TSL (three's node shader language),
+// which three compiles for WebGPU and for WebGL 2.
 
 const BASE_CELL_SIZE = 2;
 const MIN_PIXELS_BETWEEN_LINES = 4;
+const LINE_COLOR = "#2a3f5f";
+const AXIS_X_COLOR = "#ef4444";
+const AXIS_Z_COLOR = "#3b82f6";
 // Fade-out distance = camera height × this, clamped below.
 export const FADE_DISTANCE_PER_HEIGHT = 60;
 export const MIN_FADE_DISTANCE = 30;
@@ -61,94 +68,64 @@ export function computeGridExtent(
   return target;
 }
 
-const vertexShader = /* glsl */ `
-  varying vec3 vWorldPosition;
+// Full strength renders lines at exactly the line colour, matching the old
+// GridHelper; lower these to make every grid level fainter.
+const MINOR_STRENGTH = 0.7;
+const MAJOR_STRENGTH = 0.7;
+const AXIS_HALF_WIDTH_PX = 1.5;
 
-  void main() {
-    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-    vWorldPosition = worldPosition.xyz;
-    gl_Position = projectionMatrix * viewMatrix * worldPosition;
-  }
-`;
+// Coverage (0..1) of the nearest line of a grid with the given cell size.
+// dudv = world units per pixel along x and z. Solid within 0.25px of the
+// line, then a 1px falloff, so a line always lights at least one pixel at
+// full colour (like a 1px GL line) instead of splitting into two dim ones.
+const gridCoverage = (p: TslNode, cell: TslNode, dudv: TslNode): TslNode => {
+  const distPx = abs(mod(p.add(cell.mul(0.5)), cell).sub(cell.mul(0.5))).div(dudv);
+  return float(1).sub(clamp(min(distPx.x, distPx.y).sub(0.25), 0, 1));
+};
 
-const fragmentShader = /* glsl */ `
-  uniform vec3 uLineColor;
-  uniform vec3 uAxisXColor;
-  uniform vec3 uAxisZColor;
-  uniform vec3 uCameraPosition;
-  uniform float uBaseCellSize;
-  uniform float uMinPixelsBetweenLines;
-  uniform float uFadeDistance;
+type TslNode = ShaderNodeObject<Node>;
+type FloatUniform = ReturnType<typeof uniform<number>>;
 
-  varying vec3 vWorldPosition;
-
-  // Full strength renders lines at exactly uLineColor, matching the old
-  // GridHelper; lower these to make every grid level fainter.
-  const float MINOR_STRENGTH = 0.7;
-  const float MAJOR_STRENGTH = 0.7;
-  const float AXIS_HALF_WIDTH_PX = 1.5;
-
-  // Coverage (0..1) of the nearest line of a grid with the given cell size.
-  // dudv = world units per pixel along x and z. Solid within 0.25px of the
-  // line, then a 1px falloff, so a line always lights at least one pixel at
-  // full colour (like a 1px GL line) instead of splitting into two dim ones.
-  float gridCoverage(vec2 p, float cell, vec2 dudv) {
-    vec2 distPx = abs(mod(p + 0.5 * cell, cell) - 0.5 * cell) / dudv;
-    return 1.0 - clamp(min(distPx.x, distPx.y) - 0.25, 0.0, 1.0);
-  }
-
-  float gridLog10(float x) {
-    return log2(x) * 0.30102999566;
-  }
-
-  void main() {
-    vec2 p = vWorldPosition.xz;
-    vec2 dudv = max(fwidth(p), vec2(1e-6));
+/** The grid's colour and coverage for a pixel, as a TSL node (so it runs on WebGPU and WebGL 2). */
+const gridColorNode = (fadeDistance: FloatUniform) =>
+  Fn(() => {
+    const p = positionWorld.xz;
+    const dudv = max(fwidth(p), vec2(1e-6));
 
     // Pick the grid level from the worse axis so grazing views go coarse
     // instead of shimmering. lod's integer part selects the level; its
     // fraction fades the finest level out as its lines approach the minimum
     // on-screen spacing.
-    float worldPerPixel = max(dudv.x, dudv.y);
-    float lod = max(0.0, gridLog10(worldPerPixel * uMinPixelsBetweenLines / uBaseCellSize) + 1.0);
-    float lodFade = fract(lod);
-    float cell0 = uBaseCellSize * pow(10.0, floor(lod));
-    float cell1 = cell0 * 10.0;
-    float cell2 = cell1 * 10.0;
+    const worldPerPixel = max(dudv.x, dudv.y);
+    const lod = max(0, log2(worldPerPixel.mul(MIN_PIXELS_BETWEEN_LINES / BASE_CELL_SIZE)).mul(Math.LOG10E * Math.LN2).add(1));
+    const lodFade = fract(lod);
+    const cell0 = pow(10, floor(lod)).mul(BASE_CELL_SIZE);
+    const cell1 = cell0.mul(10);
+    const cell2 = cell1.mul(10);
 
     // Weights are continuous across level changes: level 1 at lodFade = 1
     // equals level 0 at lodFade = 0, and likewise level 2 -> level 1.
-    float line0 = gridCoverage(p, cell0, dudv) * MINOR_STRENGTH * (1.0 - lodFade);
-    float line1 = gridCoverage(p, cell1, dudv) * mix(MAJOR_STRENGTH, MINOR_STRENGTH, lodFade);
-    float line2 = gridCoverage(p, cell2, dudv) * MAJOR_STRENGTH;
-
-    vec3 color = uLineColor;
-    float alpha = max(line0, max(line1, line2));
+    const line0 = gridCoverage(p, cell0, dudv).mul(MINOR_STRENGTH).mul(lodFade.oneMinus());
+    const line1 = gridCoverage(p, cell1, dudv).mul(mix(MAJOR_STRENGTH, MINOR_STRENGTH, lodFade));
+    const line2 = gridCoverage(p, cell2, dudv).mul(MAJOR_STRENGTH);
+    const lines = max(line0, max(line1, line2));
 
     // World axes: X axis runs along z = 0 (red), Z axis along x = 0 (blue).
-    float axisZ = clamp(AXIS_HALF_WIDTH_PX - abs(p.x) / dudv.x, 0.0, 1.0);
-    float axisX = clamp(AXIS_HALF_WIDTH_PX - abs(p.y) / dudv.y, 0.0, 1.0);
-    color = mix(color, uAxisZColor, axisZ);
-    alpha = max(alpha, axisZ);
-    color = mix(color, uAxisXColor, axisX);
-    alpha = max(alpha, axisX);
+    const axisZ = clamp(float(AXIS_HALF_WIDTH_PX).sub(abs(p.x).div(dudv.x)), 0, 1);
+    const axisX = clamp(float(AXIS_HALF_WIDTH_PX).sub(abs(p.y).div(dudv.y)), 0, 1);
+    const color = mix(mix(color3(LINE_COLOR), color3(AXIS_Z_COLOR), axisZ), color3(AXIS_X_COLOR), axisX);
+    const coverage = max(max(lines, axisZ), axisX);
 
-    float horizontalDistance = length(vWorldPosition.xz - uCameraPosition.xz);
-    alpha *= 1.0 - smoothstep(uFadeDistance * 0.35, uFadeDistance, horizontalDistance);
+    const horizontalDistance = length(p.sub(cameraPosition.xz));
+    const fade = smoothstep(fadeDistance.mul(0.35), fadeDistance, horizontalDistance).oneMinus();
 
-    if (alpha < 0.002) discard;
+    return vec4(color, coverage.mul(fade));
+  })();
 
-    gl_FragColor = vec4(color, alpha);
+export class InfiniteGrid extends THREE.Mesh<THREE.PlaneGeometry, MeshBasicNodeMaterial> {
+  /** The horizontal distance from the camera at which the grid has fully faded: the shader's one input. */
+  readonly fadeDistance: FloatUniform;
 
-    #include <tonemapping_fragment>
-    #include <colorspace_fragment>
-  }
-`;
-
-export class InfiniteGrid extends THREE.Mesh<
-  THREE.PlaneGeometry,
-  THREE.ShaderMaterial
-> {
   // Reused every frame so the render loop never allocates.
   private readonly cameraWorldPosition = new THREE.Vector3();
   private readonly extent: GridExtent = { halfSize: 0, fadeDistance: 0 };
@@ -157,28 +134,22 @@ export class InfiniteGrid extends THREE.Mesh<
     const geometry = new THREE.PlaneGeometry(2, 2);
     geometry.rotateX(-Math.PI / 2); // lie flat on XZ
 
-    const material = new THREE.ShaderMaterial({
-      vertexShader,
-      fragmentShader,
-      uniforms: {
-        uLineColor: { value: new THREE.Color("#2a3f5f") },
-        uAxisXColor: { value: new THREE.Color("#ef4444") },
-        uAxisZColor: { value: new THREE.Color("#3b82f6") },
-        uCameraPosition: { value: new THREE.Vector3() },
-        uBaseCellSize: { value: BASE_CELL_SIZE },
-        uMinPixelsBetweenLines: { value: MIN_PIXELS_BETWEEN_LINES },
-        uFadeDistance: { value: 100 },
-      },
+    const fadeDistance = uniform(100);
+    const material = new MeshBasicNodeMaterial({
       transparent: true,
       depthWrite: false,
-      // Editor UI, not scene content: skip the renderer's tone mapping
-      // (neutral, exposure 1.3), which shifts dark slate colours darker and
-      // bluer. Colours then render as the exact hex values below.
+      // Editor UI, not scene content: skip tone mapping (neutral, exposure 1.3),
+      // which shifts dark slate colours darker and bluer. Colours then render as
+      // the exact hex values above.
       toneMapped: false,
       side: THREE.DoubleSide, // still visible when orbiting below the floor
     });
+    material.colorNode = gridColorNode(fadeDistance);
+    // Nothing to draw between the lines.
+    material.alphaTest = 0.002;
 
     super(geometry, material);
+    this.fadeDistance = fadeDistance;
 
     this.name = "InfiniteGrid";
     this.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
@@ -194,23 +165,20 @@ export class InfiniteGrid extends THREE.Mesh<
   // Runs after the scene's matrices are updated but before this mesh's
   // modelViewMatrix is computed, so updating the matrix here applies this frame.
   override onBeforeRender(
-    _renderer: THREE.WebGLRenderer,
+    _renderer: unknown,
     _scene: THREE.Scene,
     camera: THREE.Camera,
   ): void {
     const cameraPosition = this.cameraWorldPosition.setFromMatrixPosition(
       camera.matrixWorld,
     );
-    const uniforms = this.material.uniforms;
-
     const { halfSize, fadeDistance } = computeGridExtent(camera, cameraPosition, this.extent);
 
     this.position.set(cameraPosition.x, 0, cameraPosition.z);
     this.scale.set(halfSize, 1, halfSize);
     this.updateMatrixWorld();
 
-    (uniforms.uCameraPosition.value as THREE.Vector3).copy(cameraPosition);
-    uniforms.uFadeDistance.value = fadeDistance;
+    this.fadeDistance.value = fadeDistance;
   }
 
   dispose() {
