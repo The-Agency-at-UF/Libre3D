@@ -128,8 +128,6 @@
   z-index: 5;
 }
 
-
-
 .hierarchy-drop-line::before {
   content: "";
   position: absolute;
@@ -238,9 +236,6 @@
   min-width: 0;
 }
 
-
-
-
 .editor-tree-delete {
   background: transparent;
   border: none;
@@ -258,21 +253,6 @@
   background: var(--red);
   color: #ffffff;
 }
-
-
-
-
-
-
-.editor-inspector-kicker,
-
-
-
-
-
-
-
-
 
 .editor-modal-backdrop {
   position: fixed;
@@ -928,15 +908,7 @@
 
 /* Collapsible Inspector Sections */
 
-
-
-
 /* Row elements inside inspector */
-
-
-
-
-
 
 .segmented-btn.active {
   background: rgba(255, 255, 255, 0.08);
@@ -1516,9 +1488,6 @@
   color: var(--text-tertiary);
 }
 
-
-
-
 /* Phase 2: Chevron bumped to secondary so it's visible but not dominant */
 .chevron {
   font-size: 11px;
@@ -1595,11 +1564,27 @@ details[open].section::before {
 /* ── INPUTS ── */
 select,
 input[type="text"],
-input[type="number"],
+input[type="number"] {
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 5px 22px 5px 8px;
+  font-size: var(--font-size-xs);
+  font-family: var(--font);
+  appearance: none;
+  cursor: pointer;
+  outline: none;
+  width: 100%;
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
 
 select:focus,
 input[type="text"]:focus,
-input[type="number"]:focus,
+input[type="number"]:focus {
+  border-color: var(--input-border-focus);
+  box-shadow: 0 0 0 2px var(--input-focus-shadow);
+}
 
 .select-wrap {
   position: relative;
@@ -1741,8 +1726,6 @@ input[type="number"]:focus,
 .w-60 {
   width: 60%;
 }
-
-
 
 .right-sidebar.panel input[type="number"] {
   padding-right: 8px;
@@ -1970,16 +1953,10 @@ input[type="range"]::-moz-range-thumb {
 
 /* ── EFFECT ROW ── */
 
-
-
 .effect-row.sub {
   padding: 5px 10px 5px 32px;
   background: rgba(0, 0, 0, 0.15);
 }
-
-
-
-
 
 /* ── NESTED ACCORDION ── */
 /* ── MATERIAL LAYER STACK (Materials panel) ──
@@ -2538,8 +2515,6 @@ input[type="range"]::-moz-range-thumb {
   background: rgba(245, 158, 11, 0.15);
   color: #fbbf24;
 }
-
-
 
 /* Help menu: compact info chip + tutorial / shortcuts dialog */
 .btn-chip--icon {
