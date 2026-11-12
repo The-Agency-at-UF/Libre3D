@@ -143,6 +143,7 @@ export class InfiniteGrid extends THREE.Mesh<THREE.PlaneGeometry, MeshBasicNodeM
       // the exact hex values above.
       toneMapped: false,
       side: THREE.DoubleSide, // still visible when orbiting below the floor
+      fog: false, // editor UI: the scene's fog doesn't fade it
     });
     material.colorNode = gridColorNode(fadeDistance);
     // Nothing to draw between the lines.

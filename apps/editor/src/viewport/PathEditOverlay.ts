@@ -39,7 +39,7 @@ const RENDER_ORDER = 1000; // after the scene
 // no sized points), placed at the dot's position and sized on the screen by the vertex stage.
 // Written in TSL, which three compiles for WebGPU and for WebGL 2.
 const dotMaterial = (pixelRatio: ReturnType<typeof uniform<number>>): MeshBasicNodeMaterial => {
-  const material = new MeshBasicNodeMaterial({ depthTest: false, depthWrite: false, toneMapped: false });
+  const material = new MeshBasicNodeMaterial({ depthTest: false, depthWrite: false, toneMapped: false, fog: false });
   const center = cameraProjectionMatrix.mul(modelViewMatrix).mul(vec4(attribute("center", "vec3"), 1));
   // The quad's corners are half a unit out; clip space is two units across the screen.
   const corner = positionGeometry.xy.mul(attribute("size", "float")).mul(pixelRatio).mul(2).div(screenSize);
