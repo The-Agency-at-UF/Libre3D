@@ -1,6 +1,6 @@
 /**
- * PURPOSE: What each colour layer paints at a pixel, as TSL: Color, Depth, Gradient, Noise, Fresnel.
- * viewport/layerNodes.ts blends them into a stack.
+ * PURPOSE: What each colour layer paints at a pixel, as TSL: Color, Image, Depth, Gradient, Noise,
+ * Fresnel. viewport/layerNodes.ts blends them into a stack.
  *
  * INPUT: A layer (scene/types.ts). OUTPUT: A LayerSource: its uniforms, a way to bring them up to
  * date with the layer, and the node for its colour, as sRGB (as picked) plus an alpha.
@@ -16,6 +16,7 @@
 import * as THREE from "three";
 import {
   abs,
+  asin,
   atan,
   cameraPosition,
   clamp,
@@ -25,19 +26,23 @@ import {
   Fn,
   fract,
   length,
+  matcapUV,
   max,
   min,
   mix,
   mx_fractal_noise_float,
   mx_noise_float,
   mx_worley_noise_vec2,
+  normalLocal,
   normalView,
+  normalWorld,
   positionView,
   positionViewDirection,
   positionWorld,
   pow,
   select,
   smoothstep,
+  sRGBTransferOETF,
   step,
   time,
   uniform,
@@ -47,7 +52,9 @@ import {
   vec4,
 } from "three/tsl";
 import { hexToRgb, sortedStops, type PaintLayer } from "../scene/layerStack";
-import type { DepthLayer, FresnelLayer, GradientLayer, NoiseLayer, PaintColor, RampStop } from "../scene/types";
+import { DEFAULT_MATCAP, matcapTexture } from "./matcaps";
+import { objectSlot, objectTexture, objectUniform, shaderNode } from "./objectValues";
+import type { DepthLayer, FresnelLayer, GradientLayer, ImageLayer, NoiseLayer, PaintColor, RampStop, TextureRef } from "../scene/types";
 
 // TSL's node types are too loose to name usefully here; every node is this.
 type Node = ReturnType<typeof float>;
@@ -56,7 +63,9 @@ type Vec2Uniform = ReturnType<typeof uniform<THREE.Vector2>>;
 type Vec3Uniform = ReturnType<typeof uniform<THREE.Vector3>>;
 type Vec4Uniform = ReturnType<typeof uniform<THREE.Vector4>>;
 
-const n = (node: unknown): Node => node as Node;
+// A node for the shader: a stack's own value (objectUniform) goes in as the shared node that reads
+// the drawn object's (objectValues.ts).
+const n = (node: unknown): Node => shaderNode(node) as Node;
 
 /** A layer's colour at a pixel: sRGB (as picked) and how much of it there is. */
 export interface SourceColor {
@@ -70,8 +79,12 @@ export interface SourceContext {
   objectPosition: Node;
 }
 
+/** A picture to draw, as a texture made how `options` say; null while it's loading (viewport/entityMaterials.ts). */
+export type PictureSource = (ref: TextureRef, options: { nearest: boolean }) => THREE.Texture | null;
+
 export interface LayerSource {
-  update(layer: PaintLayer): void;
+  /** Brings the uniforms up to date; true when a texture changed (the shader's bindings must be remade). */
+  update(layer: PaintLayer, pictures: PictureSource): boolean | void;
   node(context: SourceContext): SourceColor;
 }
 
@@ -82,7 +95,7 @@ const setPaint = (target: Vec4Uniform, paint: PaintColor): void => {
   target.value.set(r, g, b, Math.min(1, Math.max(0, paint.alpha ?? 1)));
 };
 
-const vec4Uniform = (): Vec4Uniform => uniform(new THREE.Vector4(1, 1, 1, 1));
+const vec4Uniform = (): Vec4Uniform => objectUniform(new THREE.Vector4(1, 1, 1, 1));
 
 interface RampUniforms {
   colors: Vec4Uniform[];
@@ -92,8 +105,8 @@ interface RampUniforms {
 
 const rampUniforms = (count: number): RampUniforms => ({
   colors: Array.from({ length: count }, vec4Uniform),
-  positions: Array.from({ length: count }, () => uniform(0)),
-  smooth: uniform(0),
+  positions: Array.from({ length: count }, () => objectUniform(0)),
+  smooth: objectUniform(0),
 });
 
 const updateRamp = (ramp: RampUniforms, stops: RampStop[], smooth: boolean): void => {
@@ -105,18 +118,23 @@ const updateRamp = (ramp: RampUniforms, stops: RampStop[], smooth: boolean): voi
   ramp.smooth.value = smooth ? 1 : 0;
 };
 
+// A colour with its alpha, premultiplied (rgb × a) and back: colours with alpha are blended
+// premultiplied, as CSS gradients are (scene/layerStack.ts, sampleRamp).
+const premultiply = (color: Node): Node => n(vec4(n(color.xyz).mul(n(color.w)), n(color.w)));
+const unpremultiply = (color: Node): Node => n(vec4(n(color.xyz).div(max(n(color.w), 1e-6)), n(color.w)));
+
 /** The ramp's colour at `t` (scene/layerStack.ts, sampleRamp): each stop blended in over its own span. */
 const sampleRampNode = (ramp: RampUniforms, t: Node): Node => {
-  let color = n(ramp.colors[0]);
+  let color = premultiply(n(ramp.colors[0]));
   for (let i = 1; i < ramp.colors.length; i++) {
     const from = n(ramp.positions[i - 1]);
     const span = n(ramp.positions[i]).sub(from);
     const blended = clamp(t.sub(from).div(max(span, 1e-6)), 0, 1);
     let amount = n(select(span.greaterThan(0), blended, step(from, t)));
-    amount = n(mix(amount, amount.mul(amount).mul(float(3).sub(amount.mul(2))), ramp.smooth));
-    color = n(mix(color, n(ramp.colors[i]), amount));
+    amount = n(mix(amount, amount.mul(amount).mul(float(3).sub(amount.mul(2))), n(ramp.smooth)));
+    color = n(mix(color, premultiply(n(ramp.colors[i])), amount));
   }
-  return color;
+  return unpremultiply(color);
 };
 
 const stopCount = (stops: RampStop[]): number => Math.max(1, sortedStops(stops).length);
@@ -124,7 +142,7 @@ const stopCount = (stops: RampStop[]): number => Math.max(1, sortedStops(stops).
 // ─── Color ───────────────────────────────────────────────────────────────────
 
 const colorSource = (): LayerSource => {
-  const color = uniform(new THREE.Vector3(1, 1, 1));
+  const color = objectUniform(new THREE.Vector3(1, 1, 1));
   return {
     update(layer) {
       if (layer.type !== "color") return;
@@ -148,10 +166,10 @@ const depthSource = (first: DepthLayer): LayerSource => {
   const world = first.space === "world";
   const linear = first.gradientType === "linear";
   const ramp = rampUniforms(stopCount(first.stops));
-  const origin: Vec3Uniform = uniform(new THREE.Vector3());
-  const direction: Vec3Uniform = uniform(new THREE.Vector3(1, 0, 0));
-  const near = uniform(0);
-  const far = uniform(1);
+  const origin: Vec3Uniform = objectUniform(new THREE.Vector3());
+  const direction: Vec3Uniform = objectUniform(new THREE.Vector3(1, 0, 0));
+  const near = objectUniform(0);
+  const far = objectUniform(1);
   return {
     update(layer) {
       if (layer.type !== "depth") return;
@@ -207,9 +225,9 @@ const gradientPositionNode = (type: GradientLayer["gradientType"], angle: Node, 
 
 const gradientSource = (first: GradientLayer): LayerSource => {
   const ramp = rampUniforms(stopCount(first.stops));
-  const angle = uniform(0);
-  const offset: Vec2Uniform = uniform(new THREE.Vector2());
-  const morph: Vec2Uniform = uniform(new THREE.Vector2());
+  const angle = objectUniform(0);
+  const offset: Vec2Uniform = objectUniform(new THREE.Vector2());
+  const morph: Vec2Uniform = objectUniform(new THREE.Vector2());
   return {
     update(layer) {
       if (layer.type !== "gradient") return;
@@ -326,16 +344,16 @@ const noiseValue = (type: NoiseLayer["noiseType"], style: NoiseLayer["voronoiSty
 
 const noiseSource = (first: NoiseLayer): LayerSource => {
   const colors = [vec4Uniform(), vec4Uniform(), vec4Uniform(), vec4Uniform()];
-  const size: Vec3Uniform = uniform(new THREE.Vector3(1, 1, 1));
-  const scale = uniform(1);
-  const movement = uniform(0);
-  const distortion: Vec2Uniform = uniform(new THREE.Vector2(1, 1));
-  const factorA: Vec2Uniform = uniform(new THREE.Vector2());
-  const factorB: Vec2Uniform = uniform(new THREE.Vector2());
-  const smoothness = uniform(0.3);
-  const seed = uniform(0);
-  const lowCut = uniform(0);
-  const highCut = uniform(1);
+  const size: Vec3Uniform = objectUniform(new THREE.Vector3(1, 1, 1));
+  const scale = objectUniform(1);
+  const movement = objectUniform(0);
+  const distortion: Vec2Uniform = objectUniform(new THREE.Vector2(1, 1));
+  const factorA: Vec2Uniform = objectUniform(new THREE.Vector2());
+  const factorB: Vec2Uniform = objectUniform(new THREE.Vector2());
+  const smoothness = objectUniform(0.3);
+  const seed = objectUniform(0);
+  const lowCut = objectUniform(0);
+  const highCut = objectUniform(1);
   return {
     update(layer) {
       if (layer.type !== "noise") return;
@@ -369,10 +387,181 @@ const noiseSource = (first: NoiseLayer): LayerSource => {
       const raw = value(n(p.add(vec3(r.mul(n(distortion).y).mul(4), 0))));
       const span = n(max(n(highCut).sub(n(lowCut)), 1e-4));
       const f = n(clamp(raw.sub(n(lowCut)).div(span), 0, 1));
-      let color = n(mix(n(colors[0]), n(colors[1]), clamp(f.mul(f).mul(4), 0, 1)));
-      color = n(mix(color, n(colors[2]), clamp(length(q), 0, 1)));
-      color = n(mix(color, n(colors[3]), clamp(r.x, 0, 1)));
+      // Premultiplied, as a ramp is: a see-through colour adds only as much as it shows.
+      let color = n(mix(premultiply(n(colors[0])), premultiply(n(colors[1])), clamp(f.mul(f).mul(4), 0, 1)));
+      color = n(mix(color, premultiply(n(colors[2])), clamp(length(q), 0, 1)));
+      color = unpremultiply(n(mix(color, premultiply(n(colors[3])), clamp(r.x, 0, 1))));
       return { rgb: n(color.xyz), a: n(color.w) };
+    },
+  };
+};
+
+// ─── Image ───────────────────────────────────────────────────────────────────
+
+// What an Image layer with no picture yet (or one still loading) samples: nothing, see-through.
+const NO_PICTURE = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
+NO_PICTURE.needsUpdate = true;
+
+// Where a point falls on the picture, before scale, offset and rotation: the mesh's UVs, or the
+// object-space position projected (a unit object covers the picture once). Planar looks along
+// `axis`; spherical goes around Y; cylindrical goes around `axis`.
+const planarUv = (p: Node, axis: "x" | "y" | "z"): Node =>
+  n(axis === "x" ? vec2(p.z.negate(), p.y) : axis === "y" ? vec2(p.x, p.z.negate()) : vec2(p.x, p.y)).add(0.5);
+
+const around = (p: Node, axis: "x" | "y" | "z"): { a: Node; b: Node; along: Node } =>
+  axis === "x" ? { a: n(p.y), b: n(p.z), along: n(p.x) } : axis === "z" ? { a: n(p.x), b: n(p.y), along: n(p.z) } : { a: n(p.x), b: n(p.z), along: n(p.y) };
+
+const projectedUv = (layer: ImageLayer, p: Node): Node => {
+  switch (layer.projection) {
+    case "planar":
+      return planarUv(p, layer.axis);
+    case "spherical": {
+      const direction = n(p.normalize());
+      return n(vec2(n(atan(p.x, p.z)).div(2 * Math.PI).add(0.5), n(asin(clamp(direction.y, -1, 1))).div(Math.PI).add(0.5)));
+    }
+    case "cylindrical": {
+      const { a, b, along } = around(p, layer.axis);
+      return n(vec2(n(atan(a, b)).div(2 * Math.PI).add(0.5), along.add(0.5)));
+    }
+    case "uv":
+    default:
+      return n(uv());
+  }
+};
+
+const imageSource = (first: ImageLayer): LayerSource => {
+  // The picture (each sample, of which triplanar takes three, reads the drawn object's own).
+  const picture = objectSlot<THREE.Texture>(NO_PICTURE);
+  const scale: Vec2Uniform = objectUniform(new THREE.Vector2(1, 1));
+  const offset: Vec2Uniform = objectUniform(new THREE.Vector2());
+  const rotation = objectUniform(0);
+  const crop = objectUniform(0);
+  const aspect = objectUniform(1); // the picture's width / height
+  const sample = (at: Node): Node => n(objectTexture(picture, at));
+  // Rotation and repeats about the picture's middle, then the offset; Crop keeps its shape.
+  const place = (at: Node): Node => {
+    const centred = n(at.sub(0.5));
+    const fit = n(mix(vec2(1, 1), vec2(min(1, n(aspect).reciprocal()), min(1, n(aspect))), n(crop)));
+    const cosine = n(n(rotation).cos());
+    const sine = n(n(rotation).sin());
+    const turned = n(vec2(centred.x.mul(cosine).sub(centred.y.mul(sine)), centred.x.mul(sine).add(centred.y.mul(cosine))));
+    return n(turned.mul(fit).mul(n(scale)).add(0.5).add(n(offset)));
+  };
+  return {
+    update(layer, pictures) {
+      if (layer.type !== "image") return false;
+      scale.value.set(...layer.scale);
+      offset.value.set(...layer.offset);
+      rotation.value = (layer.rotation * Math.PI) / 180;
+      crop.value = layer.crop ? 1 : 0;
+      const next = (layer.textureAssetId ? pictures(layer, { nearest: layer.sharpness === "pixelated" }) : null) ?? NO_PICTURE;
+      const image = next.image as { width?: number; height?: number } | undefined;
+      aspect.value = image?.width && image.height ? image.width / image.height : 1;
+      if (next === picture.value) return false;
+      picture.value = next;
+      return true;
+    },
+    node(context) {
+      let color: Node;
+      if (first.projection === "triplanar") {
+        // Planar from each side, weighted by how squarely the surface faces it.
+        const weights = n(pow(abs(n(normalLocal)), vec3(4, 4, 4)));
+        const total = n(max(weights.x.add(weights.y).add(weights.z), 1e-5));
+        const p = context.objectPosition;
+        color = n(
+          sample(place(planarUv(p, "x")))
+            .mul(weights.x)
+            .add(sample(place(planarUv(p, "y"))).mul(weights.y))
+            .add(sample(place(planarUv(p, "z"))).mul(weights.z))
+            .div(total),
+        );
+      } else {
+        color = sample(place(projectedUv(first, context.objectPosition)));
+      }
+      // The texture is decoded to linear values; the stack blends sRGB ones, as the colours are picked.
+      return { rgb: n(sRGBTransferOETF(n(color.rgb))), a: n(color.a) };
+    },
+  };
+};
+
+// ─── Normal ──────────────────────────────────────────────────────────────────
+
+const normalSource = (): LayerSource => {
+  const axes: Vec3Uniform = objectUniform(new THREE.Vector3(1, 1, 1));
+  return {
+    update(layer) {
+      if (layer.type !== "normal") return;
+      axes.value.set(...(layer.axes.map((on) => (on ? 1 : 0)) as [number, number, number]));
+    },
+    node() {
+      // The way the surface faces, in the scene's space, -1 to 1 as 0 to 1 (scene/types.ts, NormalLayer).
+      return { rgb: n(n(normalWorld).mul(0.5).add(0.5).mul(n(axes))), a: float(1) };
+    },
+  };
+};
+
+// ─── Matcap ──────────────────────────────────────────────────────────────────
+
+const matcapSource = (): LayerSource => {
+  const picture = objectSlot<THREE.Texture>(matcapTexture(DEFAULT_MATCAP));
+  const rotation = objectUniform(0);
+  return {
+    update(layer, pictures) {
+      if (layer.type !== "matcap") return false;
+      rotation.value = (layer.rotation * Math.PI) / 180;
+      const own = layer.textureAssetId ? pictures({ textureAssetId: layer.textureAssetId, wrapS: 1001, wrapT: 1001, flipY: true }, { nearest: false }) : null;
+      const next = own ?? matcapTexture(layer.preset);
+      if (next === picture.value) return false;
+      picture.value = next;
+      return true;
+    },
+    node() {
+      // Where the surface's view-space normal points, on the picture; turned about its middle.
+      const at = n(matcapUV).sub(0.5);
+      const cosine = n(n(rotation).cos());
+      const sine = n(n(rotation).sin());
+      const turned = n(vec2(at.x.mul(cosine).sub(at.y.mul(sine)), at.x.mul(sine).add(at.y.mul(cosine))).add(0.5));
+      const color = n(objectTexture(picture, turned));
+      return { rgb: n(sRGBTransferOETF(n(color.rgb))), a: float(1) };
+    },
+  };
+};
+
+// ─── Rainbow ─────────────────────────────────────────────────────────────────
+
+const rainbowSource = (): LayerSource => {
+  const frequency = objectUniform(30);
+  const movement = objectUniform(0);
+  const shift: Vec3Uniform = objectUniform(new THREE.Vector3());
+  const wobble = objectUniform(0);
+  const wobbleScale = objectUniform(1);
+  const offset: Vec3Uniform = objectUniform(new THREE.Vector3());
+  return {
+    update(layer) {
+      if (layer.type !== "rainbow") return;
+      frequency.value = layer.frequency;
+      movement.value = layer.movement;
+      shift.value.set(...layer.color);
+      wobble.value = layer.noise;
+      wobbleScale.value = layer.noiseScale;
+      offset.value.set(...layer.offset);
+    },
+    node(context) {
+      // Where along the bands: how far the surface turns from the view (Frequency 30: one round of
+      // hues from facing it to edge-on), drifting with time, wobbled by noise. (Spline's shader isn't
+      // in its player; this is a reconstruction of what it draws.)
+      const facing = n(clamp(abs(dot(n(normalView), n(positionViewDirection))), 0, 1));
+      const noisy = simplexNode(n(context.objectPosition.mul(n(wobbleScale)).add(n(offset))));
+      const band = n(
+        float(1)
+          .sub(facing)
+          .mul(n(frequency).div(30))
+          .add(n(time).mul(n(movement)).mul(0.1))
+          .add(noisy.mul(n(wobble))),
+      );
+      const phases = n(vec3(0, 1 / 3, 2 / 3).add(n(shift)));
+      const rgb = n(n(band).add(phases).mul(2 * Math.PI).cos().mul(0.5).add(0.5));
+      return { rgb, a: float(1) };
     },
   };
 };
@@ -381,10 +570,10 @@ const noiseSource = (first: NoiseLayer): LayerSource => {
 
 const fresnelSource = (): LayerSource => {
   const color = vec4Uniform();
-  const bias = uniform(0.1);
-  const scale = uniform(1);
-  const intensity = uniform(2);
-  const factor = uniform(1);
+  const bias = objectUniform(0.1);
+  const scale = objectUniform(1);
+  const intensity = objectUniform(2);
+  const factor = objectUniform(1);
   return {
     update(layer) {
       if (layer.type !== "fresnel") return;
@@ -405,7 +594,7 @@ const fresnelSource = (): LayerSource => {
 };
 
 /** A source for `layer`, with its uniforms set from it. Its shader is the one for layerSourceShape(layer). */
-export const createLayerSource = (layer: PaintLayer): LayerSource => {
+export const createLayerSource = (layer: PaintLayer, pictures: PictureSource): LayerSource => {
   const source =
     layer.type === "depth"
       ? depthSource(layer)
@@ -415,8 +604,16 @@ export const createLayerSource = (layer: PaintLayer): LayerSource => {
           ? noiseSource(layer)
           : layer.type === "fresnel"
             ? fresnelSource()
-            : colorSource();
-  source.update(layer);
+            : layer.type === "image"
+              ? imageSource(layer)
+              : layer.type === "normal"
+                ? normalSource()
+                : layer.type === "matcap"
+                  ? matcapSource()
+                  : layer.type === "rainbow"
+                    ? rainbowSource()
+                    : colorSource();
+  source.update(layer, pictures);
   return source;
 };
 
@@ -431,6 +628,14 @@ export const layerSourceShape = (layer: PaintLayer): string => {
       return `noise:${layer.noiseType}${layer.noiseType === "voronoi" ? `:${layer.voronoiStyle}` : ""}`;
     case "fresnel":
       return "fresnel";
+    case "normal":
+      return "normal";
+    case "matcap":
+      return "matcap";
+    case "rainbow":
+      return "rainbow";
+    case "image":
+      return `image:${layer.projection}${layer.projection === "planar" || layer.projection === "cylindrical" ? `:${layer.axis}` : ""}`;
     case "color":
     default:
       return "color";

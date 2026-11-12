@@ -13,14 +13,8 @@ import type { ShapeData } from "../paths/shapeGeometry";
 
 export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
 
-export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel";
+export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
-
-// Which glTF texture channel an ImageLayer feeds. "metallicRoughness" is a
-// single packed map (green = roughness, blue = metalness) that Three assigns to
-// both material.roughnessMap and material.metalnessMap — one layer covers both,
-// never split into two.
-export type ImageSlot = "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
 
 // How a layer goes over the layers under it. The stack is drawn bottom to top, and
 // `materialLayers[0]` is the top, as the panel lists it. The formulas are the W3C compositing ones,
@@ -109,20 +103,26 @@ export interface LightingLayer extends LayerBase {
   bumpScale?: number;
 }
 
-// A picture layer: an imported glTF material's colour map, or an image plane's picture. The pixel
-// data is never stored here (materialLayers is saved in the scene document) — it
-// lives in the OPFS texture asset store, referenced by textureAssetId. wrapS/wrapT
-// are the THREE wrap constants copied straight off the source texture.
-// It fills the material's colour map, so its opacity and blend mode aren't used yet (a full Image
-// layer is task D's PR 4b). Before PR 4 an imported model's other pictures (normal, roughness,
-// emissive, AO) were Image layers too: they're the Lighting layer's `maps` now, and older documents
-// are folded so on load (utils/sceneDocument.ts).
-export interface ImageLayer extends LayerBase {
+export type ImageProjection = "uv" | "planar" | "spherical" | "cylindrical" | "triplanar";
+
+// A picture painted on the object, as Spline's Texture layer: a colour layer like the others (its
+// alpha is the picture's). It's an image plane's picture, an imported model's colour map, or one
+// uploaded or picked in its drawer. The bytes live in the texture store under `textureAssetId`
+// ("" while none is picked: it paints nothing). Placed by `projection` (the mesh's UVs, or straight
+// along `axis` (planar), around the object (spherical, cylindrical), or from all three sides
+// (triplanar)), then `scale` (repeats), `offset` and `rotation` (degrees). `crop` keeps the
+// picture's shape instead of stretching it; `sharpness` "pixelated" draws its pixels sharp.
+// Before PR 4b an Image layer only filled the material's colour map (and had a `slot`); those are
+// converted when a document is read (utils/sceneDocument.ts).
+export interface ImageLayer extends LayerBase, TextureRef {
   type: "image";
-  textureAssetId: string;
-  slot: ImageSlot;
-  wrapS: number;
-  wrapT: number;
+  projection: ImageProjection;
+  axis: "x" | "y" | "z"; // for planar and cylindrical
+  sharpness: "smooth" | "pixelated";
+  crop: boolean;
+  scale: [number, number];
+  offset: [number, number];
+  rotation: number;
 }
 
 // Colours the object by distance, as Spline's Depth layer: each point's distance from the origin,
@@ -191,7 +191,42 @@ export interface FresnelLayer extends LayerBase, PaintColor {
   factor: number;
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer;
+// Colours each point by the way the surface faces there, as Spline's Normal layer: red, green and
+// blue from the normal's X, Y and Z in the scene's space (-1 to 1 as 0 to 1), so the colours stay
+// put as the camera orbits. An axis turned off gives 0 in its channel (Spline's Direction X Y Z).
+export interface NormalLayer extends LayerBase {
+  type: "normal";
+  axes: [boolean, boolean, boolean];
+}
+
+// A "material capture" picture of a lit sphere, looked up by the way the surface faces the camera,
+// as Spline's Matcap layer: it makes the object look like that material whatever the lights. One of
+// Libre3D's own (`preset`, viewport/matcaps.ts), or a picture of the person's own when
+// `textureAssetId` is set (in the texture store, as an Image layer's). `rotation` (degrees) turns it
+// about the view.
+export interface MatcapLayer extends LayerBase {
+  type: "matcap";
+  preset: string;
+  textureAssetId?: string;
+  name?: string;
+  rotation: number;
+}
+
+// A soap-bubble shimmer, as Spline's Rainbow layer: bands of hue that shift with the angle the
+// surface is seen at (more bands with a higher `frequency`), drift with `movement` (0 = still), and
+// wobble by a 3D noise (`noise` how much, `noiseScale` how fine, `offset` where). `color` shifts
+// the red, green and blue bands (0-1 each). Its maths: viewport/layerSources.ts.
+export interface RainbowLayer extends LayerBase {
+  type: "rainbow";
+  frequency: number;
+  movement: number;
+  color: [number, number, number];
+  noise: number;
+  noiseScale: number;
+  offset: [number, number, number];
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | NormalLayer | MatcapLayer | RainbowLayer;
 
 /** A reusable material: the scene document's `materials` section, by ID (task D, PR 6). */
 export interface MaterialAsset {

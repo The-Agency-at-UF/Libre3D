@@ -10,8 +10,7 @@
  * its opacity, by the W3C compositing formulas (Compositing and Blending Level 1), on sRGB values as
  * the colours are picked. Lighting shades what's under it; what's over it is drawn on the shaded
  * result as it is (as in Spline). A layer in Mask mode paints nothing: its lightness shows the one
- * layer right under it (Spline's Layer Masking). Image layers only fill the colour map for now (an
- * image plane's picture, an imported model's), so they take no part here.
+ * layer right under it (Spline's Layer Masking).
  *
  * The viewport draws the plan in TSL (viewport/layerNodes.ts, viewport/layerSources.ts); the CPU
  * twins here (the ramp, Depth's and Gradient's positions, Fresnel's amount) are what Vitest checks
@@ -24,11 +23,15 @@ import type {
   DepthLayer,
   FresnelLayer,
   GradientLayer,
+  ImageLayer,
   LightingLayer,
   MaterialLayer,
   MaterialLayerType,
+  MatcapLayer,
   NoiseLayer,
+  NormalLayer,
   PaintColor,
+  RainbowLayer,
   RampStop,
 } from "./types";
 
@@ -41,20 +44,20 @@ export interface Paint {
 }
 
 /** A layer that makes colour: it paints, or in Mask mode masks the layer under it. */
-export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer;
+export type PaintLayer = ColorLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | NormalLayer | MatcapLayer | RainbowLayer;
 /** A layer that can be put in Mask mode. */
-export type MaskableLayer = DepthLayer | GradientLayer | NoiseLayer | FresnelLayer;
+export type MaskableLayer = DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | ImageLayer | MatcapLayer | RainbowLayer;
 
 export const BLEND_MODES: BlendMode[] = ["normal", "multiply", "screen", "overlay"];
 
 /** Layer types that make colour. An object keeps one that paints (so Color can go once another is there). */
-export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "depth", "gradient", "noise", "fresnel"];
+export const COLOR_LAYER_TYPES: readonly MaterialLayerType[] = ["color", "image", "depth", "gradient", "noise", "fresnel", "normal", "matcap", "rainbow"];
 
 /** Layer types a layer's type dropdown can switch it to. "+" adds a Color layer. */
 export const SWITCHABLE_LAYER_TYPES: readonly MaterialLayerType[] = COLOR_LAYER_TYPES;
 
 /** Layer types with a Mask mode (Spline's list, of the types Libre3D has). */
-export const MASKABLE_LAYER_TYPES: readonly MaterialLayerType[] = ["depth", "gradient", "noise", "fresnel"];
+export const MASKABLE_LAYER_TYPES: readonly MaterialLayerType[] = ["image", "matcap", "depth", "gradient", "noise", "fresnel", "rainbow"];
 
 /** A ramp holds 2 to this many stops. */
 export const MAX_RAMP_STOPS = 10;
@@ -75,8 +78,8 @@ const NOTHING: Paint = { rgb: [0, 0, 0], alpha: 0 };
 
 /**
  * The index of the layer a mask at `index` masks: the one right under it, when that one paints.
- * Null when it masks nothing (it isn't a mask, or under it is Lighting, an Image layer, another
- * mask, or nothing). Eyes don't count here: the row shows the pairing either way.
+ * Null when it masks nothing (it isn't a mask, or under it is Lighting, another mask, or nothing).
+ * Eyes don't count here: the row shows the pairing either way.
  */
 export const maskTarget = (layers: MaterialLayer[], index: number): number | null => {
   const layer = layers[index];
@@ -86,11 +89,11 @@ export const maskTarget = (layers: MaterialLayer[], index: number): number | nul
 };
 
 /**
- * Whether `layer` can be removed from `layers`: never Lighting or an Image layer; a layer that
- * paints only while another one that paints stays. A mask can always go.
+ * Whether `layer` can be removed from `layers`: never Lighting; a layer that paints only while
+ * another one that paints stays. A mask can always go.
  */
 export const canRemoveLayer = (layers: MaterialLayer[], layer: MaterialLayer): boolean => {
-  if (layer.type === "lighting" || layer.type === "image") return false;
+  if (layer.type === "lighting") return false;
   if (!paints(layer)) return true;
   return layers.some((each) => each.id !== layer.id && paints(each));
 };
@@ -99,7 +102,6 @@ export const canRemoveLayer = (layers: MaterialLayer[], layer: MaterialLayer): b
 export const removeBlockedReason = (layers: MaterialLayer[], layer: MaterialLayer): string | null => {
   if (canRemoveLayer(layers, layer)) return null;
   if (layer.type === "lighting") return "Lighting can't be removed";
-  if (layer.type === "image") return "Comes with the imported model";
   return "Add another colour layer first";
 };
 
@@ -109,12 +111,8 @@ export const canSwitchLayerType = (_layers: MaterialLayer[], layer: MaterialLaye
   return SWITCHABLE_LAYER_TYPES.includes(layer.type) && SWITCHABLE_LAYER_TYPES.includes(to);
 };
 
-/** Where a dragged layer may go: anywhere above the Image layers (Lighting moves too). Returns the index range (inclusive). */
-export const movableRange = (layers: MaterialLayer[]): [number, number] => {
-  let last = layers.length - 1;
-  while (last >= 0 && layers[last].type === "image") last -= 1;
-  return [0, last];
-};
+/** Where a dragged layer may go: anywhere in the stack (Lighting moves too). Returns the index range (inclusive). */
+export const movableRange = (layers: MaterialLayer[]): [number, number] => [0, layers.length - 1];
 
 /** Moves the layer `layerId` to `toIndex`, kept inside movableRange. The same array when nothing moves. */
 export const moveLayer = (layers: MaterialLayer[], layerId: string, toIndex: number): MaterialLayer[] => {
@@ -200,24 +198,25 @@ export const sortedStops = (stops: RampStop[]): RampStop[] =>
 /**
  * A ramp's colour at `t`, as Spline's: from the first stop, each next stop blended in over its own
  * span (clamped, eased when `smooth`), so a `t` before the first stop or past the last takes that
- * stop's colour. In sRGB, as the stops are picked; alpha blends the same way.
+ * stop's colour. In sRGB, as the stops are picked, and premultiplied by alpha, as CSS gradients
+ * blend: a see-through stop's colour counts only as much as it shows, so a fade from see-through
+ * white to navy goes see-through to navy, not through a grey haze.
  */
 export const sampleRamp = (stops: RampStop[], smooth: boolean, t: number): Paint => {
   const ordered = sortedStops(stops);
   if (ordered.length === 0) return WHITE;
-  const first = paintOf(ordered[0]);
-  const rgb: RGB = [...first.rgb];
-  let alpha = first.alpha;
+  const premultiplied = (paint: Paint): [number, number, number, number] => [...(paint.rgb.map((c) => c * paint.alpha) as RGB), paint.alpha];
+  const blended = premultiplied(paintOf(ordered[0]));
   for (let i = 1; i < ordered.length; i++) {
     const from = ordered[i - 1].position;
     const span = ordered[i].position - from;
     let amount = span !== 0 ? clamp01((t - from) / span) : t >= from ? 1 : 0;
     if (smooth) amount = amount * amount * (3 - 2 * amount);
-    const next = paintOf(ordered[i]);
-    for (let c = 0; c < 3; c++) rgb[c] += (next.rgb[c] - rgb[c]) * amount;
-    alpha += (next.alpha - alpha) * amount;
+    const next = premultiplied(paintOf(ordered[i]));
+    for (let c = 0; c < 4; c++) blended[c] += (next[c] - blended[c]) * amount;
   }
-  return { rgb, alpha };
+  const alpha = blended[3];
+  return { rgb: alpha > 0 ? [blended[0] / alpha, blended[1] / alpha, blended[2] / alpha] : [0, 0, 0], alpha };
 };
 
 /** A new stop for a ramp at `t`: the colour the ramp has there. */
@@ -298,6 +297,14 @@ export const sourceIsOpaque = (layer: PaintLayer): boolean => {
       return layer.colors.every((color) => (color.alpha ?? 1) >= 1);
     case "fresnel":
       return false;
+    case "normal":
+    case "matcap":
+    case "rainbow":
+      return true;
+    case "image":
+      // A picture's own see-through parts make the object see-through only with the surface's
+      // alpha mode Blend or Mask, as a glTF colour map's do; they still blend over the layers under it.
+      return layer.textureAssetId !== "";
   }
 };
 

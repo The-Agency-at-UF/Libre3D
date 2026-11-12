@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createId } from "./createId";
+import { createImageLayer } from "../scene/entityFactories";
 import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../scene/layers";
 import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
 import type {
@@ -187,9 +188,8 @@ async function picturesFromMaterial(
 
   const layers: ImageLayer[] = [];
   const color = await refFor(std.map);
-  if (color) {
-    layers.push({ id: createLayerId(), type: "image", enabled: true, opacity: 1, blendMode: "normal", slot: "color", textureAssetId: color.textureAssetId, wrapS: color.wrapS, wrapT: color.wrapT });
-  }
+  // glTF's colour map, at the mesh's UVs as it was drawn.
+  if (color) layers.push(createImageLayer({ ...color, id: createLayerId() }));
 
   const maps: NonNullable<LightingLayer["maps"]> = {};
   const normal = await refFor(std.normalMap);
@@ -212,7 +212,8 @@ export interface DerivedMaterial {
   opacity: number;
 }
 
-// Builds the full editable layer stack (Lighting, Color, then the Image layers) for one imported
+// Builds the full editable layer stack (Lighting, then the colour: a Color layer, or the colour map
+// as an Image layer with the base colour multiplied over it, as glTF draws them) for one imported
 // mesh's material, and the object's opacity from the material's. Pass a shared cache across every
 // mesh in the same import so reused images are extracted once. Each image goes to `saveTexture`
 // under its hash.
@@ -221,8 +222,15 @@ export async function deriveMaterialLayers(material: THREE.Material, cache: Text
   const pictures = await picturesFromMaterial(material, cache, saveTexture);
   const lighting = lightingLayerFromMaterial(material, model);
   if (Object.keys(pictures.maps).length > 0) lighting.maps = pictures.maps;
+  const color = colorLayerFromMaterial(material);
+  const colour: MaterialLayer[] =
+    pictures.layers.length === 0
+      ? [color]
+      : color.color.toLowerCase() === "#ffffff"
+        ? pictures.layers
+        : [{ ...color, blendMode: "multiply" }, ...pictures.layers];
   return {
-    layers: [lighting, colorLayerFromMaterial(material), ...pictures.layers],
+    layers: [lighting, ...colour],
     opacity: typeof material.opacity === "number" ? material.opacity : 1,
   };
 }
@@ -240,6 +248,8 @@ export interface TextureOptions {
   wrapT: number;
   flipY?: boolean;
   srgb: boolean;
+  // Drawn with sharp pixels when magnified (an Image layer's Sharpness: Pixelated).
+  nearest?: boolean;
 }
 
 // Rebuilds a THREE.Texture from a stored blob (an Image layer's picture, a Lighting map's), restoring
@@ -258,6 +268,7 @@ export async function buildTexture(blob: Blob, options: TextureOptions): Promise
   // primitives, whose UVs go up, show it the way up it was made.
   texture.flipY = false;
   texture.colorSpace = options.srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  if (options.nearest) texture.magFilter = THREE.NearestFilter;
   // GLTFExporter writes every texture as a PNG unless told otherwise; a JPEG (an
   // imported photo, utils/importImage.ts) stays one in exports and published
   // scenes, which keeps them several times smaller.

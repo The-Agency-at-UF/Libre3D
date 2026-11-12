@@ -23,3 +23,22 @@ describe("SceneManager environment intensity", () => {
     expect(unlit).not.toHaveProperty("envMapIntensity");
   });
 });
+
+describe("SceneManager ambient fill", () => {
+  // Lambert, Phong and Toon don't take environment light, so with the ambient light turned off for
+  // the environment they get its fill on their own (canvasOutput.ts reads it from the scene).
+  it("hands Lambert, Phong and Toon the ambient light's fill while the environment replaces it", () => {
+    const manager = new SceneManager(initialSceneDefaults, { editorHelpers: false });
+    const fill = () => manager.scene.userData.libre3dAmbientFill;
+
+    manager.updateEnvironment(false, 1);
+    expect(fill()).toBe(0);
+
+    manager.setEnvironmentMap(new THREE.Texture());
+    manager.updateEnvironment(true, 1);
+    expect(fill()).toBeCloseTo(initialSceneDefaults.lights.intensity * 1.5, 9);
+
+    manager.updateLightIntensity(2);
+    expect(fill()).toBeCloseTo(3, 9);
+  });
+});

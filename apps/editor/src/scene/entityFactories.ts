@@ -24,10 +24,14 @@ import type {
   EntityType,
   FresnelLayer,
   GradientLayer,
+  ImageLayer,
   LightingLayer,
   MaterialLayer,
   MaterialLayerType,
+  MatcapLayer,
   NoiseLayer,
+  NormalLayer,
+  RainbowLayer,
 } from "./types";
 import { cloneVector } from "./vec3";
 
@@ -146,6 +150,59 @@ export const createNoiseLayer = (): NoiseLayer => ({
   highCut: 1,
 });
 
+/** A picture layer (`picture` names it; none picked paints nothing yet), placed by the mesh's UVs once. */
+export const createImageLayer = (picture: Partial<ImageLayer> = {}): ImageLayer => ({
+  id: createEntityId(),
+  type: "image",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  textureAssetId: "",
+  wrapS: 1000, // THREE.RepeatWrapping
+  wrapT: 1000,
+  projection: "uv",
+  axis: "y",
+  sharpness: "smooth",
+  crop: false,
+  scale: [1, 1],
+  offset: [0, 0],
+  rotation: 0,
+  ...picture,
+});
+
+export const createNormalLayer = (): NormalLayer => ({
+  id: createEntityId(),
+  type: "normal",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  axes: [true, true, true],
+});
+
+export const createMatcapLayer = (): MatcapLayer => ({
+  id: createEntityId(),
+  type: "matcap",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  preset: "clay", // viewport/matcaps.ts, DEFAULT_MATCAP
+  rotation: 0,
+});
+
+export const createRainbowLayer = (): RainbowLayer => ({
+  id: createEntityId(),
+  type: "rainbow",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  frequency: 30,
+  movement: 0,
+  color: [0, 0, 0],
+  noise: 0,
+  noiseScale: 1,
+  offset: [0, 0, 0],
+});
+
 export const createFresnelLayer = (): FresnelLayer => ({
   id: createEntityId(),
   type: "fresnel",
@@ -166,6 +223,12 @@ export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer => {
       return { ...layer, origin: cloneVector(layer.origin), direction: cloneVector(layer.direction), stops: layer.stops.map((stop) => ({ ...stop })) };
     case "gradient":
       return { ...layer, stops: layer.stops.map((stop) => ({ ...stop })), offset: [...layer.offset], morph: [...layer.morph] };
+    case "image":
+      return { ...layer, scale: [...layer.scale], offset: [...layer.offset] };
+    case "normal":
+      return { ...layer, axes: [...layer.axes] };
+    case "rainbow":
+      return { ...layer, color: [...layer.color], offset: [...layer.offset] };
     case "noise":
       return {
         ...layer,
@@ -228,13 +291,21 @@ export const createPaintLayer = (type: PaintLayerType, depthFar?: number, color 
       return createNoiseLayer();
     case "fresnel":
       return createFresnelLayer();
+    case "image":
+      return createImageLayer();
+    case "normal":
+      return createNormalLayer();
+    case "matcap":
+      return createMatcapLayer();
+    case "rainbow":
+      return createRainbowLayer();
     case "color":
     default:
       return createColorLayer(color);
   }
 };
 
-export type PaintLayerType = Extract<MaterialLayerType, "color" | "depth" | "gradient" | "noise" | "fresnel">;
+export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow">;
 
 /**
  * A layer of `type` in place of `layer`: the same ID, eye, opacity and blend mode, and its Mode

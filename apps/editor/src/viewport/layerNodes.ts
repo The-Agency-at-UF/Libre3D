@@ -28,12 +28,15 @@ import type { NodeMaterial } from "three/webgpu";
 import { diffuseColor, dot, float, materialColor, max, mix, output, positionLocal, positionWorld, sRGBTransferEOTF, sRGBTransferOETF, step, uniform, vec3, vec4 } from "three/tsl";
 import { isPlainPlan, type PlanStep, type StackPlan } from "../scene/layerStack";
 import type { BlendMode } from "../scene/types";
-import { createLayerSource, layerSourceShape, type LayerSource, type SourceContext } from "./layerSources";
+import { createLayerSource, layerSourceShape, type LayerSource, type PictureSource, type SourceContext } from "./layerSources";
+import { collectSlots, objectUniform, setSlotLookup, shaderNode, type Slot } from "./objectValues";
 
 type Node = ReturnType<typeof float>;
 type FloatUniform = ReturnType<typeof uniform<number>>;
 
-const n = (node: unknown): Node => node as Node;
+// A node for the shader: a stack's own value goes in as the shared node reading the drawn object's
+// (objectValues.ts).
+const n = (node: unknown): Node => shaderNode(node) as Node;
 
 interface StepNodes {
   layerId: string;
@@ -53,12 +56,34 @@ interface LayerStackRecord {
   strength: FloatUniform | null;
   // The object whose own space Depth and Noise work in, when it isn't the mesh's: a path, whose end
   // caps are meshes of their own inside it.
-  space: { object: THREE.Object3D; inverse: ReturnType<typeof uniform<THREE.Matrix4>> } | null;
+  space: THREE.Object3D | null;
+  // The values this stack's shader reads for its object, as the sources and steps made them
+  // (objectValues.ts): materials with the same shape share one shader, each with its own values.
+  slots: Slot<unknown>[];
   // Built once per record, on the first shader build.
   colorNode?: Node;
 }
 
 const records = new WeakMap<Material, LayerStackRecord>();
+setSlotLookup((material) => records.get(material)?.slots);
+
+// The drawn object's path's space (LayerStackRecord.space), turned into its own: read per object,
+// as the shader is shared.
+const toPathSpace = new THREE.Matrix4();
+const pathSpace = uniform(new THREE.Matrix4()).onObjectUpdate(({ material }) => {
+  const space = records.get(material as Material)?.space;
+  return space ? toPathSpace.copy(space.matrixWorld).invert() : toPathSpace.identity();
+});
+
+// three only refreshes an object's uniforms when its matrix or one of the material properties it
+// watches changed (NodeMaterialObserver), and a stack's values are none of those. lightMapIntensity
+// is one it watches that these materials never use (they have no light map), so a change of values
+// nudges it.
+const markValuesChanged = (material: Material): void => {
+  const watched = material as Material & { lightMapIntensity?: number; lightMap?: unknown };
+  if (watched.lightMapIntensity === undefined || watched.lightMap) return;
+  watched.lightMapIntensity = watched.lightMapIntensity === 1 ? 1.0000001 : 1;
+};
 
 // The key three's render objects take a node material's shader by goes over its own properties
 // (getMaterialCacheKey), so the stack's shape is kept on the material as a string, where it changes
@@ -78,29 +103,39 @@ const shapeOf = (plan: StackPlan, space: THREE.Object3D | null): string | null =
   ].join("|");
 };
 
-const stepNodes = (step: PlanStep): StepNodes => ({
+const stepNodes = (step: PlanStep, pictures: PictureSource): StepNodes => ({
   layerId: step.layer.id,
-  source: createLayerSource(step.layer),
-  mask: step.mask ? { layerId: step.mask.id, source: createLayerSource(step.mask), opacity: uniform(1) } : null,
-  opacity: uniform(1),
+  source: createLayerSource(step.layer, pictures),
+  mask: step.mask ? { layerId: step.mask.id, source: createLayerSource(step.mask, pictures), opacity: objectUniform(1) } : null,
+  opacity: objectUniform(1),
   mode: step.layer.blendMode,
 });
 
-const updateStep = (nodes: StepNodes, step: PlanStep): void => {
-  nodes.source.update(step.layer);
+// True when a picture changed (an Image layer's): its shader's bindings must be remade.
+const updateStep = (nodes: StepNodes, step: PlanStep, pictures: PictureSource): boolean => {
+  let pictureChanged = nodes.source.update(step.layer, pictures) === true;
   nodes.opacity.value = Math.min(1, Math.max(0, step.layer.opacity));
   if (nodes.mask && step.mask) {
-    nodes.mask.source.update(step.mask);
+    pictureChanged = nodes.mask.source.update(step.mask, pictures) === true || pictureChanged;
     nodes.mask.opacity.value = Math.min(1, Math.max(0, step.mask.opacity));
   }
+  return pictureChanged;
 };
+
+const NO_PICTURES: PictureSource = () => null;
 
 /**
  * Brings `material`'s stack record up to date with `plan`. `space` is the object whose own space
- * Depth and Noise use when it isn't the mesh drawn (a path, for its end caps). Returns true when the
- * shader must be rebuilt (the caller sets `needsUpdate`).
+ * Depth and Noise use when it isn't the mesh drawn (a path, for its end caps); `pictures` gives
+ * Image layers their textures. Returns true when the shader must be rebuilt, or a picture changed
+ * (the caller sets `needsUpdate`).
  */
-export const syncLayerNodes = (material: Material, plan: StackPlan, space: THREE.Object3D | null = null): boolean => {
+export const syncLayerNodes = (
+  material: Material,
+  plan: StackPlan,
+  space: THREE.Object3D | null = null,
+  pictures: PictureSource = NO_PICTURES,
+): boolean => {
   const shape = shapeOf(plan, space);
   const existing = records.get(material);
   const keyed = material as unknown as Record<string, unknown>;
@@ -113,24 +148,27 @@ export const syncLayerNodes = (material: Material, plan: StackPlan, space: THREE
   }
 
   let record = existing;
-  const rebuilt = !record || record.shape !== shape || record.space?.object !== (space ?? undefined);
+  const rebuilt = !record || record.shape !== shape || record.space !== space;
   if (!record || rebuilt) {
-    const inverse = new THREE.Matrix4();
-    record = {
+    const slots: Slot<unknown>[] = [];
+    record = collectSlots(slots, () => ({
       shape,
-      under: plan.folded ? null : plan.under.map(stepNodes),
-      over: plan.over.map(stepNodes),
-      strength: plan.strength < 1 ? uniform(1) : null,
-      space: space ? { object: space, inverse: uniform(inverse).onRenderUpdate(() => inverse.copy(space.matrixWorld).invert()) } : null,
-    };
+      under: plan.folded ? null : plan.under.map((step) => stepNodes(step, pictures)),
+      over: plan.over.map((step) => stepNodes(step, pictures)),
+      strength: plan.strength < 1 ? objectUniform(1) : null,
+      space,
+      slots,
+    }));
     records.set(material, record);
     keyed[SHAPE_KEY] = shape;
   }
 
-  if (record.under) plan.under.forEach((step, index) => updateStep(record.under![index], step));
-  plan.over.forEach((step, index) => updateStep(record.over[index], step));
+  let pictureChanged = false;
+  if (record.under) plan.under.forEach((step, index) => (pictureChanged = updateStep(record.under![index], step, pictures) || pictureChanged));
+  plan.over.forEach((step, index) => (pictureChanged = updateStep(record.over[index], step, pictures) || pictureChanged));
   if (record.strength) record.strength.value = plan.strength;
-  return rebuilt;
+  markValuesChanged(material);
+  return rebuilt || pictureChanged;
 };
 
 /** Forgets a material's record (it's being thrown away). */
@@ -190,7 +228,7 @@ const blendSteps = (steps: StepNodes[], base: Paint, context: SourceContext): Pa
 };
 
 const contextOf = (record: LayerStackRecord): SourceContext => ({
-  objectPosition: record.space ? n(n(record.space.inverse).mul(vec4(positionWorld, 1)).xyz) : n(positionLocal),
+  objectPosition: record.space ? n(n(pathSpace).mul(vec4(positionWorld, 1)).xyz) : n(positionLocal),
 });
 
 // The layers under Lighting as the material's colour node: linear, times the material's own colour
@@ -221,7 +259,7 @@ export const applyLayerNodes = (material: Material, built: NodeMaterial): Node |
   if (!record.strength && record.over.length === 0) return null;
 
   let lit: Paint = { rgb: n(output.rgb), a: n(output.a) };
-  if (record.strength) lit = { rgb: n(mix(diffuseColor.rgb, output.rgb, record.strength)), a: lit.a };
+  if (record.strength) lit = { rgb: n(mix(diffuseColor.rgb, output.rgb, n(record.strength))), a: lit.a };
   if (record.over.length > 0) {
     // On sRGB values, as the colours are picked; a lit colour can be over 1, which tone mapping brings back.
     const shaded: Paint = { rgb: n(sRGBTransferOETF(n(max(lit.rgb, vec3(0, 0, 0))))), a: lit.a };

@@ -370,9 +370,9 @@ An object's material is a stack of layers, **top first** (`materialLayers[0]` is
 
 - **Drawn bottom to top.** Each layer goes over what's under it with its `blendMode` (`"normal" | "multiply" | "screen" | "overlay"`, the W3C compositing formulas on sRGB values) and its `opacity` (0–1, how strongly it shows). Its `enabled` is the row's eye. Every layer is drawn per pixel (`viewport/layerSources.ts`); a stack of Color layers under Lighting is just the material's colour.
 - **Lighting** shades the layers under it; the layers over it are drawn on the shaded colour as they are (a Fresnel there glows, as in Spline). Its opacity is how much shading shows (0 looks unlit, as with its eye off); its blend mode stays `"normal"`. It can't be removed, so it also holds the surface settings (`alphaMode`, `alphaCutoff`, `doubleSided`) and the maps.
-- **Colour layers** are Color, Depth, Gradient, Noise and Fresnel; a row's type dropdown switches among them. An object keeps one that paints: a layer that paints can be removed only while another one stays.
-- **Mask mode** (`mask: true`, on Depth, Gradient, Noise and Fresnel; Spline's Layer Masking): the layer paints nothing and shows the one painting layer right under it only where it's light (`maskTarget`). Over Lighting, another mask or nothing, it masks nothing.
-- **Image layers** (an image plane's picture, an imported model's colour map) fill the material's colour map and stay at the bottom, their opacity and blend mode unused (a full Image layer is task D PR 4b).
+- **Colour layers** are Color, Image, Depth, Gradient, Noise, Fresnel, Normal, Matcap and Rainbow; a row's type dropdown switches among them, and any layer moves anywhere in the stack. An object keeps one that paints: a layer that paints can be removed only while another one stays.
+- **Mask mode** (`mask: true`, on Image, Matcap, Rainbow, Depth, Gradient, Noise and Fresnel; Spline's Layer Masking): the layer paints nothing and shows the one painting layer right under it only where it's light (`maskTarget`). Over Lighting, another mask or nothing, it masks nothing.
+- **Image layers** (an image plane's picture, an imported model's colour map, or one picked in the drawer) are colour layers like the others since PR 4b.
 - New 3D objects start with Lighting (Phong) over a white Color layer; flat ones (`FLAT_ENTITY_TYPES`: plane, shape, image) start unlit and shown from both sides (`createFlatMaterialLayers`).
 
 Every action below edits one object (or, in a batch, several), records one undo step, and records none when the rules refuse it. Refused in view only.
@@ -456,16 +456,31 @@ Reusable materials by ID (`{ id, name, layers }`, layers top first), saved with 
 // (a picture in the texture store; flipY for one uploaded in the editor)
 ```
 
-**ImageLayer** (a picture):
+**ImageLayer** (a picture, Spline's Texture layer):
 ```typescript
 {
   type: "image";
-  textureAssetId: string; // SHA-256 of the stored picture (local storage and S3)
-  slot: "color"; // the other slots (normal, metallicRoughness, emissive, ao) are folded into Lighting's maps on load
-  wrapS: number; // THREE.js wrap constant
+  textureAssetId: string; // SHA-256 of the stored picture (local storage and S3); "" paints nothing
+  name?: string;
+  wrapS: number; // THREE.js wrap constant: 1000 Repeat, 1001 Clamp, 1002 Mirror
   wrapT: number;
+  flipY?: boolean; // true for a picture uploaded or picked in the editor
+  projection: "uv" | "planar" | "spherical" | "cylindrical" | "triplanar";
+  axis: "x" | "y" | "z"; // for planar and cylindrical
+  sharpness: "smooth" | "pixelated";
+  crop: boolean; // keep the picture's shape instead of stretching it
+  scale: [number, number]; // repeats
+  offset: [number, number];
+  rotation: number; // degrees
 }
 ```
+Before PR 4b an Image layer only filled the colour map (with a `slot`): on load it gets its placing, and a white Color layer over it goes (a tinted one turns Multiply). Its other slots became Lighting's maps (PR 4).
+
+**NormalLayer** (colours by the way the surface faces, in the scene's space): `{ type: "normal"; axes: [boolean, boolean, boolean] }` (X, Y, Z as red, green, blue).
+
+**MatcapLayer** (a lit-sphere picture looked up by the camera-space normal): `{ type: "matcap"; preset: string; textureAssetId?: string; name?: string; rotation: number }`. `preset` is one of Libre3D's own (`viewport/matcaps.ts`); `textureAssetId`, when set, is a picture of one's own instead.
+
+**RainbowLayer** (a soap-bubble shimmer): `{ type: "rainbow"; frequency: number; movement: number; color: [r, g, b]; noise: number; noiseScale: number; offset: [x, y, z] }` (defaults 30, 0, 0s, 0, 1, 0s, as Spline's).
 
 **DepthLayer** (colour by distance, as Spline's Depth layer):
 ```typescript

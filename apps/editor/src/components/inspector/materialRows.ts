@@ -5,7 +5,7 @@
  */
 
 import * as THREE from "three";
-import { useEditorStore, type BlendMode, type Entity, type ImageSlot, type MaterialLayer as MaterialLayerData, type MaterialLayerType } from "../../store/useEditorStore";
+import { useEditorStore, type BlendMode, type Entity, type MaterialLayer as MaterialLayerData, type MaterialLayerType } from "../../store/useEditorStore";
 import { colorLayerOf, lightingLayerOf } from "../../scene/layers";
 import { depthReach } from "../../utils/depthColors";
 import { getLiveScene } from "../../viewport/liveViewport";
@@ -20,6 +20,9 @@ export const LAYER_TYPE_NAMES: Record<MaterialLayerType, string> = {
   gradient: "Gradient",
   noise: "Noise",
   fresnel: "Fresnel",
+  normal: "Normal",
+  matcap: "Matcap",
+  rainbow: "Rainbow",
 };
 
 export const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
@@ -30,6 +33,9 @@ export const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
   gradient: "ti-color-filter",
   noise: "ti-grain",
   fresnel: "ti-circle-dot",
+  normal: "ti-compass",
+  matcap: "ti-sphere",
+  rainbow: "ti-rainbow",
 };
 
 export const BLEND_MODE_NAMES: Record<BlendMode, string> = {
@@ -47,14 +53,6 @@ export const BLEND_MODE_ICONS: Record<BlendMode, string> = {
   overlay: "ti-contrast",
 };
 
-// Labelled "Base Color" (not "Color") so an image row reads distinctly from a Color layer.
-export const IMAGE_SLOT_LABELS: Record<ImageSlot, string> = {
-  color: "Base Color",
-  normal: "Normal",
-  metallicRoughness: "Metallic / Roughness",
-  emissive: "Emissive",
-  ao: "Ambient Occlusion",
-};
 
 // How far a new Depth layer on `entityId` reaches: its mesh's farthest point, measured in the live
 // scene (only a mesh takes depth paint). Undefined, for the default, while it isn't drawn yet.
@@ -117,8 +115,7 @@ export const rowsFor = (entities: Entity[]): LayerRowData[] => {
 };
 
 export const rowTitle = (row: LayerRowData): string => {
-  const layer = row.pairs[0].layer;
-  return layer.type === "image" ? IMAGE_SLOT_LABELS[layer.slot] : LAYER_TYPE_NAMES[row.type];
+  return LAYER_TYPE_NAMES[row.type];
 };
 
 export function useRowUpdate(row: LayerRowData) {

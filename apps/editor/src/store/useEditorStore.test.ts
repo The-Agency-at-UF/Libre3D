@@ -1235,8 +1235,17 @@ describe("image planes", () => {
     expect(added).toMatchObject({ type: "image", name: "photo", imageAspect: 1.5, position: [0, 0, 0], scale: [1, 1, 1] });
     expect(added.materialLayers).toEqual([
       expect.objectContaining({ type: "lighting", model: "none", doubleSided: true }),
-      expect.objectContaining({ type: "color", color: "#ffffff", opacity: 1 }),
-      expect.objectContaining({ type: "image", enabled: true, textureAssetId: hash, slot: "color", wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping }),
+      expect.objectContaining({
+        type: "image",
+        enabled: true,
+        opacity: 1,
+        textureAssetId: hash,
+        name: "photo",
+        projection: "uv",
+        scale: [1, 1],
+        wrapS: THREE.ClampToEdgeWrapping,
+        wrapT: THREE.ClampToEdgeWrapping,
+      }),
     ]);
     expect(added.materialLayers![0]).not.toHaveProperty("alphaMode");
     expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);

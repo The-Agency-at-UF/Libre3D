@@ -3340,3 +3340,88 @@ input[type="range"]::-moz-range-thumb {
   width: 100%;
   min-width: 0;
 }
+
+
+/* Picture drawers (LayerSettings.tsx: Image, Matcap): Custom / Assets tabs, the picture's frame with Upload, the scene's pictures */
+.mat-drawer-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.mat-drawer-tabs button {
+  padding: 5px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mat-drawer-tabs button.on {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+.mat-picture-frame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 140px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-input);
+  background-size: cover;
+  background-position: center;
+}
+
+.mat-picture-upload {
+  padding: 9px 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: rgba(10, 10, 12, 0.85);
+  color: var(--text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.mat-picture-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.mat-picture-choice {
+  aspect-ratio: 1;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background-color: var(--bg-input);
+  background-size: cover;
+  background-position: center;
+  cursor: pointer;
+}
+
+.mat-picture-choice.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.mat-toggles {
+  display: flex;
+  flex: 1;
+  gap: 6px;
+}
+
+.mat-toggles .seg-btn {
+  flex: 1;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.mat-picture-choice.round {
+  border-radius: 50%;
+}

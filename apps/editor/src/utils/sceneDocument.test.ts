@@ -314,13 +314,32 @@ describe("schema v5: the material layer stack", () => {
     ]);
 
     expect(cube.materialLayers?.map((layer) => layer.id)).toEqual(["l", "c", "map"]);
-    expect(cube.materialLayers?.[2]).toEqual({ ...v4Image("map", "color"), blendMode: "normal" });
+    // The colour map is a picture layer of its own now, the base colour multiplied over it (PR 4b).
+    expect(cube.materialLayers?.[1]).toMatchObject({ type: "color", color: "#4f8cff", blendMode: "multiply" });
+    const { slot: _slot, ...picture } = v4Image("map", "color");
+    expect(cube.materialLayers?.[2]).toEqual({
+      ...picture,
+      blendMode: "normal",
+      projection: "uv",
+      axis: "y",
+      sharpness: "smooth",
+      crop: false,
+      scale: [1, 1],
+      offset: [0, 0],
+      rotation: 0,
+    });
     const lighting = cube.materialLayers?.[0];
     expect(lighting?.type === "lighting" && lighting.maps).toEqual({
       normal: { textureAssetId: "t-normal", wrapS: 1000, wrapT: 1000 },
       roughness: { textureAssetId: "t-mr", wrapS: 1000, wrapT: 1000 },
       metalness: { textureAssetId: "t-mr", wrapS: 1000, wrapT: 1000 },
     });
+  });
+
+  it("drops the white Color layer an image plane's picture was tinted with (PR 4b)", () => {
+    const { cube } = openV4([v4Lighting(), v4Color({ color: "#FFFFFF" }), v4Image("map", "color")]);
+
+    expect(cube.materialLayers?.map((layer) => layer.type)).toEqual(["lighting", "image"]);
   });
 
   it("gives a stack without a Lighting layer the physical one v4 drew it with", () => {

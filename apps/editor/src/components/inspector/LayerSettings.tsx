@@ -13,17 +13,22 @@ import {
   type FresnelLayer,
   type GradientLayer,
   type ImageLayer,
+  type ImageProjection,
   type LightingLayer,
   type LightingMapSlot,
   type LightingModel,
+  type MatcapLayer,
   type NoiseLayer,
   type NoiseType,
+  type NormalLayer,
+  type RainbowLayer,
   type TextureRef,
   type VoronoiStyle,
 } from "../../store/useEditorStore";
 import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../../scene/layers";
 import { loadTextureForScene } from "../../utils/assetTransfers";
 import { importMapFile } from "../../utils/importImage";
+import { MATCAP_PRESETS, matcapPixels } from "../../viewport/matcaps";
 import { editDepth } from "../../viewport/hooks/useViewportDepthGizmo";
 import { ColorField } from "../ui/ColorField";
 import { ColorPicker, type ColorChange } from "../ui/ColorPicker";
@@ -32,7 +37,7 @@ import { Select } from "../ui/Select";
 import { Slider } from "../ui/Slider";
 import { Switch } from "../ui/Switch";
 import { RampEditor } from "./RampEditor";
-import { IMAGE_SLOT_LABELS, useRowUpdate, type LayerRowData } from "./materialRows";
+import { useRowUpdate, type LayerRowData } from "./materialRows";
 
 const LIGHTING_MODEL_OPTIONS: { label: string; value: LightingModel }[] = [
   { label: "None", value: "none" },
@@ -315,7 +320,7 @@ const scenePictures = (entities: Entity[]): Array<TextureRef & { name: string }>
   for (const entity of entities) {
     for (const layer of entity.materialLayers ?? []) {
       if (layer.type === "image" && !pictures.has(layer.textureAssetId)) {
-        pictures.set(layer.textureAssetId, { textureAssetId: layer.textureAssetId, wrapS: layer.wrapS, wrapT: layer.wrapT, name: entity.name });
+        pictures.set(layer.textureAssetId, { textureAssetId: layer.textureAssetId, wrapS: layer.wrapS, wrapT: layer.wrapT, flipY: layer.flipY, name: layer.name ?? entity.name });
       }
       if (layer.type !== "lighting") continue;
       for (const [slot, ref] of Object.entries(layer.maps ?? {})) {
@@ -540,6 +545,120 @@ export function NoiseSettings({ row }: { row: LayerRowData }) {
   );
 }
 
+// A Normal layer, as Spline's: which of the surface direction's X, Y and Z colour it (red, green, blue).
+export function NormalSettings({ row }: { row: LayerRowData }) {
+  const update = useRowUpdate(row);
+  const layer = row.pairs[0].layer as NormalLayer;
+  return (
+    <div className="prop">
+      <span className="prop-label">Direction</span>
+      <div className="mat-toggles">
+        {["X", "Y", "Z"].map((axis, index) => (
+          <button
+            key={axis}
+            type="button"
+            className={`seg-btn ${layer.axes[index] ? "on" : ""}`}
+            aria-pressed={layer.axes[index]}
+            title={`${layer.axes[index] ? "Leave out" : "Use"} the surface's ${axis} direction (${["red", "green", "blue"][index]})`}
+            onClick={() => update({ axes: layer.axes.map((on, i) => (i === index ? !on : on)) as NormalLayer["axes"] })}
+          >
+            {axis}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Each matcap preset's thumbnail, drawn once (viewport/matcaps.ts gives its pixels bottom row first).
+const matcapThumbnails = new Map<string, string>();
+const matcapThumbnail = (id: string): string => {
+  let url = matcapThumbnails.get(id);
+  if (!url) {
+    const size = 96;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size;
+    const pixels = matcapPixels(id, size);
+    const image = new ImageData(size, size);
+    for (let row = 0; row < size; row++) image.data.set(pixels.subarray(row * size * 4, (row + 1) * size * 4), (size - 1 - row) * size * 4);
+    canvas.getContext("2d")?.putImageData(image, 0, 0);
+    url = canvas.toDataURL();
+    matcapThumbnails.set(id, url);
+  }
+  return url;
+};
+
+// A Matcap layer, as Spline's drawer: Assets (Libre3D's own matcaps) or Custom (a picture of the
+// person's own, uploaded; on /try it stays in the browser), Rotation, and Mode.
+export function MatcapSettings({ row }: { row: LayerRowData }) {
+  const update = useRowUpdate(row);
+  const layer = row.pairs[0].layer as MatcapLayer;
+  const [tab, setTab] = useState<"custom" | "assets">(layer.textureAssetId ? "custom" : "assets");
+  return (
+    <>
+      <DrawerTabs
+        tabs={[
+          { value: "custom", label: "Custom" },
+          { value: "assets", label: "Assets" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      <NumberRow label="Rotation" value={layer.rotation} step={1} onChange={(rotation) => update({ rotation })} />
+      <ModeRow row={row} />
+      {tab === "custom" ? (
+        <PictureFrame
+          textureAssetId={layer.textureAssetId ?? ""}
+          label="Upload Image"
+          onUpload={(picture) => update({ textureAssetId: picture.textureAssetId, name: picture.name } as Partial<MatcapLayer>)}
+        />
+      ) : (
+        <div className="mat-picture-grid">
+          {Object.entries(MATCAP_PRESETS).map(([id, look]) => {
+            const on = !layer.textureAssetId && layer.preset === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                className={`mat-picture-choice round ${on ? "on" : ""}`}
+                title={look.name}
+                aria-label={look.name}
+                aria-pressed={on}
+                style={{ backgroundImage: `url(${matcapThumbnail(id)})` }}
+                onClick={() => update({ preset: id, textureAssetId: undefined, name: undefined } as Partial<MatcapLayer>)}
+              />
+            );
+          })}
+        </div>
+      )}
+    </>
+  );
+}
+
+// A Rainbow layer, as Spline's drawer: Mode, Frequency, Movement, Color (a shift per band), Noise,
+// Noise Scale and Offset.
+export function RainbowSettings({ row }: { row: LayerRowData }) {
+  const update = useRowUpdate(row);
+  const layer = row.pairs[0].layer as RainbowLayer;
+  const setAxis = (key: "color" | "offset", axis: number, value: number) => {
+    if (value === layer[key][axis]) return;
+    const next: [number, number, number] = [...layer[key]];
+    next[axis] = value;
+    update({ [key]: next });
+  };
+  return (
+    <>
+      <ModeRow row={row} />
+      <NumberRow label="Frequency" value={layer.frequency} min={0} step={1} onChange={(frequency) => update({ frequency })} />
+      <NumberRow label="Movement" value={layer.movement} step={0.1} onChange={(movement) => update({ movement })} />
+      <AxesRow label="Color" axes={["R", "G", "B"]} values={layer.color} step={0.05} onChange={(axis, value) => setAxis("color", axis, value)} />
+      <NumberRow label="Noise" value={layer.noise} min={0} step={0.1} onChange={(noise) => update({ noise })} />
+      <NumberRow label="Noise Scale" value={layer.noiseScale} min={0} step={0.1} onChange={(noiseScale) => update({ noiseScale })} />
+      <AxesRow label="Offset" axes={["X", "Y", "Z"]} values={layer.offset} step={0.1} onChange={(axis, value) => setAxis("offset", axis, value)} />
+    </>
+  );
+}
+
 // A Fresnel layer, as Spline's: its colour where the surface turns away from the camera, as much as
 // clamp(bias + scale * (1 - |N·V|)^intensity) * factor. Over Lighting it glows.
 export function FresnelSettings({ row }: { row: LayerRowData }) {
@@ -558,35 +677,175 @@ export function FresnelSettings({ row }: { row: LayerRowData }) {
   );
 }
 
-// An imported texture map: its thumbnail, loaded lazily from the texture store (the pixels never
-// live in the store), so an object URL is made while it shows.
-export function ImageSettings({ layer }: { layer: ImageLayer }) {
-  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
-
+// A picture from the texture store as an object URL, for a thumbnail, while it shows; null while it
+// loads (or when it can't be had).
+function usePictureUrl(textureAssetId: string): string | null {
+  const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
+    setUrl(null);
+    if (!textureAssetId) return;
     let objectUrl: string | null = null;
     let cancelled = false;
-    loadTextureForScene(layer.textureAssetId)
+    loadTextureForScene(textureAssetId)
       .then((blob) => {
         if (cancelled || !blob) return;
         objectUrl = URL.createObjectURL(blob);
-        setThumbUrl(objectUrl);
+        setUrl(objectUrl);
       })
       .catch(() => {
-        /* thumbnail is best-effort; a missing asset just shows the placeholder */
+        /* a thumbnail is best-effort; a missing picture just shows the empty frame */
       });
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [layer.textureAssetId]);
+  }, [textureAssetId]);
+  return url;
+}
 
+/** Custom / Assets at the top of a picture drawer (Image, Matcap), as Spline's. */
+export function DrawerTabs<T extends string>({ tabs, value, onChange }: { tabs: { value: T; label: string }[]; value: T; onChange: (value: T) => void }) {
+  return (
+    <div className="mat-drawer-tabs" role="tablist">
+      {tabs.map((tab) => (
+        <button key={tab.value} type="button" role="tab" aria-selected={tab.value === value} className={tab.value === value ? "on" : ""} onClick={() => onChange(tab.value)}>
+          {tab.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A picture's frame: its thumbnail, with an Upload button over it (a PNG or JPEG from the computer). */
+function PictureFrame({ textureAssetId, label, onUpload }: { textureAssetId: string; label: string; onUpload: (ref: TextureRef) => void }) {
+  const url = usePictureUrl(textureAssetId);
+  const file = useRef<HTMLInputElement>(null);
+  return (
+    <div className="mat-picture-frame" style={{ backgroundImage: url ? `url(${url})` : undefined }}>
+      <button type="button" className="mat-picture-upload" onClick={() => file.current?.click()}>
+        {label}
+      </button>
+      <input
+        ref={file}
+        type="file"
+        accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+        hidden
+        aria-label={label}
+        onChange={(event) => {
+          const picked = event.target.files?.[0];
+          event.target.value = "";
+          if (picked) void importMapFile(picked).then((ref) => ref && onUpload(ref));
+        }}
+      />
+    </div>
+  );
+}
+
+/** The scene's pictures as thumbnails to pick from (a picture drawer's Assets tab). */
+function PictureGrid({ current, onPick }: { current: string; onPick: (picture: TextureRef & { name: string }) => void }) {
+  const entities = useEditorStore((state) => state.entities);
+  const pictures = scenePictures(entities);
+  if (pictures.length === 0) return <p className="mat-drawer-note">No pictures in the scene yet: upload one under Custom.</p>;
+  return (
+    <div className="mat-picture-grid">
+      {pictures.map((picture) => (
+        <PictureChoice key={picture.textureAssetId} picture={picture} on={picture.textureAssetId === current} onPick={() => onPick(picture)} />
+      ))}
+    </div>
+  );
+}
+
+function PictureChoice({ picture, on, onPick }: { picture: TextureRef & { name: string }; on: boolean; onPick: () => void }) {
+  const url = usePictureUrl(picture.textureAssetId);
+  return (
+    <button
+      type="button"
+      className={`mat-picture-choice ${on ? "on" : ""}`}
+      title={picture.name}
+      aria-label={picture.name}
+      aria-pressed={on}
+      style={{ backgroundImage: url ? `url(${url})` : undefined }}
+      onClick={onPick}
+    />
+  );
+}
+
+const PROJECTION_OPTIONS: { label: string; value: ImageProjection }[] = [
+  { label: "UV", value: "uv" },
+  { label: "Planar", value: "planar" },
+  { label: "Spherical", value: "spherical" },
+  { label: "Cylindrical", value: "cylindrical" },
+  { label: "Triplanar", value: "triplanar" },
+];
+
+const AXIS_OPTIONS = [
+  { label: "X", value: "x" },
+  { label: "Y", value: "y" },
+  { label: "Z", value: "z" },
+];
+
+// three's wrap constants: Repeat, Clamp (to the edge), Mirror (repeat mirrored).
+const WRAPPING_OPTIONS = [
+  { label: "Repeat", value: "1000" },
+  { label: "Clamp", value: "1001" },
+  { label: "Mirror", value: "1002" },
+];
+
+const SHARPNESS_OPTIONS = [
+  { label: "Smooth", value: "smooth" },
+  { label: "Pixelated", value: "pixelated" },
+];
+
+const YES_NO = [
+  { label: "Yes", value: "yes" },
+  { label: "No", value: "no" },
+];
+
+// An Image layer, as Spline's Texture drawer: Custom (its picture, Upload) or Assets (the scene's
+// pictures), Mode, and how it's placed. An uploaded or picked picture is drawn the way up it was
+// made on three's primitives (flipY); an image plane's and an import's own keep glTF's way.
+export function ImageSettings({ row }: { row: LayerRowData }) {
+  const update = useRowUpdate(row);
+  const layer = row.pairs[0].layer as ImageLayer;
+  const [tab, setTab] = useState<"custom" | "assets">("custom");
+  const setPicture = (picture: TextureRef) =>
+    update({ textureAssetId: picture.textureAssetId, name: picture.name, flipY: true } as Partial<ImageLayer>);
+  const setPair = (key: "scale" | "offset", axis: number, value: number) => {
+    if (value === layer[key][axis]) return;
+    const next: [number, number] = [...layer[key]];
+    next[axis] = value;
+    update({ [key]: next });
+  };
+  const axial = layer.projection === "planar" || layer.projection === "cylindrical";
   return (
     <>
-      <div className="mat-drawer-thumb" style={{ backgroundImage: thumbUrl ? `url(${thumbUrl})` : undefined }} />
-      <p className="mat-drawer-note">
-        From the imported model: fills its {IMAGE_SLOT_LABELS[layer.slot]} map. Its eye shows or hides the map.
-      </p>
+      <DrawerTabs
+        tabs={[
+          { value: "custom", label: "Custom" },
+          { value: "assets", label: "Assets" },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+      <ModeRow row={row} />
+      {tab === "custom" ? (
+        <PictureFrame textureAssetId={layer.textureAssetId} label="Upload" onUpload={setPicture} />
+      ) : (
+        <PictureGrid current={layer.textureAssetId} onPick={setPicture} />
+      )}
+      <Select label="Projection" options={PROJECTION_OPTIONS} value={layer.projection} onChange={(value) => update({ projection: value as ImageProjection })} />
+      {axial && <Select label="Axis" options={AXIS_OPTIONS} value={layer.axis} onChange={(value) => update({ axis: value as ImageLayer["axis"] })} />}
+      <Select
+        label="Wrapping"
+        options={WRAPPING_OPTIONS}
+        value={String(layer.wrapS)}
+        onChange={(value) => update({ wrapS: Number(value), wrapT: Number(value) })}
+      />
+      <Select label="Sharpness" options={SHARPNESS_OPTIONS} value={layer.sharpness} onChange={(value) => update({ sharpness: value as ImageLayer["sharpness"] })} />
+      <SegmentedRow label="Crop" options={YES_NO} value={layer.crop ? "yes" : "no"} onChange={(value) => update({ crop: value === "yes" })} />
+      <AxesRow label="Scale" axes={["X", "Y"]} values={layer.scale} step={0.1} onChange={(axis, value) => setPair("scale", axis, value)} />
+      <AxesRow label="Offset" axes={["X", "Y"]} values={layer.offset} step={0.01} onChange={(axis, value) => setPair("offset", axis, value)} />
+      <NumberRow label="Rotation" value={layer.rotation} step={1} onChange={(rotation) => update({ rotation })} />
     </>
   );
 }
