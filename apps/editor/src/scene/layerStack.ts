@@ -198,24 +198,25 @@ export const sortedStops = (stops: RampStop[]): RampStop[] =>
 /**
  * A ramp's colour at `t`, as Spline's: from the first stop, each next stop blended in over its own
  * span (clamped, eased when `smooth`), so a `t` before the first stop or past the last takes that
- * stop's colour. In sRGB, as the stops are picked; alpha blends the same way.
+ * stop's colour. In sRGB, as the stops are picked, and premultiplied by alpha, as CSS gradients
+ * blend: a see-through stop's colour counts only as much as it shows, so a fade from see-through
+ * white to navy goes see-through to navy, not through a grey haze.
  */
 export const sampleRamp = (stops: RampStop[], smooth: boolean, t: number): Paint => {
   const ordered = sortedStops(stops);
   if (ordered.length === 0) return WHITE;
-  const first = paintOf(ordered[0]);
-  const rgb: RGB = [...first.rgb];
-  let alpha = first.alpha;
+  const premultiplied = (paint: Paint): [number, number, number, number] => [...(paint.rgb.map((c) => c * paint.alpha) as RGB), paint.alpha];
+  const blended = premultiplied(paintOf(ordered[0]));
   for (let i = 1; i < ordered.length; i++) {
     const from = ordered[i - 1].position;
     const span = ordered[i].position - from;
     let amount = span !== 0 ? clamp01((t - from) / span) : t >= from ? 1 : 0;
     if (smooth) amount = amount * amount * (3 - 2 * amount);
-    const next = paintOf(ordered[i]);
-    for (let c = 0; c < 3; c++) rgb[c] += (next.rgb[c] - rgb[c]) * amount;
-    alpha += (next.alpha - alpha) * amount;
+    const next = premultiplied(paintOf(ordered[i]));
+    for (let c = 0; c < 4; c++) blended[c] += (next[c] - blended[c]) * amount;
   }
-  return { rgb, alpha };
+  const alpha = blended[3];
+  return { rgb: alpha > 0 ? [blended[0] / alpha, blended[1] / alpha, blended[2] / alpha] : [0, 0, 0], alpha };
 };
 
 /** A new stop for a ramp at `t`: the colour the ramp has there. */

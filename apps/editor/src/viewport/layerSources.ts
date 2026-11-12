@@ -118,18 +118,23 @@ const updateRamp = (ramp: RampUniforms, stops: RampStop[], smooth: boolean): voi
   ramp.smooth.value = smooth ? 1 : 0;
 };
 
+// A colour with its alpha, premultiplied (rgb × a) and back: colours with alpha are blended
+// premultiplied, as CSS gradients are (scene/layerStack.ts, sampleRamp).
+const premultiply = (color: Node): Node => n(vec4(n(color.xyz).mul(n(color.w)), n(color.w)));
+const unpremultiply = (color: Node): Node => n(vec4(n(color.xyz).div(max(n(color.w), 1e-6)), n(color.w)));
+
 /** The ramp's colour at `t` (scene/layerStack.ts, sampleRamp): each stop blended in over its own span. */
 const sampleRampNode = (ramp: RampUniforms, t: Node): Node => {
-  let color = n(ramp.colors[0]);
+  let color = premultiply(n(ramp.colors[0]));
   for (let i = 1; i < ramp.colors.length; i++) {
     const from = n(ramp.positions[i - 1]);
     const span = n(ramp.positions[i]).sub(from);
     const blended = clamp(t.sub(from).div(max(span, 1e-6)), 0, 1);
     let amount = n(select(span.greaterThan(0), blended, step(from, t)));
     amount = n(mix(amount, amount.mul(amount).mul(float(3).sub(amount.mul(2))), n(ramp.smooth)));
-    color = n(mix(color, n(ramp.colors[i]), amount));
+    color = n(mix(color, premultiply(n(ramp.colors[i])), amount));
   }
-  return color;
+  return unpremultiply(color);
 };
 
 const stopCount = (stops: RampStop[]): number => Math.max(1, sortedStops(stops).length);
@@ -382,9 +387,10 @@ const noiseSource = (first: NoiseLayer): LayerSource => {
       const raw = value(n(p.add(vec3(r.mul(n(distortion).y).mul(4), 0))));
       const span = n(max(n(highCut).sub(n(lowCut)), 1e-4));
       const f = n(clamp(raw.sub(n(lowCut)).div(span), 0, 1));
-      let color = n(mix(n(colors[0]), n(colors[1]), clamp(f.mul(f).mul(4), 0, 1)));
-      color = n(mix(color, n(colors[2]), clamp(length(q), 0, 1)));
-      color = n(mix(color, n(colors[3]), clamp(r.x, 0, 1)));
+      // Premultiplied, as a ramp is: a see-through colour adds only as much as it shows.
+      let color = n(mix(premultiply(n(colors[0])), premultiply(n(colors[1])), clamp(f.mul(f).mul(4), 0, 1)));
+      color = n(mix(color, premultiply(n(colors[2])), clamp(length(q), 0, 1)));
+      color = unpremultiply(n(mix(color, premultiply(n(colors[3])), clamp(r.x, 0, 1))));
       return { rgb: n(color.xyz), a: n(color.w) };
     },
   };

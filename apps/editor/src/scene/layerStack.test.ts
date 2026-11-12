@@ -208,6 +208,18 @@ describe("ramps", () => {
     expect(sampleRamp(stops, false, 0.25).alpha).toBeCloseTo(0.25);
   });
 
+  it("blends premultiplied, as CSS does: a see-through stop's colour doesn't show", () => {
+    // See-through white to navy: navy at half strength halfway, not a grey haze.
+    const stops = [
+      { color: "#ffffff", alpha: 0, position: 0 },
+      { color: "#0a061f", position: 1 },
+    ];
+    const half = sampleRamp(stops, false, 0.5);
+    expect(half.alpha).toBeCloseTo(0.5, 9);
+    close(half.rgb, hexToRgb("#0a061f"));
+    expect(sampleRamp(stops, false, 0).alpha).toBe(0);
+  });
+
   it("turns around", () => {
     expect(reverseStops(depth().stops)).toEqual([
       { color: "#000000", position: 1 },
