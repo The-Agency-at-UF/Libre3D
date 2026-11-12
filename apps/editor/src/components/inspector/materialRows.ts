@@ -21,6 +21,7 @@ export const LAYER_TYPE_NAMES: Record<MaterialLayerType, string> = {
   noise: "Noise",
   fresnel: "Fresnel",
   normal: "Normal",
+  matcap: "Matcap",
 };
 
 export const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
@@ -32,6 +33,7 @@ export const LAYER_TYPE_ICONS: Record<MaterialLayerType, string> = {
   noise: "ti-grain",
   fresnel: "ti-circle-dot",
   normal: "ti-compass",
+  matcap: "ti-sphere",
 };
 
 export const BLEND_MODE_NAMES: Record<BlendMode, string> = {

@@ -13,7 +13,7 @@ import type { ShapeData } from "../paths/shapeGeometry";
 
 export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
 
-export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal";
+export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
 
 // How a layer goes over the layers under it. The stack is drawn bottom to top, and
@@ -199,7 +199,20 @@ export interface NormalLayer extends LayerBase {
   axes: [boolean, boolean, boolean];
 }
 
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | NormalLayer;
+// A "material capture" picture of a lit sphere, looked up by the way the surface faces the camera,
+// as Spline's Matcap layer: it makes the object look like that material whatever the lights. One of
+// Libre3D's own (`preset`, viewport/matcaps.ts), or a picture of the person's own when
+// `textureAssetId` is set (in the texture store, as an Image layer's). `rotation` (degrees) turns it
+// about the view.
+export interface MatcapLayer extends LayerBase {
+  type: "matcap";
+  preset: string;
+  textureAssetId?: string;
+  name?: string;
+  rotation: number;
+}
+
+export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer | GradientLayer | NoiseLayer | FresnelLayer | NormalLayer | MatcapLayer;
 
 /** A reusable material: the scene document's `materials` section, by ID (task D, PR 6). */
 export interface MaterialAsset {

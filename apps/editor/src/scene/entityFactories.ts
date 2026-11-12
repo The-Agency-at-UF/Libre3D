@@ -28,6 +28,7 @@ import type {
   LightingLayer,
   MaterialLayer,
   MaterialLayerType,
+  MatcapLayer,
   NoiseLayer,
   NormalLayer,
 } from "./types";
@@ -177,6 +178,16 @@ export const createNormalLayer = (): NormalLayer => ({
   axes: [true, true, true],
 });
 
+export const createMatcapLayer = (): MatcapLayer => ({
+  id: createEntityId(),
+  type: "matcap",
+  enabled: true,
+  opacity: 1,
+  blendMode: "normal",
+  preset: "clay", // viewport/matcaps.ts, DEFAULT_MATCAP
+  rotation: 0,
+});
+
 export const createFresnelLayer = (): FresnelLayer => ({
   id: createEntityId(),
   type: "fresnel",
@@ -267,13 +278,15 @@ export const createPaintLayer = (type: PaintLayerType, depthFar?: number, color 
       return createImageLayer();
     case "normal":
       return createNormalLayer();
+    case "matcap":
+      return createMatcapLayer();
     case "color":
     default:
       return createColorLayer(color);
   }
 };
 
-export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal">;
+export type PaintLayerType = Extract<MaterialLayerType, "color" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap">;
 
 /**
  * A layer of `type` in place of `layer`: the same ID, eye, opacity and blend mode, and its Mode

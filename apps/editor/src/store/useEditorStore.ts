@@ -97,6 +97,7 @@ export type {
   GradientLayer,
   LightingMapSlot,
   NoiseLayer,
+  MatcapLayer,
   NoiseType,
   NormalLayer,
   PaintColor,

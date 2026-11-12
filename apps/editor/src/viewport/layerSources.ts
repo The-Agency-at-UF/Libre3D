@@ -26,6 +26,7 @@ import {
   Fn,
   fract,
   length,
+  matcapUV,
   max,
   min,
   mix,
@@ -51,6 +52,7 @@ import {
   vec4,
 } from "three/tsl";
 import { hexToRgb, sortedStops, type PaintLayer } from "../scene/layerStack";
+import { DEFAULT_MATCAP, matcapTexture } from "./matcaps";
 import { objectSlot, objectTexture, objectUniform, shaderNode } from "./objectValues";
 import type { DepthLayer, FresnelLayer, GradientLayer, ImageLayer, NoiseLayer, PaintColor, RampStop, TextureRef } from "../scene/types";
 
@@ -492,6 +494,33 @@ const normalSource = (): LayerSource => {
   };
 };
 
+// ─── Matcap ──────────────────────────────────────────────────────────────────
+
+const matcapSource = (): LayerSource => {
+  const picture = objectSlot<THREE.Texture>(matcapTexture(DEFAULT_MATCAP));
+  const rotation = objectUniform(0);
+  return {
+    update(layer, pictures) {
+      if (layer.type !== "matcap") return false;
+      rotation.value = (layer.rotation * Math.PI) / 180;
+      const own = layer.textureAssetId ? pictures({ textureAssetId: layer.textureAssetId, wrapS: 1001, wrapT: 1001, flipY: true }, { nearest: false }) : null;
+      const next = own ?? matcapTexture(layer.preset);
+      if (next === picture.value) return false;
+      picture.value = next;
+      return true;
+    },
+    node() {
+      // Where the surface's view-space normal points, on the picture; turned about its middle.
+      const at = n(matcapUV).sub(0.5);
+      const cosine = n(n(rotation).cos());
+      const sine = n(n(rotation).sin());
+      const turned = n(vec2(at.x.mul(cosine).sub(at.y.mul(sine)), at.x.mul(sine).add(at.y.mul(cosine))).add(0.5));
+      const color = n(objectTexture(picture, turned));
+      return { rgb: n(sRGBTransferOETF(n(color.rgb))), a: float(1) };
+    },
+  };
+};
+
 // ─── Fresnel ─────────────────────────────────────────────────────────────────
 
 const fresnelSource = (): LayerSource => {
@@ -534,7 +563,9 @@ export const createLayerSource = (layer: PaintLayer, pictures: PictureSource): L
               ? imageSource(layer)
               : layer.type === "normal"
                 ? normalSource()
-                : colorSource();
+                : layer.type === "matcap"
+                  ? matcapSource()
+                  : colorSource();
   source.update(layer, pictures);
   return source;
 };
@@ -552,6 +583,8 @@ export const layerSourceShape = (layer: PaintLayer): string => {
       return "fresnel";
     case "normal":
       return "normal";
+    case "matcap":
+      return "matcap";
     case "image":
       return `image:${layer.projection}${layer.projection === "planar" || layer.projection === "cylindrical" ? `:${layer.axis}` : ""}`;
     case "color":

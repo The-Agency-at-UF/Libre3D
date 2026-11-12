@@ -271,7 +271,11 @@ export class EntityMaterials {
       const material = obj.material as THREE.Material;
       if ([...textureBindings(layers).values()].some((binding) => textureKey(binding) === key)) this.applyTextures(material, layers);
       const usesPicture = layers.some(
-        (layer) => layer.type === "image" && textureKey({ ref: layer, srgb: true, nearest: layer.sharpness === "pixelated" }) === key,
+        (layer) =>
+          (layer.type === "image" && textureKey({ ref: layer, srgb: true, nearest: layer.sharpness === "pixelated" }) === key) ||
+          (layer.type === "matcap" &&
+            !!layer.textureAssetId &&
+            textureKey({ ref: { textureAssetId: layer.textureAssetId, wrapS: 1001, wrapT: 1001, flipY: true }, srgb: true, nearest: false }) === key),
       );
       if (usesPicture && syncLayerNodes(material, planStack(layers), spaceOf(obj), this.pictures)) material.needsUpdate = true;
     }
