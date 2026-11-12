@@ -70,7 +70,6 @@ import {
 import { canRemoveLayer, canSwitchLayerType, isColorLayerType, moveLayer, newLayerIndex } from "../scene/layerStack";
 import type {
   CameraProfile,
-  ColorLayer,
   DeepPartial,
   Entity,
   EntityType,
