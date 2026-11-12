@@ -186,7 +186,7 @@ export class ImportedModels {
     this.host.applyParenting(this.host.source.getEntities());
 
     // Fire-and-forget: derive editable material layers for any resolved mesh
-    // that doesn't have them yet (fresh imports and pre-upgrade imports alike).
+    // that doesn't have them yet.
     // Writing them back re-triggers a sync, which reconciles the material — the
     // parsed glTF material and its textures stay untouched on that pass.
     void this.backfillMaterialLayers(resolvedObjects);
@@ -195,9 +195,8 @@ export class ImportedModels {
 
   // Derives editable Color/Lighting/Image layers from the parsed glTF material of
   // any resolved import mesh that has none yet, and writes them back to the store.
-  // This is where both fresh imports (nodes created without materialLayers) and
-  // pre-upgrade imports (materialLayers: undefined in old persisted state) get a
-  // real layer stack — it can't happen at migrate() time, which has no parsed glTF.
+  // An import's nodes are created without materialLayers; this is where they get a real layer
+  // stack, because it takes the parsed glTF, which exists only here.
   private async backfillMaterialLayers(
     resolved: Array<{ entityId: string; object: THREE.Object3D }>,
   ): Promise<void> {

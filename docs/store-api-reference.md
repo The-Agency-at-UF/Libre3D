@@ -271,9 +271,6 @@ Dissolve a group, promoting children to its parent level.
 - **States**: The group's own states go with it
 - **Safety**: Only works on groups; silently fails on primitives
 
-#### `applyHierarchyPrune(removedIds: Set<string>, updates: Map<string, {...}>) → void`
-Internal action used during GLB import cleanup. Removes orphaned nodes and applies transform updates. (Rarely called directly.)
-
 ---
 
 ## Viewport & Transform

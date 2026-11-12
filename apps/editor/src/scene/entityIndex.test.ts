@@ -96,7 +96,7 @@ describe("getDescendantIds", () => {
     expect(getDescendantIds(entities, "a1")).not.toContain("a2");
   });
 
-  it("terminates on a parent cycle from corrupted persisted state", () => {
+  it("terminates on a parent cycle from a damaged document", () => {
     const entities = [
       makeEntity("x", { parentId: "y" }),
       makeEntity("y", { parentId: "x" }),
@@ -112,7 +112,7 @@ describe("getAncestorIds", () => {
     expect(getAncestorIds(entities, "groupA")).toEqual([]);
   });
 
-  it("terminates on a parent cycle from corrupted persisted state", () => {
+  it("terminates on a parent cycle from a damaged document", () => {
     const entities = [
       makeEntity("x", { parentId: "y" }),
       makeEntity("y", { parentId: "x" }),
