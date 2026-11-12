@@ -441,8 +441,8 @@ describe("Glass and Displace", () => {
   const glass = { ...createGlassLayer(), id: "glass" };
   const displace = { ...createDisplaceLayer(), id: "displace" };
 
-  it("take Spline's defaults", () => {
-    expect(createGlassLayer()).toMatchObject({ blur: 10, thickness: 10, ior: 1.5, absorption: "#ffffff", absorbDistance: 0 });
+  it("take Spline's defaults (Glass's Blur halved)", () => {
+    expect(createGlassLayer()).toMatchObject({ blur: 5, thickness: 10, ior: 1.5, absorption: "#ffffff", absorbDistance: 0 });
     expect(createDisplaceLayer()).toMatchObject({ displaceType: "simplex", scale: 10, movement: 1, offset: [0, 0, 0], intensity: 8 });
   });
 

@@ -484,7 +484,7 @@ Before PR 4b an Image layer only filled the colour map (with a `slot`): on load 
 
 **RainbowLayer** (a soap-bubble shimmer): `{ type: "rainbow"; frequency: number; movement: number; color: [r, g, b]; noise: number; noiseScale: number; offset: [x, y, z] }` (defaults 30, 0, 0s, 0, 1, 0s, as Spline's).
 
-**GlassLayer** (what's behind the object, bent and blurred, as Spline's Glass / Transmission): `{ type: "glass"; blur: number; thickness: number; ior: number; absorption: string; absorbDistance: number }` (defaults 10, 10, 1.5, `#ffffff`, 0, as Spline's). Blur is 0–10 (Spline's roughness × 10); thickness and absorbDistance are in hundredths of the object's own units, as Spline's sizes are a hundred times Libre3D's; absorbDistance 0 = no tint.
+**GlassLayer** (what's behind the object, bent and blurred, as Spline's Glass / Transmission): `{ type: "glass"; blur: number; thickness: number; ior: number; absorption: string; absorbDistance: number }` (defaults 5, 10, 1.5, `#ffffff`, 0: Spline's, with half its Blur). Blur is 0–10 (Spline's roughness × 10); thickness and absorbDistance are in hundredths of the object's own units, as Spline's sizes are a hundred times Libre3D's; absorbDistance 0 = no tint.
 
 **DisplaceLayer** (moves the surface along its normals): `{ type: "displace"; displaceType: NoiseType | "image"; scale; movement; offset: [x, y, z]; intensity; voronoiStyle; smoothness; seed; lowCut; highCut; quality: "low" | "medium" | "high"; textureAssetId?; name? }` (defaults simplex, 10, 1, 0s, 8, as Spline's; quality medium). The noise fields are the Noise layer's; `"image"` takes a picture's lightness at the UV. Intensity is in hundredths of the object's own units.
 

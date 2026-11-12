@@ -205,7 +205,8 @@ export const createRainbowLayer = (): RainbowLayer => ({
   offset: [0, 0, 0],
 });
 
-// Spline's defaults (its player, @splinetool/runtime 2.0.178), as its drawer shows them.
+// Spline's defaults (its player, @splinetool/runtime 2.0.178), as its drawer shows them; Glass's Blur
+// starts at 5, not Spline's 10, for a clearer first look (Emily, 2026-11-12).
 export const createGlassLayer = (): GlassLayer => ({
   id: createEntityId(),
   type: "glass",
