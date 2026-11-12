@@ -34,6 +34,8 @@ import { BLEND_MODES, canSwitchLayerType, movableRange, removeBlockedReason, SWI
 import { loadTextureForScene } from "../../utils/assetTransfers";
 import { depthReach } from "../../utils/depthColors";
 import { getLiveScene } from "../../viewport/liveViewport";
+import { ColorField } from "../ui/ColorField";
+import { ColorPicker } from "../ui/ColorPicker";
 import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
 import { Slider } from "../ui/Slider";
@@ -146,136 +148,6 @@ const asOneUndoStep = (actions: Array<() => void>): void => {
 };
 
 // ─── Fields ──────────────────────────────────────────────────────────────────
-
-// Compound swatch + hex control that sits in the control column of a standard
-// label/control row (the shared Slider/Select/Switch render the same `.prop` row,
-// so everything lines up on the shared label width).
-function ColorSwatchField({
-  label,
-  value,
-  mixed,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  mixed: boolean;
-  onChange: (color: string) => void;
-}) {
-  const [localValue, setLocalValue] = useState(value);
-  // What the picker shows: the colour it was last moved to, which the store catches up with a frame later.
-  const [pickedColor, setPickedColor] = useState(value);
-
-  useEffect(() => {
-    setLocalValue(value);
-  }, [value]);
-
-  // The native picker fires on every move of a drag. The store gets one write per frame, and the whole
-  // drag is one undo step: its first colour records the step, and history resumes when the picker
-  // closes (its `change` event).
-  const picker = useRef<HTMLInputElement>(null);
-  const latestOnChange = useRef(onChange);
-  latestOnChange.current = onChange;
-  const shown = useRef(value);
-  const pending = useRef<string | null>(null);
-  const written = useRef<string | null>(null); // the colour this picker last wrote, while it's open
-  const frame = useRef<number | null>(null);
-  const historyPaused = useRef(false);
-
-  const flush = () => {
-    frame.current = null;
-    const color = pending.current;
-    if (color === null) return;
-    pending.current = null;
-    written.current = color;
-    latestOnChange.current(color);
-  };
-
-  const endPicking = () => {
-    if (frame.current !== null) window.cancelAnimationFrame(frame.current);
-    flush();
-    written.current = null;
-    if (historyPaused.current) {
-      historyPaused.current = false;
-      useEditorStore.temporal.getState().resume();
-    }
-  };
-
-  useEffect(() => {
-    const input = picker.current;
-    input?.addEventListener("change", endPicking);
-    return () => {
-      input?.removeEventListener("change", endPicking);
-      endPicking();
-    };
-    // Set up once: endPicking reads only refs and the store.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    // The store catching up with the colours being dragged (a frame behind) leaves the picker alone.
-    if (value === written.current) return;
-    shown.current = value;
-    setPickedColor(value);
-  }, [value]);
-
-  const pickColor = (color: string) => {
-    // The picker's change event fires again with the colour already shown: nothing to do.
-    if (color === shown.current) return;
-    shown.current = color;
-    setLocalValue(color);
-    setPickedColor(color);
-    if (!historyPaused.current) {
-      latestOnChange.current(color);
-      useEditorStore.temporal.getState().pause();
-      historyPaused.current = true;
-      return;
-    }
-    pending.current = color;
-    if (frame.current === null) frame.current = window.requestAnimationFrame(flush);
-  };
-
-  const hexRegex = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-
-  const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let val = e.target.value.replace(/^#+/, "");
-    val = val.length > 0 ? "#" + val : "#";
-    setLocalValue(val);
-    if (hexRegex.test(val)) onChange(val);
-  };
-
-  const handleBlur = () => {
-    if (!hexRegex.test(localValue)) setLocalValue(value);
-  };
-
-  return (
-    <div className="prop">
-      <span className="prop-label">{label}</span>
-      <div className="inspector-color-field">
-        <div
-          className="inspector-color-swatch"
-          style={{ background: mixed ? "repeating-linear-gradient(45deg, #444 0 4px, #666 4px 8px)" : value }}
-        >
-          <input
-            ref={picker}
-            type="color"
-            value={mixed ? "#ffffff" : pickedColor}
-            onChange={(e) => pickColor(e.target.value)}
-            aria-label={`${label} picker`}
-          />
-        </div>
-        <input
-          type="text"
-          className="hex-input"
-          value={mixed ? "Mixed" : localValue}
-          onChange={handleTextChange}
-          onBlur={handleBlur}
-          onFocus={(e) => e.currentTarget.select()}
-          aria-label={`${label} hex value`}
-        />
-      </div>
-    </div>
-  );
-}
 
 // Two or three choices side by side, in a label/control row.
 function SegmentedRow<T extends string>({
@@ -589,11 +461,17 @@ function LayerRow({
 
 // ─── Settings drawers ────────────────────────────────────────────────────────
 
+// The Color layer's drawer is the colour picker; its opacity is the layer's (the row's number).
 function ColorSettings({ row }: { row: LayerRowData }) {
   const update = useRowUpdate(row);
   const first = row.pairs[0].layer as ColorLayer;
-  const mixed = row.pairs.some(({ layer }) => (layer as ColorLayer).color !== first.color);
-  return <ColorSwatchField label="Color" value={first.color} mixed={mixed} onChange={(color) => update({ color })} />;
+  return (
+    <ColorPicker
+      color={first.color}
+      alpha={first.opacity}
+      onChange={({ color, alpha }) => update({ ...(color !== undefined ? { color } : null), ...(alpha !== undefined ? { opacity: alpha } : null) })}
+    />
+  );
 }
 
 function LightingSettings({ row }: { row: LayerRowData }) {
@@ -638,7 +516,7 @@ function LightingSettings({ row }: { row: LayerRowData }) {
           {first.model === "phong" && (
             <Slider label="Shininess" min={0} max={100} step={1} value={first.shininess ?? 30} onChange={(shininess) => update({ shininess })} />
           )}
-          <ColorSwatchField label="Emissive" value={first.emissive ?? "#000000"} mixed={mixed((layer) => layer.emissive)} onChange={(emissive) => update({ emissive })} />
+          <ColorField label="Emissive" color={first.emissive ?? "#000000"} mixed={mixed((layer) => layer.emissive)} onChange={({ color }) => color && update({ emissive: color })} />
           <Slider
             label="Emissive Int."
             min={0}
@@ -720,7 +598,7 @@ function DepthSettings({ entity, layer }: { entity: Entity; layer: DepthLayer })
       <DepthRamp layer={layer} selected={index} onSelect={setSelected} onChange={(stops) => onUpdate({ stops })} />
       {stop && (
         <>
-          <ColorSwatchField label="Stop Color" value={stop.color} mixed={false} onChange={(color) => setStop({ color })} />
+          <ColorField label="Stop Color" color={stop.color} alpha={stop.alpha ?? 1} onChange={(change) => setStop(change.color !== undefined ? { color: change.color } : { alpha: change.alpha })} />
           <div className="prop">
             <span className="prop-label">Stop Position</span>
             <NumberField

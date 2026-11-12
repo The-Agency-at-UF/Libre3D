@@ -3084,3 +3084,159 @@ input[type="range"]::-moz-range-thumb {
   color: var(--text-secondary);
   font-size: 12px;
 }
+
+
+/* ── COLOUR PICKER (components/ui/ColorPicker.tsx, ColorField.tsx) ── */
+
+.color-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+
+.color-picker-square {
+  position: relative;
+  height: 160px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.color-picker-thumb {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-picker-sliders {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.color-picker-eyedropper {
+  flex-shrink: 0;
+}
+
+.color-picker-bars {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.color-picker-hue,
+.color-picker-alpha {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.color-picker-hue {
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+
+.color-picker-alpha {
+  background: var(--checker);
+}
+
+.color-picker-alpha-fill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+}
+
+.color-picker-handle {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 18px;
+  border: 2px solid #fff;
+  border-radius: 5px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.color-picker-values {
+  display: flex;
+  gap: 6px;
+}
+
+.color-picker-format {
+  flex: 0 0 58px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.color-picker-hex {
+  flex: 1;
+  min-width: 0;
+}
+
+.color-picker-channel {
+  flex: 1;
+  min-width: 0;
+}
+
+.color-picker-percent {
+  flex: 0 0 48px;
+  width: 48px;
+}
+
+.color-popover {
+  position: fixed;
+  z-index: 31;
+  width: 248px;
+  padding: 12px;
+  background: var(--bg-panel);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  box-shadow: 0 8px 24px var(--backdrop-bg);
+}
+
+.color-field {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.color-field-swatch {
+  flex: 0 0 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.color-field-swatch.on {
+  border-color: var(--accent);
+}
+
+.color-field-hex {
+  flex: 1;
+  min-width: 0;
+}
+
+.color-field-percent {
+  flex: 0 0 44px;
+  width: 44px;
+}
