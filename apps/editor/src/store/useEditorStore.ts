@@ -157,12 +157,15 @@ export interface EditorState {
   toggleLock: (id: string) => void;
   renameEntity: (id: string, newName: string) => void;
   renameEntities: (updates: Record<string, string>) => void;
-  /** The radius or cap style of every path among `ids`, in one undo step. */
+  /**
+   * The radius or cap style of every path among `ids`, in one undo step (not their trim, which
+   * states can set: see updateShownTransforms).
+   */
   updatePathStrokes: (ids: string[], updates: Partial<PathStroke>) => void;
   /**
-   * A shape the pen tool drew: one outline (`outline`, in the shape's own XY plane, turned by
-   * `rotation`), its origin at `origin`. Filled in default shape colour from both sides.
-   * Selected, like addEntity. Returns its ID.
+   * A shape the pen tool drew: one outline (`outline`, in the shape's own XY plane, so turned by
+   * `rotation`), its origin at `origin`. Filled in the default shape colour from both sides, like an
+   * imported one. Selected, like addEntity. Returns its ID.
    */
   addShape: (origin: [number, number, number], rotation: [number, number, number], outline: PathData) => string;
   /**
@@ -179,24 +182,30 @@ export interface EditorState {
   updateShape: (id: string, shape: ShapeData) => void;
   /**
    * Moves a path's or shape's origin to the middle of its curves (pathsCenter) without moving it on
-   * screen: its points shift one way and its position the other.
+   * screen: its points shift one way and its position the other. Its states keep their transforms,
+   * so it's for one that has none yet: the pen tool's, as it finishes drawing one.
    */
   centerOrigin: (id: string) => void;
   /**
    * The shapes and paths of an imported SVG (paths/svgImport.ts), in one undo step: one named `name`,
-   * or several in a group named `name`. Selects it and puts the pen down. Returns its ID.
+   * or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
+   * Returns its ID ("" when there's nothing to add).
    */
   addImportedSvg: (name: string, items: ImportedSvgItem[]) => string;
   /**
    * An imported picture (utils/importImage.ts) as a plane named `name`, at the origin: `aspect` is its
-   * width / height, and `textureAssetId` its bytes in the texture store. Returns its ID.
+   * width / height, and `textureAssetId` its bytes in the texture store, shown unlit from both sides
+   * and blended when it has see-through pixels (`transparent`). Selects it and puts the pen down.
+   * Returns its ID.
    */
   addImagePlane: (name: string, textureAssetId: string, aspect: number, transparent: boolean) => string;
   /** The extrusion (depth) or bevel of every shape among `ids`, in one undo step. */
   updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
   /**
-   * Convert to Path: every shape among `ids` and inside them becomes a path along the middle of its
-   * strokes (paths/centerLine.ts), with a tube as thick as the strokes, in one undo step. Returns how many
+   * Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
+   * a path along the middle of its strokes (paths/centerLine.ts), with a tube as thick as the
+   * strokes, in one undo step. A shape keeps its ID, name, place, material, states and events; when
+   * it has several strokes, the others become paths next to it ("Shape 1 (2)"). Returns how many
    * shapes were converted.
    */
   convertShapesToPaths: (ids: string[]) => number;
@@ -212,6 +221,7 @@ export interface EditorState {
   /**
    * Editing an object's Depth layer in the viewport (useViewportDepthGizmo): its handles show, and
    * the transform gizmo moves the layer's origin instead of the object. The object's ID, or null.
+   * Not saved and not undoable; off like the pen, and the pen and it end each other.
    */
   depthEdit: string | null;
   setDepthEdit: (entityId: string | null) => void;
@@ -231,35 +241,42 @@ export interface EditorState {
   setPreviewMode: (active: boolean) => void;
   /**
    * The transition the Edit Event panel's ▶ is playing in the editor viewport (useViewportPlay), by
-   * action ID, or null. Not saved and not undoable.
+   * action ID, or null. Not saved and not undoable, and allowed in a view-only scene: it's looking.
    */
   previewingActionId: string | null;
   setPreviewingAction: (actionId: string | null) => void;
 
   /**
    * Number of .glb imports currently being read/parsed (file picked but
-   * entities not yet materialized). Transient session state.
+   * entities not yet materialized). Not persisted — like isPreviewMode it's
+   * transient session state that happens to need cross-component visibility.
    */
   pendingImportCount: number;
   adjustPendingImports: (delta: number) => void;
 
   /**
    * Why the scene can't be edited right now; null when it can. While set, updates that would change
-   * the scene's content are dropped.
+   * the scene's content are dropped (see guardSceneContent). Not persisted and not undoable: the
+   * editor sets it each time it opens a scene and whenever the editing lock moves.
    */
   readOnlyReason: ReadOnlyReason | null;
   setReadOnly: (reason: ReadOnlyReason | null) => void;
 
-  // Object states and events (see animation/objectStates.ts and animation/events.ts).
+  /**
+   * Object states and events (see animation/objectStates.ts and animation/events.ts). Saved with the
+   * scene and undoable.
+   */
   animation: SceneAnimation;
   /**
    * The state each object is shown in while editing (entity ID → state ID; no entry = Base). It
    * stays when the object is deselected, and is saved with the scene so it reopens as it was left.
+   * Not undoable, and allowed while read-only (looking at a state changes nothing). Read it through
+   * selectViewedObjectState, which treats an entry whose state is gone (deleted, undone) as Base.
    */
   viewedStates: Record<string, string>;
   /** Shows an object in one of its states, or in Base (null). */
   setViewedState: (entityId: string, stateId: string | null) => void;
-  /** Adds "State N" (setting nothing yet) to an object and views it. Returns its ID. */
+  /** Adds "State N" (setting nothing yet) to an object and views it, like addEntity selects. Returns its ID. */
   addState: (entityId: string) => string;
   renameState: (stateId: string, name: string) => void;
   removeState: (stateId: string) => void;
