@@ -28,7 +28,8 @@ const buildCube = async () => {
   const sync = (lighting: Partial<LightingLayer>): THREE.Material => {
     const entity: Entity = {
       ...cube,
-      materialLayers: cube.materialLayers!.map((layer) => (layer.type === "lighting" ? { ...layer, ...lighting } : layer)),
+      // These checks are about the physical model; a new cube is Phong (task D2).
+      materialLayers: cube.materialLayers!.map((layer) => (layer.type === "lighting" ? { ...layer, model: "physical" as const, ...lighting } : layer)),
     };
     manager.syncMeshes([entity], null, false);
     return (meshMap.get(cube.id) as THREE.Mesh).material as THREE.Material;
@@ -119,7 +120,7 @@ describe("ObjectManager planes", () => {
     return { useEditorStore, id, sync };
   };
 
-  it("draws a plane as a lit, double-sided 1×1 square in its own XY plane, facing +Z", async () => {
+  it("draws a plane as an unlit, double-sided 1×1 square in its own XY plane, facing +Z", async () => {
     const { sync } = await buildPlane();
 
     const mesh = sync();
@@ -128,7 +129,7 @@ describe("ObjectManager planes", () => {
     expect(mesh.geometry.parameters).toMatchObject({ width: 1, height: 1 });
     expect(mesh.geometry.boundingBox).toMatchObject({ min: { x: -0.5, y: -0.5, z: 0 }, max: { x: 0.5, y: 0.5, z: 0 } });
     expect(new THREE.Vector3().fromBufferAttribute(mesh.geometry.getAttribute("normal"), 0)).toEqual(new THREE.Vector3(0, 0, 1));
-    expect(mesh.material).toBeInstanceOf(MeshStandardNodeMaterial);
+    expect(mesh.material).toBeInstanceOf(MeshBasicNodeMaterial);
     expect(mesh.material.side).toBe(THREE.DoubleSide);
   });
 

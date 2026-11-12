@@ -83,7 +83,7 @@ describe("createSceneExportBlob", () => {
     const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
     const cube = useEditorStore.getState().entities.find((entity) => entity.type === "cube")!;
     const lighting = cube.materialLayers!.find((layer) => layer.type === "lighting")!;
-    useEditorStore.getState().updateMaterialLayer(cube.id, lighting.id, { clearcoat: 1, clearcoatRoughness: 0.05 });
+    useEditorStore.getState().updateMaterialLayer(cube.id, lighting.id, { model: "physical", clearcoat: 1, clearcoatRoughness: 0.05 });
     const scene = new THREE.Scene();
     createObjectManager(scene, new Map()).syncMeshes(useEditorStore.getState().entities, null, false);
 
@@ -117,6 +117,30 @@ describe("createSceneExportBlob", () => {
     );
     expect(extensionsUsed).toContain("KHR_materials_unlit");
     expect(warn.mock.calls.flat().join(" ")).not.toMatch(/MeshStandardMaterial or MeshBasicMaterial/);
+    warn.mockRestore();
+  });
+
+  it("writes Phong, Lambert and Toon as standard materials, without a warning, and puts them back", async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
+    const store = useEditorStore.getState();
+    const layer = (id: string, type: string) => useEditorStore.getState().entities.find((e) => e.id === id)!.materialLayers!.find((l) => l.type === type)!;
+    const shiny = store.addEntity("sphere"); // Phong, as every new 3D object
+    store.updateMaterialLayer(shiny, layer(shiny, "color").id, { color: "#ff0000" });
+    store.updateMaterialLayer(shiny, layer(shiny, "lighting").id, { shininess: 48 }); // roughness √(2 / (48 + 2)) = 0.2
+    const matte = store.addEntity("torus");
+    store.updateMaterialLayer(matte, layer(matte, "lighting").id, { model: "toon" });
+    const scene = new THREE.Scene();
+    const meshMap = new Map<string, THREE.Object3D>();
+    createObjectManager(scene, meshMap).syncMeshes(useEditorStore.getState().entities, null, false);
+    const before = (meshMap.get(shiny) as THREE.Mesh).material;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { materials } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(materials).toContainEqual(expect.objectContaining({ pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1], metallicFactor: 0, roughnessFactor: 0.2 } }));
+    expect(materials).toContainEqual(expect.objectContaining({ pbrMetallicRoughness: expect.objectContaining({ metallicFactor: 0 }) }));
+    expect(warn.mock.calls.flat().join(" ")).not.toMatch(/MeshStandardMaterial or MeshBasicMaterial/);
+    expect((meshMap.get(shiny) as THREE.Mesh).material).toBe(before);
     warn.mockRestore();
   });
 

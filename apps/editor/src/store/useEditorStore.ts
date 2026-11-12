@@ -60,8 +60,8 @@ import {
   createDepthLayer,
   createEntity,
   createEntityId,
+  createFlatMaterialLayers,
   createLightingLayer,
-  createMaterialLayers,
   createStartingEntities,
   ENTITY_DEFAULTS,
   initialEntities,
@@ -934,7 +934,7 @@ export const useEditorStore = create<EditorState>()(
                 position: cloneVector(origin),
                 rotation: cloneVector(rotation),
                 shape: flattenShape({ regions: [{ outline, holes: [] }] }),
-                materialLayers: createMaterialLayers(ENTITY_DEFAULTS.shape.color, { doubleSided: true }),
+                materialLayers: createFlatMaterialLayers(ENTITY_DEFAULTS.shape.color),
               };
               newId = entity.id;
               return { entities: [...state.entities, entity], selectedEntityIds: [entity.id] };
@@ -993,7 +993,7 @@ export const useEditorStore = create<EditorState>()(
                   : {
                       shape: cloneShape(imported.shape),
                       // A flat shape shows from both sides.
-                      materialLayers: createMaterialLayers(imported.color, { doubleSided: true }),
+                      materialLayers: createFlatMaterialLayers(imported.color),
                     }),
                 ...(parentId ? { parentId } : null),
               });
@@ -1030,11 +1030,7 @@ export const useEditorStore = create<EditorState>()(
                 imageAspect: aspect,
                 // White, so the picture shows in its own colours (the Color layer tints it), whatever the lights.
                 materialLayers: [
-                  ...createMaterialLayers(ENTITY_DEFAULTS.image.color, {
-                    model: "none",
-                    doubleSided: true,
-                    ...(transparent ? { alphaMode: "BLEND" as const } : null),
-                  }),
+                  ...createFlatMaterialLayers(ENTITY_DEFAULTS.image.color, transparent ? { alphaMode: "BLEND" } : {}),
                   image,
                 ],
               };

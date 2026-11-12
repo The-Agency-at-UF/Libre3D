@@ -1187,7 +1187,7 @@ describe("the Play camera setting", () => {
 });
 
 describe("planes", () => {
-  it("adds a lit 1×1 plane at the origin, selected, shown from both sides", async () => {
+  it("adds an unlit 1×1 plane at the origin, selected, shown from both sides", async () => {
     const { useEditorStore } = await loadStore();
     useEditorStore.getState().loadScene({ entities: [light] });
 
@@ -1196,7 +1196,7 @@ describe("planes", () => {
 
     expect(added).toMatchObject({ type: "plane", name: "Plane", position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] });
     expect(added.materialLayers).toEqual([
-      expect.objectContaining({ type: "lighting", model: "physical", doubleSided: true }),
+      expect.objectContaining({ type: "lighting", model: "none", doubleSided: true }),
       expect.objectContaining({ type: "color", color: "#B39DFF", opacity: 1 }),
     ]);
     expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);

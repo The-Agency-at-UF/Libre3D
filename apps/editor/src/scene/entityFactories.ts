@@ -19,18 +19,20 @@ import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "./layers";
 import type { CameraProfile, ColorLayer, DepthLayer, Entity, EntityType, LightingLayer, MaterialLayer } from "./types";
 import { cloneVector } from "./vec3";
 
+// A new object's name and colour. 3D objects start white and lit (task D2); the flat ones keep a
+// colour of their own and start unlit (FLAT_ENTITY_TYPES).
 export const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
   cube: {
     name: "Cube",
-    color: "#4f8cff",
+    color: "#ffffff",
   },
   sphere: {
     name: "Sphere",
-    color: "#3DFFA0",
+    color: "#ffffff",
   },
   torus: {
     name: "Torus",
-    color: "#FF7AE0",
+    color: "#ffffff",
   },
   plane: {
     name: "Plane",
@@ -38,7 +40,7 @@ export const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }
   },
   path: {
     name: "Path",
-    color: "#FFC24D",
+    color: "#ffffff",
   },
   shape: {
     name: "Shape",
@@ -103,7 +105,7 @@ export const createLightingLayer = (overrides: Partial<LightingLayer> = {}): Lig
   enabled: true,
   opacity: 1,
   blendMode: "normal",
-  model: "physical",
+  model: "phong",
   roughness: DEFAULT_ROUGHNESS,
   metalness: DEFAULT_METALNESS,
   clearcoat: 0,
@@ -114,8 +116,15 @@ export const createLightingLayer = (overrides: Partial<LightingLayer> = {}): Lig
   ...overrides,
 });
 
+/** 2D objects: flat, so shown from both sides, and unlit (task D2). Shapes start flat too (an extrusion keeps it). */
+export const FLAT_ENTITY_TYPES: readonly EntityType[] = ["plane", "shape", "image"];
+
+/** A new flat object's layers: unlit, both sides, in `color`. */
+export const createFlatMaterialLayers = (color: string, lighting: Partial<LightingLayer> = {}): MaterialLayer[] =>
+  createMaterialLayers(color, { model: "none", doubleSided: true, ...lighting });
+
 /**
- * A new object's layers, top first: Lighting, then a Color layer. `lighting` sets the Lighting
+ * A new object's layers, top first: Lighting (Phong unless `lighting` says otherwise), then a Color layer. `lighting` sets the Lighting
  * layer's model and the surface (a flat object's `doubleSided`, a picture's `alphaMode`).
  */
 export const createMaterialLayers = (color: string, lighting: Partial<LightingLayer> = {}): MaterialLayer[] => [
@@ -146,9 +155,8 @@ export const createEntity = (type: EntityType): Entity => ({
     ? { color: ENTITY_DEFAULTS[type].color }
     : type === "group"
       ? null // groups are pure transform pivots — no material, no color
-      : type === "plane"
-        ? // flat, so shown from both sides, like a shape or an image
-          { materialLayers: createMaterialLayers(ENTITY_DEFAULTS.plane.color, { doubleSided: true }) }
+      : FLAT_ENTITY_TYPES.includes(type)
+        ? { materialLayers: createFlatMaterialLayers(ENTITY_DEFAULTS[type].color) }
         : { materialLayers: createMaterialLayers(ENTITY_DEFAULTS[type].color) }),
   // The Add menu's path is a sample curve; the Path pen draws its own (addPath).
   ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
