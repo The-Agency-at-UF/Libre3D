@@ -98,9 +98,13 @@ export default defineConfig(({ mode }) => {
     // VITE_-prefixed values reach the browser bundle; the AWS keys beside them stay server-side.
     envDir: repoRootDir,
     resolve: {
-      alias: {
-        three: threeModulePath,
-      },
+      // The first two are three's own subpath exports (the WebGPU renderer and its shader
+      // language): pointing `three` at a folder skips the package's export map, so they're spelled out.
+      alias: [
+        { find: /^three\/webgpu$/, replacement: path.join(threeModulePath, "build/three.webgpu.js") },
+        { find: /^three\/tsl$/, replacement: path.join(threeModulePath, "build/three.tsl.js") },
+        { find: "three", replacement: threeModulePath },
+      ],
       dedupe: ["three"],
     },
     optimizeDeps: {
@@ -112,15 +116,22 @@ export default defineConfig(({ mode }) => {
       port: 5173,
     },
     build: {
-      // Three.js core alone is ~550 kB minified and can't usefully shrink. The limit sits just
-      // above it so the warning still catches any other chunk (especially the entry) growing.
-      chunkSizeWarningLimit: 600,
+      // Three.js core with its WebGPU renderer is ~815 kB minified and can't usefully shrink. The
+      // limit sits just above it so the warning still catches any other chunk (especially the
+      // entry) growing.
+      chunkSizeWarningLimit: 850,
       rollupOptions: {
         output: {
           // Three.js core in its own chunk: it changes far less often than the editor, so browsers
           // keep it cached across deploys. Only the lazily loaded editor imports it.
           // Matched by package path: pnpm resolves the alias above to `.pnpm/three@…/node_modules/three`.
-          manualChunks: (id) => (id.replace(/\\/g, "/").includes("/node_modules/three/build/") ? "three" : undefined),
+          // The WebGL renderer's own build is apart: only the editor's navigation gizmo still draws
+          // with it, so the share page never downloads it.
+          manualChunks: (id) => {
+            const file = id.replace(/\\/g, "/");
+            if (!file.includes("/node_modules/three/build/")) return undefined;
+            return file.endsWith("/three.module.js") ? "three-webgl" : "three";
+          },
         },
       },
     },
