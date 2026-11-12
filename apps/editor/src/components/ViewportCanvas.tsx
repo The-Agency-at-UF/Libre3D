@@ -1,3 +1,19 @@
+/**
+ * PURPOSE: The editor's 3D viewport. Builds the scene, camera and object managers once, keeps them
+ * in step with the store (scene settings, the active camera, the entities, and what the transform
+ * gizmo holds), and leaves the rest to the viewport hooks:
+ * - useViewportRenderer: the WebGL renderer and its frame loop
+ * - useViewportControls: the orbit controls and the transform gizmo
+ * - useViewportGizmo: the navigation gizmo in the top-right corner
+ * - useViewportRaycaster: click and box selection
+ * - useViewportPlay: Play's events, and the preview of one transition
+ * - useViewportPenTool: drawing shapes and paths, and editing their points
+ * - useViewportDepthGizmo: a Depth layer's handles
+ * - useMultiSelectProxy: the stand-in the gizmo drags when several objects are selected
+ * - useFrameAutoScale: the scale a fixed-size frame is shown at (its math is viewport/frameFit.ts)
+ * - useCenterOnSelection: the "center on selected" and "orient to selected" events
+ */
+
 import { useEffect, useRef, useMemo } from "react";
 import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
@@ -60,8 +76,7 @@ export function ViewportCanvas() {
   const { sceneManager, cameraManager, objectManager } = managers;
   const scene = sceneManager.scene;
 
-  // Dev-only console handle for manual smoke tests (no test suite — the THREE
-  // graph is inspected from the devtools console, see main.tsx). Set in an
+  // Dev-only console handle for manual and automated smoke tests. Set in an
   // effect so it always points at the committed managers, not a render pass
   // StrictMode discarded.
   useEffect(() => {
