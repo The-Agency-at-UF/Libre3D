@@ -677,28 +677,24 @@ const fresnelSource = (): LayerSource => {
   };
 };
 
+// Each painting layer type's source. A Record, so a new type without one doesn't compile (it
+// would otherwise draw as a flat colour). Some sources build their shader from the first layer.
+const SOURCES: { [T in PaintLayer["type"]]: (first: Extract<PaintLayer, { type: T }>) => LayerSource } = {
+  color: colorSource,
+  depth: depthSource,
+  gradient: gradientSource,
+  noise: noiseSource,
+  fresnel: fresnelSource,
+  image: imageSource,
+  normal: normalSource,
+  matcap: matcapSource,
+  rainbow: rainbowSource,
+  glass: glassSource,
+};
+
 /** A source for `layer`, with its uniforms set from it. Its shader is the one for layerSourceShape(layer). */
 export const createLayerSource = (layer: PaintLayer, pictures: PictureSource): LayerSource => {
-  const source =
-    layer.type === "depth"
-      ? depthSource(layer)
-      : layer.type === "gradient"
-        ? gradientSource(layer)
-        : layer.type === "noise"
-          ? noiseSource(layer)
-          : layer.type === "fresnel"
-            ? fresnelSource()
-            : layer.type === "image"
-              ? imageSource(layer)
-              : layer.type === "normal"
-                ? normalSource()
-                : layer.type === "matcap"
-                  ? matcapSource()
-                  : layer.type === "rainbow"
-                    ? rainbowSource()
-                    : layer.type === "glass"
-                      ? glassSource()
-                      : colorSource();
+  const source = (SOURCES[layer.type] as (first: PaintLayer) => LayerSource)(layer);
   source.update(layer, pictures);
   return source;
 };
@@ -725,7 +721,6 @@ export const layerSourceShape = (layer: PaintLayer): string => {
     case "image":
       return `image:${layer.projection}${layer.projection === "planar" || layer.projection === "cylindrical" ? `:${layer.axis}` : ""}`;
     case "color":
-    default:
       return "color";
   }
 };
