@@ -280,7 +280,12 @@ export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer => {
       return layer.maps
         ? { ...layer, maps: Object.fromEntries(Object.entries(layer.maps).map(([slot, ref]) => [slot, { ...ref }])) }
         : { ...layer };
-    default:
+    // Only plain values: a shallow copy shares nothing. No `default`, so a new layer type has to
+    // say here whether it holds arrays or objects.
+    case "color":
+    case "fresnel":
+    case "matcap":
+    case "glass":
       return { ...layer };
   }
 };
@@ -342,7 +347,6 @@ export const createPaintLayer = (type: PaintLayerType, depthFar?: number, color 
     case "displace":
       return createDisplaceLayer();
     case "color":
-    default:
       return createColorLayer(color);
   }
 };

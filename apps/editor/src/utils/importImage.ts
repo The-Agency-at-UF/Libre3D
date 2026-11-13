@@ -56,7 +56,7 @@ export async function importImageFile(file: File): Promise<void> {
 }
 
 /**
- * A picture picked for a Lighting map (normal, roughness, …; LayerSettings.tsx): kept in the texture
+ * A picture picked for a Lighting map (normal, roughness, …; layers/LightingSettings.tsx): kept in the texture
  * store under its hash, like an image plane's, so it's saved with the scene. Repeats across the
  * object, the way up it was made. Null when it's too large or can't be read (the person is told).
  */
