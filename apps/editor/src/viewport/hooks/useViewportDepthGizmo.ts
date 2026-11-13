@@ -321,9 +321,11 @@ export function useViewportDepthGizmo(
     };
 
     // Before useHotkeys: Enter and Escape end editing; the object's transform keys and Delete wait.
+    // Delete on a ramp stop in the drawer is the ramp's own (RampEditor removes the stop).
     const onKeyDown = (event: KeyboardEvent) => {
       if (!store().depthEdit || isTyping() || event.ctrlKey || event.metaKey || event.altKey) return;
       const key = event.key.toLowerCase();
+      if ((key === "delete" || key === "backspace") && document.activeElement?.closest(".ramp-bar")) return;
       if (key === "enter" || key === "escape") store().setDepthEdit(null);
       else if (!["w", "e", "r", "delete", "backspace"].includes(key)) return;
       event.preventDefault();
