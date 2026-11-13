@@ -2,10 +2,10 @@
  * PURPOSE: The geometry behind the Depth layer's viewport gizmo (viewport/hooks/useViewportDepthGizmo.ts),
  * in the object's own space: where its handles sit, and what dragging each one does to the layer.
  *
- * The gizmo lies along the layer's axis (its direction, from its origin; a radial layer shows its
- * rings along it too): the near and far handles at those distances, and each stop between them at
- * its place on the ramp. Dragging the origin moves it; dragging far turns the axis toward the
- * cursor and sets far; near and the stops slide along the axis.
+ * The gizmo lies along the layer's axis (its direction, from its origin): the near and far handles
+ * at those distances, and each stop between them at its place on the ramp. Dragging the origin
+ * moves it; dragging far turns the axis toward the cursor and sets far; near and the stops slide
+ * along the axis. A radial layer also shows its spread: two circles around the origin at far.
  */
 
 import * as THREE from "three";
@@ -58,4 +58,40 @@ export const dragNear = (layer: DepthLayer, distance: number): number => Math.mi
 export const dragStop = (layer: DepthLayer, distance: number): number => {
   const span = layer.far - layer.near;
   return span > 0 ? Math.min(1, Math.max(0, (distance - layer.near) / span)) : 0;
+};
+
+/**
+ * A radial layer's two spread circles, both around the origin at far: one flat on the layer's XZ
+ * plane, one upright through the axis (so the far handle sits on it).
+ */
+export type SpreadCircle = "flat" | "upright";
+
+export const SPREAD_CIRCLE_POINTS = 64;
+
+// Each circle's plane, as two unit directions across it.
+const SPREAD_PLANES: Record<SpreadCircle, (axis: THREE.Vector3) => [THREE.Vector3, THREE.Vector3]> = {
+  flat: () => [new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 1)],
+  upright: (axis) => {
+    const across = new THREE.Vector3(axis.x, 0, axis.z);
+    // An axis straight up or down has no side to lean to: the circle stands on x.
+    return [across.lengthSq() > 1e-12 ? across.normalize() : across.set(1, 0, 0), new THREE.Vector3(0, 1, 0)];
+  },
+};
+
+/**
+ * The points of one of a radial layer's spread circles, in the layer's space, as x, y, z triples
+ * in `out` (SPREAD_CIRCLE_POINTS of them; the caller keeps one buffer and reuses it).
+ */
+export const spreadCircle = (layer: DepthLayer, which: SpreadCircle, out = new Float32Array(SPREAD_CIRCLE_POINTS * 3)): Float32Array => {
+  const [u, v] = SPREAD_PLANES[which](depthAxis(layer));
+  const [ox, oy, oz] = layer.origin;
+  for (let i = 0; i < SPREAD_CIRCLE_POINTS; i++) {
+    const angle = (i / SPREAD_CIRCLE_POINTS) * Math.PI * 2;
+    const c = Math.cos(angle) * layer.far;
+    const s = Math.sin(angle) * layer.far;
+    out[i * 3] = ox + c * u.x + s * v.x;
+    out[i * 3 + 1] = oy + c * u.y + s * v.y;
+    out[i * 3 + 2] = oz + c * u.z + s * v.z;
+  }
+  return out;
 };
