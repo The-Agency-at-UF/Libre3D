@@ -155,6 +155,10 @@ export function useViewportDepthGizmo(
       const target = findTarget(objectManager);
       if (!target) return hide();
       const { layer, matrix } = target;
+      // The camera controls move the camera between frames, but its matrices are only brought up
+      // to date by the render that follows this. Without this the overlay is projected through
+      // last frame's camera and trails the scene by a frame while orbiting.
+      cameraRef.current.updateMatrixWorld();
       const world = (local: THREE.Vector3) => local.applyMatrix4(matrix);
       const originWorld = world(new THREE.Vector3(...layer.origin));
       const originAt = toScreen(originWorld);
