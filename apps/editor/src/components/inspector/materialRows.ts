@@ -1,5 +1,5 @@
 /**
- * PURPOSE: What the Materials panel (MaterialsPanel.tsx) and its layer drawers (LayerSettings.tsx)
+ * PURPOSE: What the Materials panel (MaterialsPanel.tsx) and its layer drawers (layers/)
  * share: each layer type's and blend mode's name and icon, the rows the panel shows for the selected
  * objects, and the helpers their edits go through (one undo step for several objects).
  */

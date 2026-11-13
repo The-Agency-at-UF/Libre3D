@@ -3,7 +3,7 @@
  * (scene/layerStack.ts), one row per layer, top of the stack first.
  *
  * A row, left to right: the layer's type (a dropdown switches among the colour types), its icon
- * (opens the layer's settings in a drawer beside the sidebar, LayerSettings.tsx; dragging it moves
+ * (opens the layer's settings in a drawer beside the sidebar, layers/layerDrawers.ts; dragging it moves
  * the layer), its opacity, its blend mode, its eye, and ×. The stack's rules decide what can be
  * removed, switched or moved: Lighting can't be removed, and layers over it are drawn unshaded; a
  * layer that paints goes only while another one stays; a layer in Mask mode (purple, with an arrow
@@ -21,20 +21,7 @@ import type { PaintLayerType } from "../../scene/entityFactories";
 import { BLEND_MODES, canSwitchLayerType, DISPLACEABLE_ENTITY_TYPES, maskTarget, movableRange, removeBlockedReason, SWITCHABLE_LAYER_TYPES } from "../../scene/layerStack";
 import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
-import {
-  ColorSettings,
-  DepthSettings,
-  DisplaceSettings,
-  FresnelSettings,
-  GlassSettings,
-  GradientSettings,
-  ImageSettings,
-  LightingSettings,
-  MatcapSettings,
-  NoiseSettings,
-  NormalSettings,
-  RainbowSettings,
-} from "./LayerSettings";
+import { LAYER_DRAWERS } from "./layers/layerDrawers";
 import {
   asOneUndoStep,
   BLEND_MODE_ICONS,
@@ -339,6 +326,7 @@ function LayerDrawer({ row, anchor, onClose }: { row: LayerRowData; anchor: HTML
   }, [onClose]);
 
   const name = rowTitle(row);
+  const Settings = LAYER_DRAWERS[row.type];
 
   return createPortal(
     <div
@@ -356,18 +344,7 @@ function LayerDrawer({ row, anchor, onClose }: { row: LayerRowData; anchor: HTML
         </button>
       </div>
       <fieldset className="mat-drawer-body inspector-fieldset" disabled={isReadOnly}>
-        {row.type === "color" && <ColorSettings row={row} />}
-        {row.type === "lighting" && <LightingSettings row={row} />}
-        {row.type === "depth" && <DepthSettings row={row} />}
-        {row.type === "gradient" && <GradientSettings row={row} />}
-        {row.type === "noise" && <NoiseSettings row={row} />}
-        {row.type === "fresnel" && <FresnelSettings row={row} />}
-        {row.type === "normal" && <NormalSettings row={row} />}
-        {row.type === "matcap" && <MatcapSettings row={row} />}
-        {row.type === "rainbow" && <RainbowSettings row={row} />}
-        {row.type === "glass" && <GlassSettings row={row} />}
-        {row.type === "displace" && <DisplaceSettings row={row} />}
-        {row.type === "image" && <ImageSettings row={row} />}
+        <Settings row={row} />
       </fieldset>
     </div>,
     document.body,

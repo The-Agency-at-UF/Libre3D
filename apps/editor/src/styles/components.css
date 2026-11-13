@@ -3267,7 +3267,7 @@ input[type="range"]::-moz-range-thumb {
 }
 
 
-/* Drawer rows (LayerSettings.tsx): numbers with their letter, as Spline's (X 0  Y 0  Z 0) */
+/* Drawer rows (inspector/layers/rows.tsx): numbers with their letter, as Spline's (X 0  Y 0  Z 0) */
 .axes-row {
   display: flex;
   flex: 1;
@@ -3342,7 +3342,7 @@ input[type="range"]::-moz-range-thumb {
 }
 
 
-/* Picture drawers (LayerSettings.tsx: Image, Matcap): Custom / Assets tabs, the picture's frame with Upload, the scene's pictures */
+/* Picture drawers (inspector/layers/pictures.tsx: Image, Matcap): Custom / Assets tabs, the picture's frame with Upload, the scene's pictures */
 .mat-drawer-tabs {
   display: flex;
   gap: 4px;
