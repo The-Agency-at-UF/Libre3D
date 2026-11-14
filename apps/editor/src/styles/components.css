@@ -1878,49 +1878,25 @@ input[type="range"]::-moz-range-thumb {
 
 /* ── COLOR PICKER ── */
 
-/* Phase 6: Compound color-field — swatch + hex share one bordered container */
-.inspector-color-field {
+/* The scene background's Reset, under its colour row */
+.scene-reset-btn {
   display: flex;
   align-items: center;
-  border: 1px solid var(--input-border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  background: var(--input-bg);
-  transition: border-color 0.1s ease, box-shadow 0.1s ease;
-}
-
-.inspector-color-field:focus-within {
-  border-color: var(--input-border-focus);
-  box-shadow: 0 0 0 2px var(--input-focus-shadow);
-}
-
-.inspector-color-swatch {
-  width: 28px;
-  height: 28px;
-  border-right: 1px solid var(--border-strong);
-  flex-shrink: 0;
-  position: relative;
-  overflow: hidden;
-}
-
-.inspector-color-swatch input[type="color"] {
-  position: absolute;
-  inset: -4px;
-  width: calc(100% + 8px);
-  height: calc(100% + 8px);
-  padding: 0;
+  align-self: flex-end;
+  gap: 4px;
+  padding: 2px 6px;
   border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
   cursor: pointer;
-  background: transparent;
+  transition: all 120ms ease;
 }
 
-.inspector-color-field .hex-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  outline: none;
-  box-shadow: none !important;
+.scene-reset-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
 }
 
 .swatch {
@@ -2200,26 +2176,6 @@ input[type="range"]::-moz-range-thumb {
 
 .mat-layer-body .select-wrap::after {
   right: 7px;
-}
-
-.mat-layer-body .inspector-color-field {
-  flex: 1;
-  min-width: 0;
-  height: 22px;
-  border-radius: 4px;
-}
-
-.mat-layer-body .inspector-color-swatch {
-  width: 22px;
-  height: 22px;
-}
-
-.mat-layer-body .inspector-color-field .hex-input {
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-  padding: 0 7px;
-  font-size: 11px;
 }
 
 /* Quiet secondary "+" buttons (States, Events, Shape) */
@@ -2521,26 +2477,6 @@ input[type="range"]::-moz-range-thumb {
 
 .mat-drawer-body .select-wrap::after {
   right: 7px;
-}
-
-.mat-drawer-body .inspector-color-field {
-  flex: 1;
-  min-width: 0;
-  height: 22px;
-  border-radius: 4px;
-}
-
-.mat-drawer-body .inspector-color-swatch {
-  width: 22px;
-  height: 22px;
-}
-
-.mat-drawer-body .inspector-color-field .hex-input {
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-  padding: 0 7px;
-  font-size: 11px;
 }
 
 .mat-drawer-heading {
