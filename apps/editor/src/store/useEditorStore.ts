@@ -341,6 +341,11 @@ export interface EditorState {
    * given an object, one with a copy of that object's layers and its opacity, which the object then uses.
    */
   createMaterialAsset: (fromEntityId?: string) => string;
+  /**
+   * Adds a copy of a material from outside the scene (the Libre3D library) as an asset of this
+   * scene, its layers under new IDs, and returns its ID ("" when the store refused it).
+   */
+  addMaterialAsset: (source: Pick<MaterialAsset, "name" | "layers" | "opacity">) => string;
   renameMaterialAsset: (assetId: string, name: string) => void;
   /** Sets how see-through every object using an asset is (0-1, clamped; 1 is stored as none). */
   setMaterialAssetOpacity: (assetId: string, opacity: number) => void;
@@ -1396,6 +1401,18 @@ export const useEditorStore = create<EditorState>()(
             });
             // Empty when the store refused it (view only): nothing was made.
             return get().materials[assetId] ? assetId : "";
+          },
+          addMaterialAsset: (source) => {
+            const opacity = assetOpacity(source);
+            const asset: MaterialAsset = {
+              id: createEntityId(),
+              name: source.name.trim() || nextMaterialAssetName(get().materials),
+              layers: copyLayers(source.layers),
+              ...(opacity < 1 ? { opacity } : null),
+            };
+            set((state) => ({ materials: { ...state.materials, [asset.id]: asset } }));
+            // Empty when the store refused it (view only): nothing was added.
+            return get().materials[asset.id] ? asset.id : "";
           },
           setMaterialAssetOpacity: (assetId, opacity) =>
             set((state) => {

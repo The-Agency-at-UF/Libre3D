@@ -1610,6 +1610,28 @@ describe("colour and opacity in states (task D6)", () => {
     expect(Object.keys(get().materials)).toEqual(["m"]);
   });
 
+  it("adds a copy of a material from the library as an asset of the scene, as one undo step", async () => {
+    const { useEditorStore, get } = await storeWithCubes();
+    const source = { name: "Glass", layers: layers("#0000ff"), opacity: 0.4 };
+    const steps = useEditorStore.temporal.getState().pastStates.length;
+
+    const assetId = get().addMaterialAsset(source);
+
+    const added = get().materials[assetId];
+    expect(added).toMatchObject({ id: assetId, name: "Glass", opacity: 0.4 });
+    expect(topColor(added.layers)).toBe("#0000ff");
+    // Its own layers, under new IDs: nothing is shared with the library's copy.
+    expect(added.layers).not.toBe(source.layers);
+    expect(added.layers.map((layer) => layer.id)).not.toEqual(source.layers.map((layer) => layer.id));
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(steps + 1);
+
+    const solidId = get().addMaterialAsset({ name: "Solid", layers: layers("#ffffff") });
+    expect(get().materials[solidId]).not.toHaveProperty("opacity");
+
+    useEditorStore.setState({ readOnlyReason: "openElsewhere" });
+    expect(get().addMaterialAsset(source)).toBe("");
+  });
+
   it("leaves the opacity of an object on an asset alone when its own is set", async () => {
     const { get, find } = await storeWithCubes();
 
