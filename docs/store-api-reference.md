@@ -410,7 +410,7 @@ Update a single layer's properties.
 Batch update layers across multiple entities.
 
 #### `setEntityOpacity(opacities: Record<string, number>) → void`
-Sets how see-through objects are (entity ID → 0–1, clamped), one undo step for all. At 1 the field is left off the entity.
+Sets how see-through objects are in Base (entity ID → 0–1, clamped), one undo step for all. At 1 the field is left off the entity. The Materials panel uses `updateShownLooks`, which sends an object shown in a state to that state instead.
 
 ### Replacing All Layers
 
@@ -595,7 +595,7 @@ interface ObjectState {
 ```
 
 #### `addState(entityId: string) → string`
-Add "State" (then "State 2", …) to an object, starting as a snapshot of the pose on screen (the state it's shown in, or Base), and view it (like `addEntity` selects). Returns its ID.
+Add "State" (then "State 2", …) to an object, starting as a snapshot of the pose on screen (the state it's shown in, or Base), and view it (like `addEntity` selects). The snapshot is the transform and a path's trim, not the colour or opacity: a state sets those only once they're edited while it's shown. Returns its ID.
 
 #### `renameState(stateId: string, name: string) → void`
 Rename a state. A blank name is ignored.
@@ -608,6 +608,9 @@ Set values in a state; the ones not passed stay as they are. Vectors are copied 
 
 #### `updateShownTransforms(updates: Record<string, StateValues>) → void`
 Transform (and trim) edits by entity ID, as the Transform and Path panels and the gizmo (multi-select included) make them: each object's go to the state it's shown in, or to its own values in Base. One undo step for all of them. The gizmo passes only what its tool moved (a multi-select drag: only what changed), so a state never starts setting values it left to Base.
+
+#### `updateShownLooks(updates: Record<string, { color?: string; opacity?: number }>) → void`
+Colour and opacity edits by entity ID, as the Materials panel makes them (its Opacity field, and the top Color layer's picker): each object's go to the state it's shown in, or in Base to its own opacity and to the top Color layer of the stack it's drawn with (its material asset's, when it uses one). One undo step for all of them. Opacity is clamped to 0–1; a colour is dropped for an object with no Color layer; objects without a material are skipped.
 
 #### `clearStateValue(stateId: string, key: keyof StateValues) → void`
 "Reset to Base": the state stops setting that value, so it follows the object's own again.
