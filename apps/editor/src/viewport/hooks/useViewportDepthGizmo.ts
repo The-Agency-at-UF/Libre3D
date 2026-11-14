@@ -11,6 +11,7 @@ import {
   dragNear,
   dragStop,
   pointOnAxis,
+  scaleFar,
   spreadCircle,
   stopDistance,
   type SpreadCircle,
@@ -89,7 +90,8 @@ const pool = <T extends SVGElement>(group: SVGGElement, count: number, make: () 
  * The transform gizmo moves the origin, not the object: ViewportCanvas attaches it (translate only)
  * to a stand-in this hook keeps on the origin, and its drags are written back to the layer.
  * Dragging a handle edits the layer too (utils/depthGizmo.ts): far turns the axis toward the
- * cursor, near and the stops slide along the axis. A drag is one undo step (history pauses after
+ * cursor (on a radial layer it only slides along the axis, scaling the spread, so the stops keep
+ * their place on the circles), near and the stops slide along the axis. A drag is one undo step (history pauses after
  * its first write) and writes at most once a frame. The handles take their own pointer events, so
  * the camera controls and click selection on the canvas never see them; the rest of the SVG lets
  * pointer events through. Enter or Escape ends editing, and so does selecting something else; the
@@ -276,7 +278,9 @@ export function useViewportDepthGizmo(
 
       let updates: Partial<DepthLayer> | null = null;
       const { handle } = gesture;
-      if (handle.kind === "far") {
+      // A radial layer's far only scales the spread: turning its axis would swing the stops around
+      // their circles.
+      if (handle.kind === "far" && layer.gradientType !== "radial") {
         const hit = gesture.plane && ray.intersectPlane(gesture.plane, new THREE.Vector3());
         if (!hit) return;
         updates = dragFar(layer, hit.applyMatrix4(toLocal));
@@ -284,7 +288,9 @@ export function useViewportDepthGizmo(
         const distance = distanceAlongAxis(layer, ray.applyMatrix4(toLocal));
         if (distance === null) return;
         updates =
-          handle.kind === "near"
+          handle.kind === "far"
+            ? { far: scaleFar(layer, distance) }
+            : handle.kind === "near"
             ? { near: dragNear(layer, distance) }
             : { stops: layer.stops.map((stop, i) => (i === handle.index ? { ...stop, position: dragStop(layer, distance) } : stop)) };
       }

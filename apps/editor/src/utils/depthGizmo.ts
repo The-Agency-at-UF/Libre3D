@@ -52,6 +52,12 @@ export const dragFar = (layer: DepthLayer, point: THREE.Vector3): Pick<DepthLaye
   return { direction: [offset.x, offset.y, offset.z], far: Math.max(length, layer.near) };
 };
 
+/**
+ * Far on a radial layer, dragged to `distance` along the axis: only the spread grows or shrinks (at
+ * least near). The axis keeps its direction, so the stops stay put on their spread circles.
+ */
+export const scaleFar = (layer: DepthLayer, distance: number): number => Math.max(distance, layer.near);
+
 /** Near, dragged to `distance` along the axis: from 0 up to far. */
 export const dragNear = (layer: DepthLayer, distance: number): number => Math.min(Math.max(distance, 0), layer.far);
 

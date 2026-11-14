@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import type { DepthLayer } from "../store/useEditorStore";
-import { SPREAD_CIRCLE_POINTS, depthAxis, distanceAlongAxis, dragFar, dragNear, dragStop, pointOnAxis, spreadCircle, stopDistance } from "./depthGizmo";
+import { SPREAD_CIRCLE_POINTS, depthAxis, distanceAlongAxis, dragFar, dragNear, dragStop, pointOnAxis, scaleFar, spreadCircle, stopDistance } from "./depthGizmo";
 
 const depth = (overrides: Partial<DepthLayer> = {}): DepthLayer => ({
   id: "depth",
@@ -44,6 +44,11 @@ describe("the depth gizmo's handles", () => {
     expect(dragged.far).toBeCloseTo(5);
     expect(dragFar(depth(), new THREE.Vector3(1.5, 0, 0)).far).toBe(1); // not inside near
     expect(dragFar(depth(), new THREE.Vector3(1, 0, 0))).toEqual({ direction: [0, 2, 0], far: 3 });
+  });
+
+  it("scale a radial layer's far along its axis without turning it, never inside near", () => {
+    expect(scaleFar(depth(), 5)).toBe(5);
+    expect(scaleFar(depth(), 0.5)).toBe(1);
   });
 
   it("keep near between 0 and far, and stops between near and far", () => {
