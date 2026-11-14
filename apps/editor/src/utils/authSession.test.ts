@@ -88,7 +88,7 @@ describe("auth snapshot", () => {
     storeTokens();
     const { getAuthSnapshot } = await loadAuthSession();
 
-    expect(getAuthSnapshot()).toEqual({ status: "signedIn", email: "ada@ufl.edu", userId: "user-sub-1" });
+    expect(getAuthSnapshot()).toEqual({ status: "signedIn", email: "ada@ufl.edu", userId: "user-sub-1", groups: [] });
   });
 
   it("follows a sign-out in another tab", async () => {
