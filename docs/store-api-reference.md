@@ -379,6 +379,8 @@ An object's material is a stack of layers, **top first** (`materialLayers[0]` is
 
 Every action below edits one object (or, in a batch, several), records one undo step, and records none when the rules refuse it. Refused in view only.
 
+The first argument of each layer action names **whose stack it edits** (`ownerId`): an object's, or a material asset's. An object that uses an asset has its asset's stack edited, so every object using it changes; a batch that names several users of one asset changes the asset once.
+
 ### Adding Layers
 
 #### `addMaterialLayer(entityId: string, layerType: MaterialLayerType, depthFar?: number) → void`
@@ -418,7 +420,26 @@ Replaces an entity's whole layer stack (copied), and sets its opacity when `opac
 ### Material Assets
 
 #### `materials: Record<string, MaterialAsset>`
-Reusable materials by ID (`{ id, name, layers }`, layers top first), saved with the scene as the document's `materials` section and undoable. Empty until material assets arrive (task D PR 6); an entity's `materialAssetId` will point at one.
+Reusable materials by ID (`{ id, name, layers }`, layers top first), saved with the scene as the document's `materials` section and undoable. An entity that uses one names it in `materialAssetId` and is drawn with its layers (`layersOf` in `scene/materialAssets.ts`); its own `materialLayers` is then an empty list. A missing asset falls back to the object's own list (a plain default material) and never throws. `selectDrawnEntities` gives the entities with each user's layers filled in, which is what the viewport syncs.
+
+Every action below is one `set` and one undo step, and changes nothing in view only.
+
+#### `createMaterialAsset(fromEntityId?: string) → string`
+Makes an asset and returns its ID, named Material, Material 2, … in turn. With no object, Lighting over a white Color layer. With an object, a copy of its layers (new layer IDs), and the object then uses it. Groups, lights and imported models' meshes make nothing.
+
+#### `renameMaterialAsset(assetId: string, name: string) → void`
+Ignores an empty or unchanged name.
+
+#### `removeMaterialAsset(assetId: string) → void`
+Deletes the asset and detaches every object using it in the same step, so each keeps its look as layers of its own; one undo restores the asset and the links.
+
+#### `applyMaterialAsset(assetId: string, entityIds: string[]) → void`
+Makes the objects use the asset. Their own layers are **discarded** (detaching copies the asset's back). Groups, lights and imported models' meshes are skipped (`canUseMaterialAsset`). `entity.opacity` stays per object.
+
+#### `detachMaterialAsset(entityIds: string[]) → void`
+Gives each object a copy of its asset's layers under new layer IDs (sharing nothing with the asset) and clears `materialAssetId`.
+
+Duplicating an object keeps its `materialAssetId`; deleting every user keeps the asset.
 
 **Layer interfaces** (every layer also has `id`, `enabled`, `opacity`, `blendMode`, and the maskable ones `mask?`). Colours are `"#rrggbb"`, sRGB as picked; a `PaintColor` is `{ color, alpha? }` (alpha missing = 1) and a ramp stop a `PaintColor` with a `position` (0–1).
 
