@@ -16,7 +16,7 @@ import {
   resolveState,
   unwrapRotation,
   withoutLook,
-  withoutStateColors,
+  withoutStateLooks,
   type ObjectState,
   type Pose,
 } from "./objectStates";
@@ -325,27 +325,30 @@ describe("colour and opacity", () => {
     expect(pose.opacity).toBe(0.5);
   });
 
-  it("leave an object on a material asset in the asset's colour, whatever a state says; its opacity still follows the state", () => {
+  it("leave an object on a material asset in the asset's colour and opacity, whatever a state says", () => {
+    // As drawn: with its asset's layers and opacity (scene/materialAssets.ts, resolveEntities).
     const onAsset = cube({ materialAssetId: "m", opacity: 0.4 });
     const ghost = makeState("ghost", "cube", { values: { color: "#0000ff", opacity: 0 } });
 
-    expect(resolveState(onAsset, ghost)).toMatchObject({ color: "#ff0000", opacity: 0 });
+    expect(resolveState(onAsset, ghost)).toMatchObject({ color: "#ff0000", opacity: 0.4 });
   });
 
-  it("drop the colours of the states of objects that start using a material asset, and nothing else", () => {
+  it("drop the colours and opacities of the states of objects that start using a material asset, and nothing else", () => {
     const states = statesById(
       makeState("ghost", "cube", { values: { position: [1, 5, 3], color: "#0000ff", opacity: 0 } }),
+      makeState("faded", "cube", { values: { opacity: 0.5 } }),
       makeState("moved", "cube", { values: { position: [0, 0, 0] } }),
       makeState("other", "ball", { values: { color: "#0000ff" } }),
     );
 
-    const next = withoutStateColors(states, new Set(["cube"]));
+    const next = withoutStateLooks(states, new Set(["cube"]));
 
-    expect(next.ghost.values).toEqual({ position: [1, 5, 3], opacity: 0 });
+    expect(next.ghost.values).toEqual({ position: [1, 5, 3] });
+    expect(next.faded.values).toEqual({});
     expect(next.moved).toBe(states.moved);
     expect(next.other).toBe(states.other);
     expect(states.ghost.values.color).toBe("#0000ff");
-    expect(withoutStateColors(states, new Set(["cone"]))).toBe(states);
+    expect(withoutStateLooks(states, new Set(["cone"]))).toBe(states);
   });
 
   it("keep an opacity inside 0 to 1", () => {

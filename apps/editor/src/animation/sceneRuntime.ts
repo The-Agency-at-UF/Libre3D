@@ -32,8 +32,8 @@ import { sampleTransition, type StateRef, type TransitionAction } from "./transi
 
 /**
  * What the runtime needs of an object: where it is in Base (and a path's trim), its parent (for
- * clicks), and for its colour and opacity the layers it is drawn with, whether they are a material
- * asset's (no state recolours those: objectStates.ts), and its own opacity. Give it the entities as
+ * clicks), and for its colour and opacity the layers and opacity it is drawn with, and whether
+ * they are a material asset's (no state changes those: objectStates.ts). Give it the entities as
  * they are drawn (scene/materialAssets.ts, `resolveEntities`), so an object on a material asset has
  * the asset's layers.
  */

@@ -16,12 +16,12 @@
  *
  * Colour and opacity: a state's `opacity` is the object's opacity, and its `color` is the colour of
  * the object's top Color layer (scene/layers.ts, `colorLayerOf`). An object with no Color layer has
- * no colour to set. Nor has an object that uses a material asset: an asset is one look, the same in
- * every state (so its shaderball is always what its objects look like), and such an object is its
- * asset's colour whatever a state says. To animate its colour, detach it from the asset; applying
- * an asset drops the colours its states set (`withoutStateColors`). A new state doesn't snapshot
- * colour or opacity: it sets one only once it's edited while the state is shown, so recolouring
- * Base still reaches every state.
+ * no colour to set. An object that uses a material asset has neither to set: an asset is one whole
+ * look, its opacity included, the same in every state (so its shaderball is always what its objects
+ * look like), and such an object is its asset's colour and opacity whatever a state says. To
+ * animate them, detach it from the asset; applying an asset drops the colours and opacities its
+ * states set (`withoutStateLooks`). A new state doesn't snapshot colour or opacity: it sets one
+ * only once it's edited while the state is shown, so recolouring Base still reaches every state.
  */
 
 import { colorLayerOf } from "../scene/layers";
@@ -72,14 +72,14 @@ export type Look = Pick<StateValues, "color" | "opacity">;
  * Where an object is and how it looks: its Base values with a state's on top. Its transform always;
  * a trim only when the object or the state has one (paths); an opacity only for an object with a
  * material, and a colour only when that material has a Color layer (the state's only for an object
- * with layers of its own, not a material asset's).
+ * with a material of its own, not a material asset).
  */
 export type Pose = EntityTRS & Trim & Look;
 
 /**
  * What a pose is worked out from: an object's own transform and trim, and for its look the layers
- * it is drawn with (its material asset's when it uses one: scene/materialAssets.ts,
- * `resolveEntities`) and its own opacity. An entity is one.
+ * and opacity it is drawn with (its material asset's when it uses one: scene/materialAssets.ts,
+ * `resolveEntities`). An entity as drawn is one.
  */
 export type PoseSource = EntityTRS & Trim & { materialLayers?: MaterialLayer[]; materialAssetId?: string; opacity?: number };
 
@@ -126,10 +126,11 @@ export const resolveState = (entity: PoseSource, state?: ObjectState | null): Po
     pose.trimEnd = trimEnd ?? 1;
   }
   if (entity.materialLayers) {
-    pose.opacity = clampOpacity(state?.values.opacity ?? entity.opacity ?? 1);
+    // An object on a material asset is the asset's colour and opacity in every state.
+    const look = entity.materialAssetId ? undefined : state?.values;
+    pose.opacity = clampOpacity(look?.opacity ?? entity.opacity ?? 1);
     const baseColor = colorLayerOf(entity.materialLayers)?.color;
-    // An object on a material asset is the asset's colour in every state.
-    if (baseColor !== undefined) pose.color = (!entity.materialAssetId && state?.values.color) || baseColor;
+    if (baseColor !== undefined) pose.color = look?.color ?? baseColor;
   }
   return pose;
 };
@@ -143,15 +144,17 @@ export const withoutLook = (pose: Pose): Pose => {
 };
 
 /**
- * The states without the colours those of `entityIds` set: for objects that start using a material
- * asset, which is one colour in every state. The same states when none of them set one.
+ * The states without the colours and opacities those of `entityIds` set: for objects that start
+ * using a material asset, which is one look in every state. The same states when none of them set one.
  */
-export const withoutStateColors = (states: Record<string, ObjectState>, entityIds: ReadonlySet<string>): Record<string, ObjectState> => {
-  const colored = Object.values(states).filter((state) => entityIds.has(state.targetId) && state.values.color !== undefined);
-  if (colored.length === 0) return states;
+export const withoutStateLooks = (states: Record<string, ObjectState>, entityIds: ReadonlySet<string>): Record<string, ObjectState> => {
+  const set = Object.values(states).filter(
+    (state) => entityIds.has(state.targetId) && (state.values.color !== undefined || state.values.opacity !== undefined),
+  );
+  if (set.length === 0) return states;
   const next = { ...states };
-  for (const state of colored) {
-    const { color: _color, ...values } = state.values;
+  for (const state of set) {
+    const { color: _color, opacity: _opacity, ...values } = state.values;
     next[state.id] = { ...state, values };
   }
   return next;
