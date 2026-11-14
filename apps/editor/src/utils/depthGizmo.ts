@@ -5,7 +5,8 @@
  * The gizmo lies along the layer's axis (its direction, from its origin): the near and far handles
  * at those distances, and each stop between them at its place on the ramp. Dragging the origin
  * moves it; dragging far turns the axis toward the cursor and sets far; near and the stops slide
- * along the axis. A radial layer also shows its spread: two circles around the origin at far.
+ * along the axis. A radial layer also shows each stop's spread: two circles around the origin at
+ * the stop's distance.
  */
 
 import * as THREE from "three";
@@ -61,8 +62,9 @@ export const dragStop = (layer: DepthLayer, distance: number): number => {
 };
 
 /**
- * A radial layer's two spread circles, both around the origin at far: one flat on the layer's XZ
- * plane, one upright through the axis (so the far handle sits on it).
+ * The two circles that show a radial layer's spread at a distance (drawn at each stop's), both
+ * around the origin: one flat on the layer's XZ plane, one upright through the axis (so the stop's
+ * handle sits on it).
  */
 export type SpreadCircle = "flat" | "upright";
 
@@ -79,16 +81,22 @@ const SPREAD_PLANES: Record<SpreadCircle, (axis: THREE.Vector3) => [THREE.Vector
 };
 
 /**
- * The points of one of a radial layer's spread circles, in the layer's space, as x, y, z triples
- * in `out` (SPREAD_CIRCLE_POINTS of them; the caller keeps one buffer and reuses it).
+ * The points of one of a radial layer's spread circles at `distance` from the origin, in the
+ * layer's space, as x, y, z triples in `out` (SPREAD_CIRCLE_POINTS of them; the caller keeps one
+ * buffer and reuses it).
  */
-export const spreadCircle = (layer: DepthLayer, which: SpreadCircle, out = new Float32Array(SPREAD_CIRCLE_POINTS * 3)): Float32Array => {
+export const spreadCircle = (
+  layer: DepthLayer,
+  which: SpreadCircle,
+  distance: number,
+  out = new Float32Array(SPREAD_CIRCLE_POINTS * 3),
+): Float32Array => {
   const [u, v] = SPREAD_PLANES[which](depthAxis(layer));
   const [ox, oy, oz] = layer.origin;
   for (let i = 0; i < SPREAD_CIRCLE_POINTS; i++) {
     const angle = (i / SPREAD_CIRCLE_POINTS) * Math.PI * 2;
-    const c = Math.cos(angle) * layer.far;
-    const s = Math.sin(angle) * layer.far;
+    const c = Math.cos(angle) * distance;
+    const s = Math.sin(angle) * distance;
     out[i * 3] = ox + c * u.x + s * v.x;
     out[i * 3 + 1] = oy + c * u.y + s * v.y;
     out[i * 3 + 2] = oz + c * u.z + s * v.z;

@@ -58,10 +58,10 @@ describe("the depth gizmo's handles", () => {
 describe("a radial layer's spread circles", () => {
   const points = (out: Float32Array) => Array.from({ length: out.length / 3 }, (_, i) => new THREE.Vector3(out[i * 3], out[i * 3 + 1], out[i * 3 + 2]));
 
-  it("are around the origin at far", () => {
-    const layer = depth({ origin: [1, 2, 3], direction: [1, 1, 0], far: 4 });
+  it("are around the origin at the distance asked for", () => {
+    const layer = depth({ origin: [1, 2, 3], direction: [1, 1, 0], far: 9 });
     for (const which of ["flat", "upright"] as const) {
-      const circle = points(spreadCircle(layer, which));
+      const circle = points(spreadCircle(layer, which, 4));
       expect(circle).toHaveLength(SPREAD_CIRCLE_POINTS);
       for (const point of circle) expect(point.distanceTo(new THREE.Vector3(1, 2, 3))).toBeCloseTo(4);
     }
@@ -69,10 +69,10 @@ describe("a radial layer's spread circles", () => {
 
   it("lie flat on the XZ plane, and upright through the axis", () => {
     const layer = depth({ origin: [1, 2, 3], direction: [1, 1, 1], far: 4 });
-    for (const point of points(spreadCircle(layer, "flat"))) expect(point.y).toBeCloseTo(2);
+    for (const point of points(spreadCircle(layer, "flat", 4))) expect(point.y).toBeCloseTo(2);
     // The upright circle's plane holds straight up and the axis, so nothing of it lies to the side.
     const side = new THREE.Vector3(1, 0, -1).normalize();
-    const upright = points(spreadCircle(layer, "upright"));
+    const upright = points(spreadCircle(layer, "upright", layer.far));
     for (const point of upright) expect(point.clone().sub(new THREE.Vector3(1, 2, 3)).dot(side)).toBeCloseTo(0);
     // The far handle sits on it.
     const far = pointOnAxis(layer, layer.far);
@@ -80,12 +80,12 @@ describe("a radial layer's spread circles", () => {
   });
 
   it("stand on x when the axis points straight up", () => {
-    const upright = points(spreadCircle(depth({ origin: [0, 0, 0], direction: [0, 1, 0], far: 2 }), "upright"));
+    const upright = points(spreadCircle(depth({ origin: [0, 0, 0], direction: [0, 1, 0] }), "upright", 2));
     for (const point of upright) expect(point.z).toBeCloseTo(0);
   });
 
   it("fill the buffer they're given", () => {
     const out = new Float32Array(SPREAD_CIRCLE_POINTS * 3);
-    expect(spreadCircle(depth(), "flat", out)).toBe(out);
+    expect(spreadCircle(depth(), "flat", 1, out)).toBe(out);
   });
 });

@@ -78,10 +78,10 @@ const pool = <T extends SVGElement>(group: SVGGElement, count: number, make: () 
  *
  * While an object's Depth layer is being edited (`depthEdit` in the store; `editDepth`, the Depth
  * layer's button), an SVG over the canvas shows its axis from the origin to far, the near and far
- * markers (triangles above the axis), each stop as a dot in its colour, and for a radial layer its
- * spread: two circles around the origin at far, one flat on the layer's XZ plane and one upright
- * through the axis. The circles lie in the scene (each point is projected), so they turn with the
- * view. It's redrawn from the 3D positions each frame (ViewportCanvas runs `frameRef` before each
+ * markers (triangles above the axis), each stop as a dot in its colour, and for a radial layer
+ * each stop's spread: two circles around the origin at the stop's distance, one flat on the
+ * layer's XZ plane and one upright through the axis. The circles lie in the scene (each point is
+ * projected), so they turn with the view. It's redrawn from the 3D positions each frame (ViewportCanvas runs `frameRef` before each
  * render), so it follows the camera and the object.
  *
  * The transform gizmo moves the origin, not the object: ViewportCanvas attaches it (translate only)
@@ -112,11 +112,11 @@ export function useViewportDepthGizmo(
     const canvas = renderer.domElement;
 
     const svg = svgElement("svg", "depth-gizmo");
-    const rings = SPREAD_CIRCLES.map(() => svgElement("path", "depth-gizmo-ring"));
+    const rings = svgElement("g", "");
     const axis = svgElement("line", "depth-gizmo-axis");
     const cones = svgElement("g", "");
     const stops = svgElement("g", "");
-    svg.append(...rings, axis, cones, stops);
+    svg.append(rings, axis, cones, stops);
     const coneParts = (["near", "far"] as const).map((kind) => {
       const stem = svgElement("line", "depth-gizmo-stem");
       const cone = svgElement("polygon", "depth-gizmo-handle depth-gizmo-cone");
@@ -210,15 +210,14 @@ export function useViewportDepthGizmo(
         cone.setAttribute("points", `${at.x - 7},${top - 10} ${at.x + 7},${top - 10} ${at.x},${top + 2}`);
       });
 
-      // A radial layer's spread: each circle's points, projected one by one. The line breaks where
-      // a point is behind the camera.
-      const radial = layer.gradientType === "radial";
+      // A radial layer's spread: both circles at each stop's distance, their points projected one
+      // by one. A line breaks where a point is behind the camera.
+      const ringCount = layer.gradientType === "radial" ? layer.stops.length * SPREAD_CIRCLES.length : 0;
       const rect = canvas.getBoundingClientRect();
       const box = container.getBoundingClientRect();
-      rings.forEach((ring, which) => {
-        ring.style.display = radial ? "" : "none";
-        if (!radial) return;
-        spreadCircle(layer, SPREAD_CIRCLES[which], circlePoints);
+      pool(rings, ringCount, () => svgElement("path", "depth-gizmo-ring")).forEach((ring, n) => {
+        const stop = layer.stops[Math.floor(n / SPREAD_CIRCLES.length)];
+        spreadCircle(layer, SPREAD_CIRCLES[n % SPREAD_CIRCLES.length], stopDistance(layer, stop.position), circlePoints);
         let path = "";
         let drawing = false;
         for (let i = 0; i <= SPREAD_CIRCLE_POINTS; i++) {
