@@ -8,6 +8,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { showAlert } from "./ui/Dialog";
 
 // tsx components for editor scene and UI
+import { AssetsBrowser } from "./AssetsBrowser";
 import { HierarchyPanel } from "./hierarchy/HierarchyPanel";
 import { ViewportCanvas } from "./ViewportCanvas";
 import { ViewportOverlays } from "./ViewportOverlays";
@@ -288,7 +289,7 @@ export function EditorLayout({
               <input
                 className="sidebar-search-input"
                 type="text"
-                placeholder="Search directory..."
+                placeholder="Search assets..."
                 value={sidebarUI.searchQuery}
                 onChange={(e) => sidebarUI.setSearchQuery(e.target.value)}
               />
@@ -299,9 +300,7 @@ export function EditorLayout({
             {sidebarUI.activeSidebarTab === "objects" ? (
               <HierarchyPanel searchQuery={sidebarUI.searchQuery} />
             ) : (
-              <div className="editor-meta" style={{ padding: "0.5rem" }}>
-                Asset browser is empty.
-              </div>
+              <AssetsBrowser searchQuery={sidebarUI.searchQuery} assetsView={sidebarUI.assetsView} onAssetsView={sidebarUI.setAssetsView} />
             )}
           </div>
 
@@ -339,6 +338,8 @@ export function EditorLayout({
           setIsModalOpen={sidebarUI.setIsModalOpen}
           setActiveTab={sidebarUI.setActiveTab}
           canShare={publishing !== null}
+          assetsView={sidebarUI.assetsView}
+          setAssetsView={sidebarUI.setAssetsView}
         />
       </div>
 

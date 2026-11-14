@@ -809,6 +809,42 @@
   background: var(--bg-hover);
 }
 
+/* The material open in the Material Builder (the left sidebar's Assets tab marks it) */
+.mat-asset-row.open {
+  background: var(--bg-hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* The left sidebar's Assets tab (AssetsBrowser): one section per kind of asset */
+.assets-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px 12px;
+}
+
+.assets-section-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.assets-section-header span {
+  flex: 1;
+}
+
+.assets-section-note {
+  margin: 0;
+  padding: 2px 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-tertiary);
+}
+
 .mat-asset-open {
   flex: 1;
   min-width: 0;

@@ -6,8 +6,10 @@
  * The list: one row per asset (its ball, its name, apply to the selected objects, delete), "+" for a
  * new material, and "from selection" for one made from the selected object's layers. A click on a
  * row, or "+", shows that asset in the builder in place of the list; the builder's arrow goes back.
+ * The left sidebar's Assets tab (AssetsBrowser.tsx) lists the same assets with the same rows, and
+ * opens this drawer's builder.
  *
- * INPUT: Which view is showing (`AssetsView`, held by the right sidebar). OUTPUT: Edits through the
+ * INPUT: Which view is showing (`AssetsView`, held by the layout: useRightSidebarState). OUTPUT: Edits through the
  * store's asset actions, applied to the selected objects that have a material.
  *
  * Everything that changes the scene is disabled while it's view only; the list and the builder can
@@ -46,7 +48,12 @@ export function AssetBall({ asset }: { asset: MaterialAsset }) {
   return <span className="mat-asset-ball" style={{ ["--ball-color" as string]: colorLayerOf(asset.layers)?.color ?? "#8a8a92" }} aria-hidden="true" />;
 }
 
-function AssetRow({ asset, selectedEntities, onOpen }: { asset: MaterialAsset; selectedEntities: Entity[]; onOpen: () => void }) {
+/**
+ * One material asset in a list (this drawer's, and the left sidebar's Assets tab): its ball and name
+ * (a click opens it in the Material Builder), how many objects use it, apply to the selected
+ * objects, and delete. `open`: it's the one in the builder.
+ */
+export function AssetRow({ asset, selectedEntities, onOpen, open = false }: { asset: MaterialAsset; selectedEntities: Entity[]; onOpen: () => void; open?: boolean }) {
   const applyMaterialAsset = useEditorStore((state) => state.applyMaterialAsset);
   const removeMaterialAsset = useEditorStore((state) => state.removeMaterialAsset);
   const userCount = useEditorStore((state) => usersOfMaterialAsset(state.entities, asset.id).length);
@@ -56,7 +63,7 @@ function AssetRow({ asset, selectedEntities, onOpen }: { asset: MaterialAsset; s
   const applied = targets.length > 0 && targets.every((entity) => entity.materialAssetId === asset.id);
 
   return (
-    <div className="mat-asset-row">
+    <div className={`mat-asset-row ${open ? "open" : ""}`}>
       <button type="button" className="mat-asset-open" title="Open in the Material Builder" onClick={onOpen}>
         <AssetBall asset={asset} />
         <span className="mat-asset-name">{asset.name}</span>

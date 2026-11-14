@@ -22,9 +22,16 @@ export interface RightSidebarProps {
   setActiveTab: (tab: "export" | "share") => void;
   /** False hides the Share button (a guest's scene isn't in the cloud). */
   canShare: boolean;
+  /**
+   * The Material Assets drawer: closed (null), its list, or the builder for one material. Held by
+   * the layout (useRightSidebarState), not here or in the Materials panel that opens it, so the left
+   * sidebar's Assets tab opens it too and it stays open while nothing is selected.
+   */
+  assetsView: AssetsView | null;
+  setAssetsView: (view: AssetsView | null) => void;
 }
 
-export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSidebarProps) {
+export function RightSidebar({ setIsModalOpen, setActiveTab, canShare, assetsView, setAssetsView }: RightSidebarProps) {
   const viewportZoom = useEditorStore((state) => state.viewportZoom);
   const hasSelection = useEditorStore((state) => state.selectedEntityIds.length > 0);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
@@ -50,10 +57,6 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
   useEffect(() => {
     if (editingEventId && !showEventEditor) setEditingEventId(null);
   }, [editingEventId, showEventEditor]);
-
-  // The Material Assets drawer: closed, its list, or the builder for one material. Kept here, not
-  // in the Materials panel that opens it, so it stays open while nothing is selected.
-  const [assetsView, setAssetsView] = useState<AssetsView | null>(null);
 
   // Hidden rather than unmounted while previewing so the inspector's own local
   // state (open panels, scroll position) is exactly where the user left it on Stop.
