@@ -410,7 +410,7 @@ Update a single layer's properties.
 Batch update layers across multiple entities.
 
 #### `setEntityOpacity(opacities: Record<string, number>) → void`
-Sets how see-through objects are (entity ID → 0–1, clamped), one undo step for all. At 1 the field is left off the entity.
+Sets how see-through objects are in Base (entity ID → 0–1, clamped), one undo step for all. At 1 the field is left off the entity. The Materials panel uses `updateShownLooks`, which sends an object shown in a state to that state instead.
 
 ### Replacing All Layers
 
@@ -425,7 +425,13 @@ Reusable materials by ID (`{ id, name, layers }`, layers top first), saved with 
 Every action below is one `set` and one undo step, and changes nothing in view only.
 
 #### `createMaterialAsset(fromEntityId?: string) → string`
-Makes an asset and returns its ID, named Material, Material 2, … in turn. With no object, Lighting over a white Color layer. With an object, a copy of its layers (new layer IDs), and the object then uses it. Groups, lights and imported models' meshes make nothing.
+Makes an asset and returns its ID, named Material, Material 2, … in turn. With no object, Lighting over a white Color layer. With an object, a copy of its layers (new layer IDs), and the object then uses it. Groups, lights and imported models' meshes make nothing. The object's opacity becomes the asset's. An asset is one look in every state, so the colours and opacities the object's states set are dropped in the same undo step.
+
+#### `addMaterialAsset(source: { name, layers, opacity? }) → string`
+Adds a copy of a material from outside the scene (the Libre3D library) as an asset, its layers under new IDs, and returns its ID ("" in view only).
+
+#### `setMaterialAssetOpacity(assetId: string, opacity: number) → void`
+Sets how see-through every object using the asset is (0-1, clamped; 1 is stored as none). An object on an asset is drawn with the asset's opacity, not its own.
 
 #### `renameMaterialAsset(assetId: string, name: string) → void`
 Ignores an empty or unchanged name.
@@ -434,7 +440,7 @@ Ignores an empty or unchanged name.
 Deletes the asset and detaches every object using it in the same step, so each keeps its look as layers of its own; one undo restores the asset and the links.
 
 #### `applyMaterialAsset(assetId: string, entityIds: string[]) → void`
-Makes the objects use the asset. Their own layers are **discarded** (detaching copies the asset's back). Groups, lights and imported models' meshes are skipped (`canUseMaterialAsset`). `entity.opacity` stays per object.
+Makes the objects use the asset. Their own layers are **discarded** (detaching copies the asset's back). Groups, lights and imported models' meshes are skipped (`canUseMaterialAsset`). `entity.opacity` stays per object. An asset is one colour in every state, so the colours the object's states set are dropped in the same undo step (their opacity stays).
 
 #### `detachMaterialAsset(entityIds: string[]) → void`
 Gives each object a copy of its asset's layers under new layer IDs (sharing nothing with the asset) and clears `materialAssetId`.
@@ -595,7 +601,7 @@ interface ObjectState {
 ```
 
 #### `addState(entityId: string) → string`
-Add "State" (then "State 2", …) to an object, starting as a snapshot of the pose on screen (the state it's shown in, or Base), and view it (like `addEntity` selects). Returns its ID.
+Add "State" (then "State 2", …) to an object, starting as a snapshot of the pose on screen (the state it's shown in, or Base), and view it (like `addEntity` selects). The snapshot is the transform and a path's trim, not the colour or opacity: a state sets those only once they're edited while it's shown. Returns its ID.
 
 #### `renameState(stateId: string, name: string) → void`
 Rename a state. A blank name is ignored.
@@ -608,6 +614,9 @@ Set values in a state; the ones not passed stay as they are. Vectors are copied 
 
 #### `updateShownTransforms(updates: Record<string, StateValues>) → void`
 Transform (and trim) edits by entity ID, as the Transform and Path panels and the gizmo (multi-select included) make them: each object's go to the state it's shown in, or to its own values in Base. One undo step for all of them. The gizmo passes only what its tool moved (a multi-select drag: only what changed), so a state never starts setting values it left to Base.
+
+#### `updateShownLooks(updates: Record<string, { color?: string; opacity?: number }>) → void`
+Colour and opacity edits by entity ID, as the Materials panel makes them (its Opacity field, and the top Color layer's picker): each object's go to the state it's shown in, or in Base to its own opacity and its top Color layer. An object that uses a material asset is the asset's colour in every state, so its colour always goes to the asset's top Color layer, shown in a state or not. One undo step for all of them. Opacity is clamped to 0–1; a colour is dropped for an object with no Color layer; objects without a material are skipped.
 
 #### `clearStateValue(stateId: string, key: keyof StateValues) → void`
 "Reset to Base": the state stops setting that value, so it follows the object's own again.

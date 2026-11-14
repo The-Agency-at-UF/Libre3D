@@ -4,7 +4,7 @@ import type { SceneRenderer } from "../rendererSettings";
 import { resolveState } from "../../animation/objectStates";
 import { SceneRuntime } from "../../animation/sceneRuntime";
 import { previewTiming, type TransitionAction } from "../../animation/transitions";
-import { selectViewedObjectState, useEditorStore, type EditorState } from "../../store/useEditorStore";
+import { selectDrawnEntities, selectViewedObjectState, useEditorStore, type EditorState } from "../../store/useEditorStore";
 import { getEntityIndex } from "../../scene/entityIndex";
 import type { ObjectManager } from "../ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
@@ -95,7 +95,7 @@ export function useViewportPlay(
     const endSession = () => {
       if (!session) return;
       const store = useEditorStore.getState();
-      const { byId } = getEntityIndex(store.entities);
+      const { byId } = getEntityIndex(selectDrawnEntities(store));
       session.runtime.poses().forEach((_pose, entityId) => {
         const entity = byId.get(entityId);
         if (entity) objectManager.applyPose(entityId, resolveState(entity, selectViewedObjectState(store, entityId)));
@@ -122,7 +122,8 @@ export function useViewportPlay(
     };
 
     const startSession = (store: EditorState, preview: boolean): SceneRuntime => {
-      const runtime = new SceneRuntime({ entities: store.entities, animation: store.animation });
+      // The entities as they are drawn, so a state's colour goes over a material asset's layers.
+      const runtime = new SceneRuntime({ entities: selectDrawnEntities(store), animation: store.animation });
       const view = preview ? null : startView(store);
       session = { runtime, preview, entities: store.entities, animation: store.animation, selection: store.selectedEntityIds, view };
       return runtime;
@@ -131,7 +132,7 @@ export function useViewportPlay(
     // The preview's runtime, started on its action, or null when there's nothing it can play.
     const startPreview = (store: EditorState, actionId: string): SceneRuntime | null => {
       const action = findAction(store, actionId);
-      const target = action && store.entities.find((entity) => entity.id === action.targetId);
+      const target = action && selectDrawnEntities(store).find((entity) => entity.id === action.targetId);
       if (!action || !target) return null;
 
       const runtime = startSession(store, true);

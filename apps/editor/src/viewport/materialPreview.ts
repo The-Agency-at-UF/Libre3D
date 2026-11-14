@@ -61,6 +61,7 @@ export class MaterialPreview {
   constructor(
     private readonly canvas: HTMLCanvasElement,
     layers: MaterialLayer[],
+    opacity = 1,
   ) {
     this.scene.add(this.ambient);
     this.objects = new ObjectManager(
@@ -81,7 +82,7 @@ export class MaterialPreview {
       },
       { getRenderer: getLiveRenderer, editorHelpers: false },
     );
-    this.setLayers(layers);
+    this.setLayers(layers, opacity);
   }
 
   private entities(): Entity[] {
@@ -92,10 +93,10 @@ export class MaterialPreview {
     if (!this.disposed) waiting.add(this);
   }
 
-  /** Shows another stack (or the same one, edited). */
-  public setLayers(layers: MaterialLayer[]): void {
-    if (this.ball.materialLayers === layers) return;
-    this.ball = { ...this.ball, materialLayers: layers };
+  /** Shows another stack (or the same one, edited), `opacity` see-through (the material asset's; 1 = solid). */
+  public setLayers(layers: MaterialLayer[], opacity = 1): void {
+    if (this.ball.materialLayers === layers && (this.ball.opacity ?? 1) === opacity) return;
+    this.ball = { ...this.ball, materialLayers: layers, opacity };
     this.request();
   }
 

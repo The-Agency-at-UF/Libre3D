@@ -19,6 +19,7 @@
  */
 
 import * as THREE from "three";
+import { fadingObjects } from "../animation/objectStates";
 import { SceneRuntime } from "../animation/sceneRuntime";
 import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialSceneDefaults } from "../scene/defaults";
 import { resolveEntities } from "../scene/materialAssets";
@@ -78,7 +79,9 @@ export class SceneViewer {
 
     const objects = new ObjectManager(scene, new Map(), source, { getRenderer: () => renderer, editorHelpers: false });
     // Objects that use a material asset are drawn with its layers, from the document alone.
-    objects.syncMeshes(resolveEntities(content.entities, content.materials), null, false);
+    const drawn = resolveEntities(content.entities, content.materials);
+    objects.setFadingObjects(fadingObjects(content.animation?.states));
+    objects.syncMeshes(drawn, null, false);
 
     // Syncing to no objects disposes them all (geometry, materials, textures).
     this.disposers.push(() => {
@@ -93,7 +96,8 @@ export class SceneViewer {
     const camera = new PlayCamera(start, resolvePlayCamera(start.play), aspect(), { reduceMotion });
     this.disposers.push(camera.attach(canvas));
 
-    const runtime = new SceneRuntime({ entities: content.entities, animation: content.animation ?? {} });
+    // The drawn entities, so a state's colour goes over an asset's layers.
+    const runtime = new SceneRuntime({ entities: drawn, animation: content.animation ?? {} });
     runtime.start();
 
     const resize = () => {

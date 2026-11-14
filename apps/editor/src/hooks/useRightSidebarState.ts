@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { AssetsView } from "../components/inspector/MaterialAssetsDrawer";
 
 export interface RightSidebarState {
   isExporting: boolean;
@@ -19,6 +20,13 @@ export interface RightSidebarState {
   setIsShapeDropdownOpen: (val: boolean) => void;
   collapsibleStates: Record<string, boolean>;
   toggleCollapsible: (section: string) => void;
+  /**
+   * The Material Assets drawer beside the right sidebar: closed (null), its list, or the Material
+   * Builder for one material. Here, so the Materials panel on the right and the Assets tab on the
+   * left open the same drawer, and it stays open while nothing is selected.
+   */
+  assetsView: AssetsView | null;
+  setAssetsView: (view: AssetsView | null) => void;
 }
 
 export function useRightSidebarState(): RightSidebarState {
@@ -30,6 +38,7 @@ export function useRightSidebarState(): RightSidebarState {
   const [activeSidebarTab, setActiveSidebarTab] = useState<"objects" | "assets">("objects");
   const [searchQuery, setSearchQuery] = useState("");
   const [isShapeDropdownOpen, setIsShapeDropdownOpen] = useState(false);
+  const [assetsView, setAssetsView] = useState<AssetsView | null>(null);
 
   const [collapsibleStates, setCollapsibleStates] = useState<Record<string, boolean>>({
     frame: true,
@@ -60,5 +69,7 @@ export function useRightSidebarState(): RightSidebarState {
     setIsShapeDropdownOpen,
     collapsibleStates,
     toggleCollapsible,
+    assetsView,
+    setAssetsView,
   };
 }

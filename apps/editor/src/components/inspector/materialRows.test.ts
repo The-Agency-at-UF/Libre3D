@@ -30,7 +30,7 @@ describe("ownersFor", () => {
     const { ownersFor } = await load();
     const cube = make("cube", "a");
 
-    expect(ownersFor([cube], {})).toEqual([{ id: "a", layers: cube.materialLayers, entityId: "a", displaceable: true }]);
+    expect(ownersFor([cube], {})).toEqual([{ id: "a", layers: cube.materialLayers, entityId: "a", entityIds: ["a"], displaceable: true }]);
   });
 
   it("gives objects on one material asset as one owner: the asset, shown through the first of them", async () => {
@@ -39,6 +39,7 @@ describe("ownersFor", () => {
 
     const owners = ownersFor([make("cube", "a", "m"), make("cube", "b", "m"), make("cube", "c")], materials);
 
+    expect(owners.map((owner) => owner.entityIds)).toEqual([["a", "b"], ["c"]]);
     expect(owners.map((owner) => [owner.id, owner.entityId])).toEqual([
       ["m", "a"],
       ["c", "c"],
@@ -51,7 +52,7 @@ describe("ownersFor", () => {
 
     const owners = ownersFor([make("cube", "a", "gone"), make("group", "g")], {});
 
-    expect(owners).toEqual([{ id: "a", layers: [], entityId: "a", displaceable: true }]);
+    expect(owners).toEqual([{ id: "a", layers: [], entityId: "a", entityIds: ["a"], displaceable: true }]);
   });
 
   it("lets a stack be displaced only when every object showing it is a primitive", async () => {
@@ -61,7 +62,7 @@ describe("ownersFor", () => {
     expect(ownersFor([make("cube", "a", "m"), make("path", "p", "m")], materials)[0].displaceable).toBe(false);
     expect(ownersFor([make("cube", "a", "m"), make("cube", "b", "m")], materials)[0].displaceable).toBe(true);
     // An asset on its own (the Material Builder) isn't any one shape.
-    expect(assetOwner(materials.m)).toEqual({ id: "m", layers: materials.m.layers, displaceable: false });
+    expect(assetOwner(materials.m)).toEqual({ id: "m", layers: materials.m.layers, entityIds: [], displaceable: false });
   });
 });
 
@@ -97,6 +98,6 @@ describe("rowsFor", () => {
     const { rowsFor } = await load();
 
     expect(rowsFor([])).toEqual([]);
-    expect(rowsFor([{ id: "a", layers: [], displaceable: true }])).toEqual([]);
+    expect(rowsFor([{ id: "a", layers: [], entityIds: [], displaceable: true }])).toEqual([]);
   });
 });

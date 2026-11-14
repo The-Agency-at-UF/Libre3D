@@ -2,6 +2,9 @@
  * PURPOSE: A picked colour as the colour picker (components/ui/ColorPicker.tsx) edits it: hex,
  * HSV for its square and hue slider, and RGB / HSL for its fields. All sRGB as picked, 0-255 or
  * 0-1 as named; no Three.js, no colour management.
+ *
+ * Also the sRGB transfer curve and a mix of two picked colours in linear light, for the animation
+ * runtime (animation/sceneRuntime.ts), which every page loads and so can't use Three's Color.
  */
 
 export interface Hsv {
@@ -67,4 +70,31 @@ export const hslToRgb = ([h, s, l]: [number, number, number]): [number, number, 
     return (ln - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255;
   };
   return [f(0), f(8), f(4)];
+};
+
+/** One sRGB channel (0-1, as picked) as linear light (0-1). */
+export const srgbToLinear = (channel: number): number =>
+  channel <= 0.04045 ? channel / 12.92 : Math.pow((channel + 0.055) / 1.055, 2.4);
+
+/** One linear-light channel (0-1) as sRGB (0-1). */
+export const linearToSrgb = (channel: number): number =>
+  channel <= 0.0031308 ? channel * 12.92 : 1.055 * Math.pow(channel, 1 / 2.4) - 0.055;
+
+/**
+ * The colour `progress` (0-1) of the way from one "#rrggbb" to another, mixed in linear light as
+ * THREE.Color.lerp does on its working values: the midpoint of black and white is the grey that
+ * gives off half the light (#bcbcbc), not #808080. At 0 and 1 it is the colour given, as given. A
+ * text that isn't a colour counts as the other one.
+ */
+export const mixHexLinear = (from: string, to: string, progress: number): string => {
+  if (progress <= 0 || from === to) return from;
+  if (progress >= 1) return to;
+  const a = parseHex(from);
+  const b = parseHex(to);
+  if (!a || !b) return a ? from : to;
+  const mixed = a.map((channel, index) => {
+    const start = srgbToLinear(channel / 255);
+    return linearToSrgb(start + (srgbToLinear(b[index] / 255) - start) * progress) * 255;
+  }) as [number, number, number];
+  return toHex(mixed);
 };

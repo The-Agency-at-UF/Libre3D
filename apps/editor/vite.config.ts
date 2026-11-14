@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
+import { handleMaterialLibraryRequest } from "./src/utils/awsLibraryHandler";
 import { handlePublishRequest, handlePublishedSceneRequest } from "./src/utils/awsPublishHandler";
 import { handleScenesRequest, type SceneSubresource } from "./src/utils/awsSceneHandler";
 
@@ -20,6 +21,8 @@ const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*)(?:\/(lock|assets\/uplo
 // `/api/scene/:publishId` (the public viewer) and `/api/publish`.
 const PUBLISHED_SCENE_ROUTE_PATTERN = /^\/api\/scene\/([^/?]*)\/?(?:\?.*)?$/;
 const PUBLISH_ROUTE_PATTERN = /^\/api\/publish\/?(?:\?.*)?$/;
+// `/api/library/materials` (the Libre3D material library).
+const LIBRARY_MATERIALS_ROUTE_PATTERN = /^\/api\/library\/materials\/?(?:\?.*)?$/;
 
 const readSubresource = (value: string | undefined): SceneSubresource | null =>
   value === "lock" || value === "assets/uploads" || value === "assets/downloads" || value === "thumbnail" ? value : null;
@@ -76,6 +79,18 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
         const result = publishedMatch
           ? await handlePublishedSceneRequest({ method, publishId: decodeURIComponent(publishedMatch[1]) }, env)
           : await handlePublishRequest({ method, headers: req.headers, body: method === "POST" ? await readRequestBody(req) : "" }, env);
+
+        res.statusCode = result.status;
+        Object.entries(result.headers ?? {}).forEach(([name, value]) => res.setHeader(name, value));
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(result.body));
+        return;
+      }
+
+      // The dev copy of api/library/materials.ts, around the same handler (awsLibraryHandler.ts).
+      if (req.url?.match(LIBRARY_MATERIALS_ROUTE_PATTERN)) {
+        const method = req.method ?? "GET";
+        const result = await handleMaterialLibraryRequest({ method, headers: req.headers, body: method === "GET" ? "" : await readRequestBody(req) }, env);
 
         res.statusCode = result.status;
         Object.entries(result.headers ?? {}).forEach(([name, value]) => res.setHeader(name, value));

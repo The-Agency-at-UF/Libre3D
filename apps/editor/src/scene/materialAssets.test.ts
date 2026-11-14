@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createEntity } from "./entityFactories";
-import { assetOf, canUseMaterialAsset, copyLayers, createMaterialAssetLayers, layersOf, nextMaterialAssetName, resolveEntities, usersOfMaterialAsset } from "./materialAssets";
-import type { Entity, MaterialAsset } from "./types";
+import { assetOf, canUseMaterialAsset, copyLayers, createMaterialAssetLayers, layersOf, nextMaterialAssetName, opacityOf, resolveEntities, usersOfMaterialAsset } from "./materialAssets";
+import type { Entity, MaterialAsset, MaterialLayer } from "./types";
 
 const asset = (id: string, name = "Gloss"): MaterialAsset => ({ id, name, layers: createMaterialAssetLayers() });
 const cubeOn = (assetId?: string): Entity => ({ ...createEntity("cube"), ...(assetId ? { materialAssetId: assetId } : null) });
@@ -104,5 +104,29 @@ describe("material asset helpers", () => {
     expect(canUseMaterialAsset(cubeOn())).toBe(true);
     expect(canUseMaterialAsset(createEntity("group"))).toBe(false);
     expect(canUseMaterialAsset({ ...cubeOn(), type: "importedModel" })).toBe(false);
+  });
+
+  it("draws an object with its asset's opacity, not its own, and its own again without the asset", () => {
+    const layers = [{ id: "c", type: "color", color: "#ff0000" }] as unknown as MaterialLayer[];
+    const base = { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], visible: true, locked: false, name: "Cube", type: "cube" } as const;
+    const user = { ...base, id: "a", materialAssetId: "m", materialLayers: [], opacity: 0.9 } as unknown as Entity;
+    const own = { ...base, id: "b", materialLayers: layers, opacity: 0.9 } as unknown as Entity;
+    const faded = { m: { id: "m", name: "M", layers, opacity: 0.3 } };
+    const solid = { m: { id: "m", name: "M", layers } };
+
+    expect(resolveEntities([user, own], faded).map((each) => each.opacity)).toEqual([0.3, 0.9]);
+    expect(resolveEntities([user, own], solid).map((each) => each.opacity)).toEqual([undefined, 0.9]);
+    expect(resolveEntities([user, own], {}).map((each) => each.opacity)).toEqual([0.9, 0.9]);
+    expect([opacityOf(user, faded), opacityOf(user, solid), opacityOf(user, {}), opacityOf(own, faded)]).toEqual([0.3, 1, 0.9, 0.9]);
+  });
+
+  it("gives a new object to each user when the asset's opacity changes, and the same one when only its name does", () => {
+    const layers = [{ id: "c", type: "color", color: "#ff0000" }] as unknown as MaterialLayer[];
+    const user = { id: "a", type: "cube", materialAssetId: "m", materialLayers: [] } as unknown as Entity;
+    const entities = [user];
+    const first = resolveEntities(entities, { m: { id: "m", name: "M", layers } })[0];
+
+    expect(resolveEntities(entities, { m: { id: "m", name: "Renamed", layers } })[0]).toBe(first);
+    expect(resolveEntities(entities, { m: { id: "m", name: "M", layers, opacity: 0.5 } })[0]).not.toBe(first);
   });
 });

@@ -20,6 +20,16 @@ export const DEFAULT_METALNESS = 0.08;
 export const colorLayerOf = (layers: MaterialLayer[] | undefined): ColorLayer | undefined =>
   layers?.find((layer): layer is ColorLayer => layer.type === "color");
 
+/**
+ * `layers` with the topmost Color layer in another colour: how a state's colour is drawn over an
+ * object's layers without changing them. The same list when it has no Color layer or already is
+ * that colour.
+ */
+export const withTopColor = (layers: MaterialLayer[], color: string): MaterialLayer[] => {
+  const top = colorLayerOf(layers);
+  return !top || top.color === color ? layers : layers.map((layer) => (layer === top ? { ...top, color } : layer));
+};
+
 export const lightingLayerOf = (layers: MaterialLayer[] | undefined): LightingLayer | undefined =>
   layers?.find((layer): layer is LightingLayer => layer.type === "lighting");
 

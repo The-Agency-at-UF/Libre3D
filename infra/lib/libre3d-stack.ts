@@ -97,6 +97,16 @@ export class Libre3dStack extends Stack {
       removalPolicy,
     });
 
+    // Libre3D's developers: the users who may add to and remove from the material library every
+    // scene picks from (apps/editor/src/utils/awsLibraryHandler.ts checks the group in the access
+    // token; the name must match LIBRARY_EDITORS_GROUP in materialLibraryShared.ts). An admin adds
+    // a user to it in the console; it takes effect at that user's next sign-in.
+    new cognito.CfnUserPoolGroup(this, "LibraryEditorsGroup", {
+      userPoolId: userPool.userPoolId,
+      groupName: "library-editors",
+      description: "Libre3D developers who may change the shared material library.",
+    });
+
     // Hosted sign-in pages (managed login) at https://libre3d-<stage>-login.auth.<region>.amazoncognito.com.
     // The app redirects here instead of drawing its own login form, so passwords, MFA setup, and
     // password resets never touch our code.

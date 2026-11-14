@@ -290,6 +290,11 @@ export interface MaterialAsset {
   id: string;
   name: string;
   layers: MaterialLayer[]; // top first, like an entity's
+  /**
+   * How see-through every object using it is, 0-1 (none = 1, solid). The asset's, not each
+   * object's: an object that uses an asset is drawn with this and its own `opacity` isn't looked at.
+   */
+  opacity?: number;
 }
 
 export interface Entity {

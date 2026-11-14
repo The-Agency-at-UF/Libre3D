@@ -16,6 +16,14 @@
  * arrives with GLTFLoader's built-in materials; the first sync swaps each for a node copy with the
  * same values (nodeMaterials.ts), so its textures and glTF extras (transmission, …) stay.
  *
+ * A pose (a state being viewed, or where Play has an object) can show an object in another colour
+ * and opacity than its entity's (`showLook`): the colour goes on its top Color layer, over the
+ * layers it is drawn with, as values only. The material and its shader stay, so a fade costs a few
+ * numbers a frame, and an object on a material asset changes alone (each mesh has its own material
+ * and its own values: objectValues.ts). An object a state can fade (`setFadingObjects`) is drawn
+ * with the see-through objects for good, solid or not: switching `transparent` mid-fade would
+ * rebuild its shader and pop. It still writes depth while it's solid.
+ *
  * Pictures load in the background: a mesh is drawn without one until it arrives, then every mesh
  * that uses it gets it. Loaded textures are kept for the session and shared between meshes.
  *
@@ -34,7 +42,8 @@ import {
 } from "three/webgpu";
 import type { Entity, MaterialLayer, LightingLayer, LightingMapSlot, TextureRef } from "../scene/types";
 import { getEntityIndex } from "../scene/entityIndex";
-import { lightingLayerOf, surfaceOf, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, type Surface } from "../scene/layers";
+import type { Look } from "../animation/objectStates";
+import { colorLayerOf, lightingLayerOf, surfaceOf, withTopColor, DEFAULT_METALNESS, DEFAULT_ROUGHNESS, type Surface } from "../scene/layers";
 import { planStack, type StackPlan } from "../scene/layerStack";
 import { buildTexture } from "../utils/materialLayers";
 import { displacePictureRef } from "./displaceNodes";
@@ -136,6 +145,16 @@ const textureBindings = (layers: MaterialLayer[] | undefined): Map<string, Textu
   return bindings;
 };
 
+const NO_OBJECTS: ReadonlySet<string> = new Set();
+
+// `entity` as it is drawn in `look`: its top Color layer in the look's colour, and the look's opacity.
+const drawnIn = (entity: Entity, look: Look | undefined): Entity => {
+  if (!look || !entity.materialLayers) return entity;
+  const layers = look.color !== undefined ? withTopColor(entity.materialLayers, look.color) : entity.materialLayers;
+  const opacity = look.opacity ?? entity.opacity ?? 1;
+  return layers === entity.materialLayers && opacity === (entity.opacity ?? 1) ? entity : { ...entity, materialLayers: layers, opacity };
+};
+
 export class EntityMaterials {
   // The scene's objects by entity id (ObjectManager's map), to give a texture that has just loaded
   // to every mesh that uses it.
@@ -152,6 +171,11 @@ export class EntityMaterials {
 
   // Set by applyTextures when a picture isn't there yet; syncMaterial reports it.
   private textureWasMissing = false;
+
+  // The objects (by entity id) a state can fade: drawn as see-through objects for good.
+  private fading: ReadonlySet<string> = NO_OBJECTS;
+  // The colour and opacity each posed mesh is shown in, while they aren't its entity's (showLook).
+  private looks = new WeakMap<THREE.Object3D, Look>();
 
   constructor(meshMap: Map<string, THREE.Object3D>, source: SceneSource) {
     this.meshMap = meshMap;
@@ -173,17 +197,33 @@ export class EntityMaterials {
   // before this shipped) fall back to the original opacity-only heuristic.
   // `seeThrough`: the layer stack leaves parts see-through (a mask, a Fresnel at the bottom, …).
   // `glass`: a Glass layer paints what's behind the object, so it's drawn with the see-through
-  // objects, after every solid one (still writing depth while it's solid).
+  // objects, after every solid one (still writing depth while it's solid). `fades`: a state can
+  // change the object's opacity, so it's drawn with them too, whatever its opacity now.
   private computeAlphaBlendState(
     surface: Surface,
     opacity: number,
     seeThrough: boolean,
     glass = false,
+    fades = false,
   ): { transparent: boolean; alphaTest: number; depthWrite: boolean } {
     const translucent = opacity < 1 || seeThrough;
+    const blended = translucent || glass || fades;
     if (surface.alphaMode === "BLEND") return { transparent: true, alphaTest: 0, depthWrite: !translucent };
-    if (surface.alphaMode === "MASK") return { transparent: translucent || glass, alphaTest: surface.alphaCutoff, depthWrite: true };
-    return { transparent: translucent || glass, alphaTest: 0, depthWrite: true };
+    if (surface.alphaMode === "MASK") return { transparent: blended, alphaTest: surface.alphaCutoff, depthWrite: true };
+    return { transparent: blended, alphaTest: 0, depthWrite: true };
+  }
+
+  /**
+   * Says which objects (entity ids) a state can fade (animation/objectStates.ts, `fadingObjects`).
+   * It takes effect on each object's next sync; ObjectManager sees to that.
+   */
+  public setFadingObjects(ids: ReadonlySet<string>): void {
+    this.fading = ids;
+  }
+
+  /** Whether a state can fade this object. */
+  public fades(entityId: string): boolean {
+    return this.fading.has(entityId);
   }
 
   // The material's colour and opacity: the stack's, when its layers under Lighting add up to one
@@ -197,8 +237,11 @@ export class EntityMaterials {
     return objectOpacity * plan.folded.alpha;
   }
 
-  /** A new material for `layers` on an object `objectOpacity` see-through (1 = solid). */
-  public createMaterialFromLayers(layers: MaterialLayer[] | undefined, objectOpacity = 1): LayeredMaterial {
+  /**
+   * A new material for `layers` on an object `objectOpacity` see-through (1 = solid). `fades`: a
+   * state can change that opacity (see `setFadingObjects`).
+   */
+  public createMaterialFromLayers(layers: MaterialLayer[] | undefined, objectOpacity = 1, fades = false): LayeredMaterial {
     const lightingLayer = lightingLayerOf(layers);
     const model = lightingLayer?.model ?? "physical";
     const MaterialClass = materialClassForLayer(lightingLayer);
@@ -210,7 +253,7 @@ export class EntityMaterials {
       wireframe: this.source.isWireframe(),
     });
     const opacity = EntityMaterials.stackColor(material, plan, objectOpacity);
-    const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque, plan.glass);
+    const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque, plan.glass, fades);
     material.opacity = opacity;
     material.transparent = alphaState.transparent;
     material.alphaTest = alphaState.alphaTest;
@@ -270,7 +313,9 @@ export class EntityMaterials {
     const { byId } = getEntityIndex(this.source.getEntities());
     for (const [entityId, obj] of this.meshMap) {
       if (!(obj instanceof THREE.Mesh)) continue;
-      const layers = byId.get(entityId)?.materialLayers;
+      const entity = byId.get(entityId);
+      // As the mesh is shown: in its pose's colour, if it has one.
+      const layers = entity && drawnIn(entity, this.looks.get(obj)).materialLayers;
       if (!layers) continue;
       const material = obj.material as THREE.Material;
       if ([...textureBindings(layers).values()].some((binding) => textureKey(binding) === key)) this.applyTextures(material, layers);
@@ -381,11 +426,53 @@ export class EntityMaterials {
    * For a mesh whose entity has layers. An imported mesh still waiting for its layers to be derived
    * keeps its own material untouched: the caller skips it.
    *
+   * @param keepLook Keep the colour and opacity a pose gave the mesh (`showLook`) over the entity's:
+   *   for an object the gizmo is dragging, which stays in the state it's shown in. Otherwise the
+   *   mesh is back in its entity's own.
    * @returns True when a picture isn't there yet (still loading, or it couldn't be had), so the
    *   caller knows to sync this mesh again.
    */
-  public syncMaterial(obj: THREE.Mesh, entity: Entity): boolean {
+  public syncMaterial(obj: THREE.Mesh, entity: Entity, keepLook = false): boolean {
+    if (!keepLook) this.looks.delete(obj);
+    return this.applyMaterial(obj, drawnIn(entity, this.looks.get(obj)));
+  }
+
+  /**
+   * Shows a mesh in a pose's colour and opacity instead of its entity's, by values alone: the
+   * material and its shader stay. Nothing happens when it already shows them, so a pose applied
+   * every frame costs nothing once it stops changing. `syncMaterial` puts the entity's own back.
+   */
+  public showLook(obj: THREE.Mesh, entity: Entity, look: Look): void {
+    if (!entity.materialLayers) return;
+    const shown = this.looks.get(obj);
+    const color = look.color ?? shown?.color ?? colorLayerOf(entity.materialLayers)?.color;
+    const opacity = look.opacity ?? shown?.opacity ?? entity.opacity ?? 1;
+    const current = shown ?? { color: colorLayerOf(entity.materialLayers)?.color, opacity: entity.opacity ?? 1 };
+    if (current.color === color && current.opacity === opacity) return;
+    const next: Look = { opacity, ...(color !== undefined ? { color } : null) };
+    this.looks.set(obj, next);
+    this.applyMaterial(obj, drawnIn(entity, next));
+  }
+
+  /**
+   * Shows a posed mesh in its entity's own colour and opacity for a moment (an export, a thumbnail)
+   * and returns what puts the pose's back. Nothing to do, and nothing to undo, for a mesh `showLook`
+   * hasn't changed.
+   */
+  public showBaseLook(obj: THREE.Mesh, entity: Entity): () => void {
+    const shown = this.looks.get(obj);
+    if (!shown) return () => {};
+    this.applyMaterial(obj, entity);
+    return () => {
+      // Unless a sync put the mesh back in its entity's own meanwhile.
+      if (this.looks.get(obj) === shown) this.applyMaterial(obj, drawnIn(entity, shown));
+    };
+  }
+
+  // syncMaterial's work, for an entity as it is drawn (see drawnIn).
+  private applyMaterial(obj: THREE.Mesh, entity: Entity): boolean {
     this.textureWasMissing = false;
+    const fades = this.fading.has(entity.id);
     const lightingLayer = lightingLayerOf(entity.materialLayers);
     const model = lightingLayer?.model ?? "physical";
     const MaterialClass = materialClassForLayer(lightingLayer);
@@ -415,7 +502,7 @@ export class EntityMaterials {
 
     if (!materialMatches) {
       const oldMaterial = obj.material as THREE.Material;
-      obj.material = this.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1);
+      obj.material = this.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1, fades);
       if (obj instanceof PathMesh) obj.shareMaterialWithCaps();
       this.bindMesh(obj, entity);
       oldMaterial.dispose();
@@ -424,7 +511,7 @@ export class EntityMaterials {
       const plan = planStack(entity.materialLayers);
       const surface = surfaceOf(entity.materialLayers);
       const opacity = EntityMaterials.stackColor(material, plan, entity.opacity ?? 1);
-      const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque, plan.glass);
+      const alphaState = this.computeAlphaBlendState(surface, opacity, !plan.opaque, plan.glass, fades);
       const newSide = surface.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
       // A change to the stack's shape (a type, a blend mode, an eye, the order) builds another shader.
       const stackReshaped = syncLayerNodes(material, plan, spaceOf(obj), this.pictures);

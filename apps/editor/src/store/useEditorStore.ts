@@ -10,7 +10,7 @@ import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middl
 import { temporal } from "zundo";
 import { shallow } from "zustand/shallow";
 import { getDescendantIds, getChildren, getEntityIndex, filterMoveRoots, canReparentEntities } from "../scene/entityIndex";
-import { colorLayerOf } from "../scene/layers";
+import { colorLayerOf, withTopColor } from "../scene/layers";
 import type { SceneContent, StoredSceneContent } from "../utils/sceneDocument";
 import {
   getEntityWorldMatrix,
@@ -28,9 +28,12 @@ import {
   getViewedState,
   removeStatesOf,
   resolveState,
+  withoutLook,
+  withoutStateLooks,
   type ObjectState,
   type SceneAnimation,
   type StateValueKey,
+  type Look,
   type StateValues,
 } from "../animation/objectStates";
 import { reparentStates, type ParentChange } from "../animation/reparentStates";
@@ -69,7 +72,7 @@ import {
   type PaintLayerType,
 } from "../scene/entityFactories";
 import { canRemoveLayer, canSwitchLayerType, isColorLayerType, moveLayer, newLayerIndex } from "../scene/layerStack";
-import { assetOf, canUseMaterialAsset, copyLayers, createMaterialAssetLayers, layersOf, nextMaterialAssetName, resolveEntities } from "../scene/materialAssets";
+import { assetOf, assetOpacity, canUseMaterialAsset, copyLayers, createMaterialAssetLayers, layersOf, nextMaterialAssetName, opacityOf, resolveEntities } from "../scene/materialAssets";
 
 import type {
   CameraProfile,
@@ -309,6 +312,14 @@ export interface EditorState {
    * or to its own values in Base. One undo step for all of them.
    */
   updateShownTransforms: (updates: Record<string, StateValues>) => void;
+  /**
+   * Colour and opacity edits from the Materials panel (entity ID → what changed): each object's go
+   * to the state it's shown in, or in Base to its own opacity and its top Color layer. An object
+   * that uses a material asset is the asset's colour and opacity in every state, so both always go
+   * to the asset (its top Color layer, its opacity) and every object using it changes. One undo
+   * step for all of them. A colour is dropped for an object with no Color layer.
+   */
+  updateShownLooks: (updates: Record<string, Look>) => void;
   /** "Reset to Base": the state stops setting that value, so it follows the object's own again. */
   clearStateValue: (stateId: string, key: StateValueKey) => void;
   /** Adds an event to an object, last in its list, with one transition of the object. Returns its ID. */
@@ -327,10 +338,17 @@ export interface EditorState {
   materials: Record<string, MaterialAsset>;
   /**
    * Makes a material asset and returns its ID: a new one (Lighting over a white Color layer), or,
-   * given an object, one with a copy of that object's layers, which the object then uses.
+   * given an object, one with a copy of that object's layers and its opacity, which the object then uses.
    */
   createMaterialAsset: (fromEntityId?: string) => string;
+  /**
+   * Adds a copy of a material from outside the scene (the Libre3D library) as an asset of this
+   * scene, its layers under new IDs, and returns its ID ("" when the store refused it).
+   */
+  addMaterialAsset: (source: Pick<MaterialAsset, "name" | "layers" | "opacity">) => string;
   renameMaterialAsset: (assetId: string, name: string) => void;
+  /** Sets how see-through every object using an asset is (0-1, clamped; 1 is stored as none). */
+  setMaterialAssetOpacity: (assetId: string, opacity: number) => void;
   /** Deletes an asset. The objects using it keep its look as layers of their own, in the same undo step. */
   removeMaterialAsset: (assetId: string) => void;
   /**
@@ -415,18 +433,57 @@ const changeStacks = (state: EditorState, changes: Record<string, LayerChange>):
 
 const changeLayers = (state: EditorState, ownerId: string, change: LayerChange) => changeStacks(state, { [ownerId]: change });
 
+// The entities with these opacities (entity ID → 0-1; 1 is stored as none), for the ones that have
+// a material of their own (an object on a material asset has the asset's opacity); the same list
+// when nothing changed.
+const withOpacities = (entities: Entity[], opacities: Record<string, number>): Entity[] => {
+  const next = entities.map((entity) => {
+    const opacity = opacities[entity.id];
+    if (opacity === undefined || !entity.materialLayers || entity.materialAssetId) return entity;
+    const clamped = Math.min(1, Math.max(0, opacity));
+    if ((entity.opacity ?? 1) === clamped) return entity;
+    const { opacity: _old, ...rest } = entity;
+    return clamped === 1 ? rest : { ...rest, opacity: clamped };
+  });
+  return next.some((entity, index) => entity !== entities[index]) ? next : entities;
+};
+
+// The assets with these opacities (asset ID → 0-1; 1 is stored as none); the same record when
+// nothing changed.
+const withAssetOpacities = (materials: Record<string, MaterialAsset>, opacities: Record<string, number>): Record<string, MaterialAsset> => {
+  let next = materials;
+  for (const [assetId, opacity] of Object.entries(opacities)) {
+    const asset = next[assetId];
+    const clamped = Math.min(1, Math.max(0, opacity));
+    if (!asset || assetOpacity(asset) === clamped) continue;
+    const { opacity: _old, ...rest } = asset;
+    next = { ...next, [assetId]: clamped === 1 ? rest : { ...rest, opacity: clamped } };
+  }
+  return next;
+};
+
 // A stack with one layer's values changed; the same stack when it doesn't hold the layer.
 const withLayerUpdates =
   (layerId: string, updates: Partial<MaterialLayer>): LayerChange =>
   (layers) =>
     layers.some((layer) => layer.id === layerId) ? layers.map((layer) => (layer.id === layerId ? ({ ...layer, ...updates } as MaterialLayer) : layer)) : layers;
 
-// `entity` with a copy of its asset's layers as its own, no longer using the asset.
+// `entity` with a copy of its asset's layers and the asset's opacity as its own, no longer using the asset.
 const detached = (entity: Entity, materials: Record<string, MaterialAsset>): Entity => {
   if (!entity.materialAssetId) return entity;
   const { materialAssetId: _assetId, ...rest } = entity;
   const asset = assetOf(entity, materials);
-  return asset && entity.materialLayers ? { ...rest, materialLayers: copyLayers(asset.layers) } : rest;
+  if (!asset || !entity.materialLayers) return rest;
+  const { opacity: _own, ...kept } = rest;
+  const opacity = assetOpacity(asset);
+  return { ...kept, materialLayers: copyLayers(asset.layers), ...(opacity < 1 ? { opacity } : null) };
+};
+
+// `entity` using the asset `assetId`: its own layers and opacity are discarded, as it's drawn with
+// the asset's (scene/materialAssets.ts).
+const attached = (entity: Entity, assetId: string): Entity => {
+  const { opacity: _own, ...rest } = entity;
+  return { ...rest, materialAssetId: assetId, materialLayers: [] };
 };
 
 /**
@@ -1222,7 +1279,7 @@ export const useEditorStore = create<EditorState>()(
               const entity = state.entities.find((each) => each.id === entityId);
               if (!entity) return state;
               const pose = resolveState(entity, selectViewedObjectState(state, entityId));
-              const objectState = { ...createObjectState(state.animation.states, entityId), values: cloneStateValues(pose) };
+              const objectState = { ...createObjectState(state.animation.states, entityId), values: cloneStateValues(withoutLook(pose)) };
               stateId = objectState.id;
               return {
                 animation: { ...state.animation, states: { ...state.animation.states, [objectState.id]: objectState } },
@@ -1326,20 +1383,42 @@ export const useEditorStore = create<EditorState>()(
             set((state) => {
               const source = fromEntityId ? getEntityIndex(state.entities).byId.get(fromEntityId) : undefined;
               if (fromEntityId && !(source && canUseMaterialAsset(source))) return state;
+              const sourceOpacity = source ? opacityOf(source, state.materials) : 1;
               const asset: MaterialAsset = {
                 id: createEntityId(),
                 name: nextMaterialAssetName(state.materials),
                 layers: source ? copyLayers(layersOf(source, state.materials)!) : createMaterialAssetLayers(),
+                // The object's opacity becomes the material's.
+                ...(sourceOpacity < 1 ? { opacity: sourceOpacity } : null),
               };
               assetId = asset.id;
               return {
                 materials: { ...state.materials, [asset.id]: asset },
-                ...(source ? { entities: state.entities.map((entity) => (entity === source ? { ...entity, materialAssetId: asset.id, materialLayers: [] } : entity)) } : null),
+                ...(source ? { entities: state.entities.map((entity) => (entity === source ? attached(entity, asset.id) : entity)) } : null),
+                // An asset is one look in every state.
+                ...(source ? withAnimation(state.animation, { states: withoutStateLooks(state.animation.states, new Set([source.id])) }) : null),
               };
             });
             // Empty when the store refused it (view only): nothing was made.
             return get().materials[assetId] ? assetId : "";
           },
+          addMaterialAsset: (source) => {
+            const opacity = assetOpacity(source);
+            const asset: MaterialAsset = {
+              id: createEntityId(),
+              name: source.name.trim() || nextMaterialAssetName(get().materials),
+              layers: copyLayers(source.layers),
+              ...(opacity < 1 ? { opacity } : null),
+            };
+            set((state) => ({ materials: { ...state.materials, [asset.id]: asset } }));
+            // Empty when the store refused it (view only): nothing was added.
+            return get().materials[asset.id] ? asset.id : "";
+          },
+          setMaterialAssetOpacity: (assetId, opacity) =>
+            set((state) => {
+              const materials = withAssetOpacities(state.materials, { [assetId]: opacity });
+              return materials === state.materials ? state : { materials };
+            }),
           renameMaterialAsset: (assetId, name) =>
             set((state) => {
               const asset = state.materials[assetId];
@@ -1363,12 +1442,12 @@ export const useEditorStore = create<EditorState>()(
               if (!asset) return state;
               const ids = new Set(entityIds);
               const entities = state.entities.map((entity) =>
-                ids.has(entity.id) && canUseMaterialAsset(entity) && entity.materialAssetId !== assetId
-                  ? // Its own layers are discarded: it's drawn with the asset's (scene/materialAssets.ts).
-                    { ...entity, materialAssetId: assetId, materialLayers: [] }
-                  : entity,
+                ids.has(entity.id) && canUseMaterialAsset(entity) && entity.materialAssetId !== assetId ? attached(entity, assetId) : entity,
               );
-              return entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : state;
+              if (!entities.some((entity, index) => entity !== state.entities[index])) return state;
+              // An asset is one look in every state: the colours and opacities these objects' states set go, in the same undo step.
+              const applied = new Set(entities.filter((entity, index) => entity !== state.entities[index]).map((entity) => entity.id));
+              return { entities, ...withAnimation(state.animation, { states: withoutStateLooks(state.animation.states, applied) }) };
             }),
           detachMaterialAsset: (entityIds) =>
             set((state) => {
@@ -1389,6 +1468,52 @@ export const useEditorStore = create<EditorState>()(
                 return [...layers.slice(0, index), newLayer, ...layers.slice(index)];
               }),
             ),
+          updateShownLooks: (updates) =>
+            set((state) => {
+              const { byId } = getEntityIndex(state.entities);
+              const states = { ...state.animation.states };
+              let isStateEdit = false;
+              const baseOpacities: Record<string, number> = {};
+              const assetOpacities: Record<string, number> = {};
+              const baseColors: Record<string, LayerChange> = {};
+
+              for (const [entityId, look] of Object.entries(updates)) {
+                const entity = byId.get(entityId);
+                if (!entity?.materialLayers) continue;
+                const hasColorLayer = !!colorLayerOf(layersOf(entity, state.materials));
+                const color = hasColorLayer ? look.color : undefined;
+                const shown = selectViewedObjectState(state, entityId);
+                // An object on a material asset is the asset's colour and opacity in every state: both edit the asset.
+                const asset = assetOf(entity, state.materials);
+                const stateColor = shown && !entity.materialAssetId ? color : undefined;
+                if (color !== undefined && stateColor === undefined) baseColors[entityId] = (layers) => withTopColor(layers, color);
+                if (entity.materialAssetId) {
+                  if (asset && look.opacity !== undefined) assetOpacities[asset.id] = look.opacity;
+                } else if (shown) {
+                  const values: StateValues = {
+                    ...(stateColor !== undefined ? { color: stateColor } : null),
+                    ...(look.opacity !== undefined ? { opacity: Math.min(1, Math.max(0, look.opacity)) } : null),
+                  };
+                  if (Object.keys(values).length === 0) continue;
+                  // `states[shown.id]`, not `shown`: nothing here edits a state twice, but it costs nothing to be safe.
+                  states[shown.id] = { ...states[shown.id], values: { ...states[shown.id].values, ...values } };
+                  isStateEdit = true;
+                } else {
+                  if (look.opacity !== undefined) baseOpacities[entityId] = look.opacity;
+                }
+              }
+
+              // The colours first (an asset's stack, or the objects' own), then the opacities on top.
+              const stacks = changeStacks(state, baseColors) as Partial<EditorState>;
+              const entities = withOpacities(stacks.entities ?? state.entities, baseOpacities);
+              const materials = withAssetOpacities(stacks.materials ?? state.materials, assetOpacities);
+              if (entities === state.entities && materials === state.materials && !isStateEdit) return state;
+              return {
+                ...(entities !== state.entities ? { entities } : null),
+                ...(materials !== state.materials ? { materials } : null),
+                ...(isStateEdit ? { animation: { ...state.animation, states } } : null),
+              };
+            }),
           removeMaterialLayer: (ownerId, layerId) =>
             set((state) =>
               changeLayers(state, ownerId, (layers) => {
@@ -1409,15 +1534,8 @@ export const useEditorStore = create<EditorState>()(
             set((state) => changeLayers(state, ownerId, (layers) => moveLayer(layers, layerId, toIndex))),
           setEntityOpacity: (opacities) =>
             set((state) => {
-              const entities = state.entities.map((entity) => {
-                const opacity = opacities[entity.id];
-                if (opacity === undefined || !entity.materialLayers) return entity;
-                const clamped = Math.min(1, Math.max(0, opacity));
-                if ((entity.opacity ?? 1) === clamped) return entity;
-                const { opacity: _old, ...rest } = entity;
-                return clamped === 1 ? rest : { ...rest, opacity: clamped };
-              });
-              return entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : state;
+              const entities = withOpacities(state.entities, opacities);
+              return entities === state.entities ? state : { entities };
             }),
           updateMaterialLayer: (ownerId, layerId, updates) => set((state) => changeLayers(state, ownerId, withLayerUpdates(layerId, updates))),
           updateMultipleEntityMaterialLayers: (updatesMap) =>

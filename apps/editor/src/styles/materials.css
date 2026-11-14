@@ -68,15 +68,13 @@
   outline-offset: 2px;
 }
 
-/* The object's opacity, above its layers */
-.mat-object-opacity {
-  gap: 8px;
-  min-height: 22px;
+/* Above the top Color layer's picker, while the shown state sets the colour (ColorSettings) */
+.mat-state-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
   margin-bottom: 6px;
-}
-
-.mat-object-opacity .prop-label {
-  flex: 0 0 84px;
   font-size: 11px;
   color: var(--text-secondary);
 }
@@ -185,7 +183,7 @@
 }
 
 .mat-row .mat-row-opacity,
-.mat-object-opacity input {
+.mat-opacity-field {
   flex: 0 0 44px;
   width: 44px;
   min-width: 0;
@@ -194,12 +192,6 @@
   border-radius: 4px;
   font-size: 11px;
   text-align: right;
-}
-
-.mat-object-opacity input {
-  margin-left: auto;
-  /* in line with the rows' opacity column: the blend, eye and × buttons and their gaps follow it */
-  margin-right: 74px;
 }
 
 .mat-row-menu-popover {
@@ -727,44 +719,76 @@
   color: var(--text-primary);
 }
 
-/* The asset the selected objects use, above their (its) layers */
-.mat-asset-link {
+/* The Materials panel's header: the object's opacity (with a state's marker and reset) and "+" */
+.mat-header-controls {
   display: flex;
   align-items: center;
   gap: 6px;
-  height: 26px;
-  margin-bottom: 4px;
-  padding: 0 4px 0 6px;
-  background: var(--accent-dim);
-  border-radius: var(--radius-sm);
 }
 
-.mat-asset-link .mat-asset-name {
-  padding: 0;
-  background: transparent;
+.mat-header-controls .state-reset-btn {
+  margin-left: 0;
+}
+
+/* No room for the words beside the number: the arrow alone, with its tooltip. */
+.mat-header-controls .state-reset-btn span {
+  display: none;
+}
+
+/* The asset the selected objects use, in place of layer rows: a click opens the Material Builder */
+.mat-asset-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  background: var(--bg-input);
   border: none;
+  border-radius: var(--radius-md);
   font-family: var(--font);
   cursor: pointer;
+  transition: background 0.1s ease;
 }
 
-.mat-asset-link .mat-asset-name:hover {
-  text-decoration: underline;
+.mat-asset-card:hover {
+  background: var(--bg-hover);
+}
+
+.mat-asset-card .mat-asset-ball,
+.mat-assets .mat-asset-ball {
+  flex-basis: 20px;
+  width: 20px;
+  height: 20px;
+}
+
+.mat-asset-card .mat-asset-name,
+.mat-assets .mat-asset-name {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 /* The drawer: beside the right sidebar, from its top */
 .mat-assets {
   top: 8px;
-  width: 280px;
+  width: 300px;
   /* Under a layer's settings drawer, which opens beside it. */
   z-index: 29;
+}
+
+.mat-assets .mat-drawer-header {
+  flex: 0 0 auto;
+  height: 40px;
+  font-size: 12.5px;
 }
 
 .mat-assets-body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
   min-height: 160px;
   padding: 10px 10px 12px;
+  overflow-x: hidden;
   overflow-y: auto;
 }
 
@@ -772,8 +796,103 @@
   min-height: 0;
 }
 
-.mat-assets .mat-drawer-header span {
+/* "+" and the search box */
+.mat-assets-toolbar {
+  display: flex;
+  gap: 6px;
+}
+
+.mat-assets-new {
+  flex: 0 0 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: var(--bg-input);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.mat-assets-new:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.mat-assets-new:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.mat-assets-search {
   flex: 1;
+  min-width: 0;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: var(--bg-input);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.mat-assets-search:focus-within {
+  border-color: var(--accent);
+}
+
+.mat-assets-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 12px;
+}
+
+/* The library and category filters */
+.mat-assets-select select {
+  width: 100%;
+  height: 30px;
+  padding: 0 24px 0 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+}
+
+.mat-assets-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mat-assets-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 2px 0 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.mat-assets-heading .mat-assets-select {
+  flex: 0 1 150px;
+  min-width: 0;
+}
+
+.mat-assets-error {
+  color: var(--red);
 }
 
 .mat-asset-row {
@@ -787,6 +906,102 @@
 
 .mat-asset-row:hover {
   background: var(--bg-hover);
+}
+
+/* In the drawer a row is a card; its buttons show when it's pointed at or holds the focus */
+.mat-assets .mat-asset-row {
+  height: 34px;
+  padding: 0 6px 0 4px;
+  background: var(--bg-input);
+  border-radius: var(--radius-md);
+}
+
+.mat-assets .mat-asset-row:hover {
+  background: var(--bg-hover);
+}
+
+.mat-assets .mat-asset-row .mat-icon-btn,
+.mat-assets .mat-asset-row .mat-asset-count {
+  opacity: 0;
+}
+
+.mat-assets .mat-asset-row:hover .mat-icon-btn,
+.mat-assets .mat-asset-row:focus-within .mat-icon-btn,
+.mat-assets .mat-asset-row .mat-icon-btn.on,
+.mat-assets .mat-asset-row:hover .mat-asset-count,
+.mat-assets .mat-asset-row:focus-within .mat-asset-count {
+  opacity: 1;
+}
+
+.mat-assets .mat-asset-row .mat-icon-btn:disabled {
+  opacity: 0;
+}
+
+.mat-assets .mat-asset-row:hover .mat-icon-btn:disabled,
+.mat-assets .mat-asset-row:focus-within .mat-icon-btn:disabled {
+  opacity: 0.35;
+}
+
+.mat-assets .mat-asset-open:disabled {
+  cursor: not-allowed;
+}
+
+/* A developer's "add to the library": the category, under the material's row */
+.mat-library-add {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.mat-library-add input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.mat-library-add .mat-drawer-btn {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 8px;
+}
+
+/* The material open in the Material Builder (the left sidebar's Assets tab marks it) */
+.mat-asset-row.open {
+  background: var(--bg-hover);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* The left sidebar's Assets tab (AssetsBrowser): one section per kind of asset */
+.assets-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 8px 12px;
+}
+
+.assets-section-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.assets-section-header span {
+  flex: 1;
+}
+
+.assets-section-note {
+  margin: 0;
+  padding: 2px 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-tertiary);
 }
 
 .mat-asset-open {
@@ -815,37 +1030,42 @@
   color: var(--text-secondary);
 }
 
-/* The Material Builder */
+/* The Material Builder ("Edit Material Asset") */
 .mat-asset-rename {
-  flex: 1;
-  min-width: 0;
-  height: 22px;
-  padding: 0 6px;
-  background: transparent;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  background: var(--bg-input);
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-primary);
   font-family: var(--font);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   outline: none;
 }
 
-.mat-asset-rename:hover:not(:disabled) {
-  background: var(--bg-input);
-}
-
 .mat-asset-rename:focus {
-  background: var(--bg-input);
   border-color: var(--accent);
 }
 
+/* The shaderball's box, with "select objects using this material" in its corner */
+.mat-preview {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: center;
+  padding: 6px 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-sunken);
+}
+
 .mat-shaderball {
-  align-self: center;
-  width: 148px;
-  height: 148px;
-  margin-bottom: 6px;
-  border-radius: 10px;
+  width: 124px;
+  height: 124px;
+  /* A solid colour: the preview is drawn over it (viewport/materialPreview.ts reads it). */
   background: var(--bg-surface-sunken);
   cursor: grab;
   touch-action: none;
@@ -855,26 +1075,27 @@
   cursor: grabbing;
 }
 
-.mat-builder-btn {
-  flex: 0 0 auto;
+.mat-preview-select {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 24px;
   height: 24px;
-}
-
-.mat-builder-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
+  font-size: 16px;
 }
 
 .mat-builder-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  margin-top: 8px;
-  padding-top: 8px;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 12px 0 2px;
   border-top: 1px solid var(--border);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
+  color: var(--text-primary);
+}
+
+.mat-builder-heading span {
+  flex: 1;
 }
