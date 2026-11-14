@@ -101,7 +101,7 @@ export interface LayerOwner {
   entityId?: string;
   /**
    * Every selected object showing this stack; none for an asset on its own (the Material Builder).
-   * A colour edit goes to the state each of them is shown in (ColorSettings.tsx).
+   * A colour edit of an object's own stack goes to the state it is shown in (ColorSettings.tsx).
    */
   entityIds: string[];
   /** Whether a Displace layer may be added: only primitives can be displaced (scene/layerStack.ts). */

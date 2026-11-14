@@ -393,6 +393,18 @@ describe("SceneRuntime: colour and opacity", () => {
     expect(runtime.poses().get("blob")!.opacity).toBeCloseTo(0.4, 6);
   });
 
+  it("fades an object on a material asset without recolouring it", () => {
+    const runtime = new SceneRuntime({
+      entities: [entity("cube", { materialLayers: layers, materialAssetId: "m" })],
+      animation: { states: byId(state("ghost", "cube", { color: "#ffffff", opacity: 0.5 })), events: byId(event("fade", { actions: [fade()] })) },
+    });
+    runtime.start();
+    runtime.tick(0.5);
+
+    expect(runtime.poses().get("cube")!.color).toBe("#000000");
+    expect(runtime.poses().get("cube")!.opacity).toBeCloseTo(0.75, 6);
+  });
+
   it("leaves other objects out of it", () => {
     const runtime = scene(fade(), [entity("other", { materialLayers: layers })]);
     runtime.start();

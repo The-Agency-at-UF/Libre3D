@@ -1586,17 +1586,71 @@ describe("colour and opacity in states (task D6)", () => {
     expect(find("b").opacity).toBeUndefined();
   });
 
-  it("writes edits to the state an object is shown in, and leaves the object, the asset and its other users alone", async () => {
-    const { get, find } = await storeWithCubes();
-    const stateId = get().addState("a");
+  it("writes edits to the state an object is shown in, and leaves the object alone", async () => {
+    const { get } = await storeWithCubes();
+    const stateId = get().addState("own");
     const before = { entities: get().entities, materials: get().materials };
 
-    get().updateShownLooks({ a: { color: "#0000ff", opacity: 0 } });
+    get().updateShownLooks({ own: { color: "#0000ff", opacity: 0 } });
 
     expect(get().animation.states[stateId].values).toEqual({ position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], color: "#0000ff", opacity: 0 });
     expect(get().entities).toBe(before.entities);
     expect(get().materials).toBe(before.materials);
+  });
+
+  it("never gives a state the colour of an object on a material asset: the colour edits the asset, the opacity the state", async () => {
+    const { get, find } = await storeWithCubes();
+    const stateId = get().addState("a");
+
+    get().updateShownLooks({ a: { color: "#0000ff", opacity: 0.25 } });
+
+    expect(get().animation.states[stateId].values).not.toHaveProperty("color");
+    expect(get().animation.states[stateId].values.opacity).toBe(0.25);
+    expect(topColor(get().materials.m.layers)).toBe("#0000ff");
+    expect(find("a").opacity).toBeUndefined();
     expect(find("b").opacity).toBeUndefined();
+  });
+
+  it("drops the colours an object's states set when it starts using a material asset, in the same undo step", async () => {
+    const { useEditorStore, get, find } = await storeWithCubes();
+    const stateId = get().addState("own");
+    get().updateShownLooks({ own: { color: "#0000ff", opacity: 0.3 } });
+    const steps = useEditorStore.temporal.getState().pastStates.length;
+
+    get().applyMaterialAsset("m", ["own"]);
+
+    expect(find("own").materialAssetId).toBe("m");
+    expect(get().animation.states[stateId].values).not.toHaveProperty("color");
+    expect(get().animation.states[stateId].values.opacity).toBe(0.3);
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(steps + 1);
+
+    useEditorStore.temporal.getState().undo();
+    expect(find("own").materialAssetId).toBeUndefined();
+    expect(get().animation.states[stateId].values).toMatchObject({ color: "#0000ff", opacity: 0.3 });
+  });
+
+  it("drops them too when a material asset is made from the object", async () => {
+    const { get, find } = await storeWithCubes();
+    const stateId = get().addState("own");
+    get().updateShownLooks({ own: { color: "#0000ff" } });
+
+    const assetId = get().createMaterialAsset("own");
+
+    expect(find("own").materialAssetId).toBe(assetId);
+    expect(topColor(get().materials[assetId].layers)).toBe("#ff0000");
+    expect(get().animation.states[stateId].values).not.toHaveProperty("color");
+  });
+
+  it("lets a detached object's states set its colour again", async () => {
+    const { get, find } = await storeWithCubes();
+    const stateId = get().addState("a");
+    get().detachMaterialAsset(["a"]);
+
+    get().updateShownLooks({ a: { color: "#0000ff" } });
+
+    expect(get().animation.states[stateId].values.color).toBe("#0000ff");
+    expect(topColor(find("a").materialLayers)).toBe("#00ff00");
+    expect(topColor(get().materials.m.layers)).toBe("#00ff00");
   });
 
   it("doesn't snapshot colour or opacity into a new state, so recolouring Base still reaches it", async () => {
@@ -1611,21 +1665,21 @@ describe("colour and opacity in states (task D6)", () => {
 
   it("routes each object of one edit by the state it's shown in, as one undo step", async () => {
     const { useEditorStore, get, find } = await storeWithCubes();
-    const stateId = get().addState("a");
+    const stateId = get().addState("own");
     const steps = useEditorStore.temporal.getState().pastStates.length;
 
-    get().updateShownLooks({ a: { color: "#0000ff", opacity: 0.2 }, own: { color: "#0000ff", opacity: 0.2 } });
+    get().updateShownLooks({ own: { color: "#0000ff", opacity: 0.2 }, a: { color: "#0000ff", opacity: 0.2 } });
 
     expect(get().animation.states[stateId].values).toMatchObject({ color: "#0000ff", opacity: 0.2 });
-    expect(topColor(find("own").materialLayers)).toBe("#0000ff");
-    expect(find("own").opacity).toBe(0.2);
-    expect(topColor(get().materials.m.layers)).toBe("#00ff00");
+    expect(topColor(find("own").materialLayers)).toBe("#ff0000");
+    expect(topColor(get().materials.m.layers)).toBe("#0000ff");
+    expect(find("a").opacity).toBe(0.2);
     expect(useEditorStore.temporal.getState().pastStates.length).toBe(steps + 1);
 
     useEditorStore.temporal.getState().undo();
     expect(get().animation.states[stateId].values).not.toHaveProperty("color");
-    expect(topColor(find("own").materialLayers)).toBe("#ff0000");
-    expect(find("own").opacity).toBeUndefined();
+    expect(topColor(get().materials.m.layers)).toBe("#00ff00");
+    expect(find("a").opacity).toBeUndefined();
   });
 
   it("resets a state's colour or opacity to Base", async () => {
@@ -1658,26 +1712,26 @@ describe("colour and opacity in states (task D6)", () => {
 
   it("changes nothing while the scene is view only", async () => {
     const { get, find } = await storeWithCubes();
-    const stateId = get().addState("a");
+    const stateId = get().addState("own");
     get().setReadOnly("openElsewhere");
 
-    get().updateShownLooks({ a: { color: "#0000ff", opacity: 0.2 }, own: { color: "#0000ff", opacity: 0.2 } });
+    get().updateShownLooks({ own: { color: "#0000ff", opacity: 0.2 }, a: { color: "#0000ff", opacity: 0.2 } });
 
     expect(get().animation.states[stateId].values).not.toHaveProperty("color");
-    expect(find("own").opacity).toBeUndefined();
-    expect(topColor(find("own").materialLayers)).toBe("#ff0000");
+    expect(get().animation.states[stateId].values).not.toHaveProperty("opacity");
+    expect(find("a").opacity).toBeUndefined();
+    expect(topColor(get().materials.m.layers)).toBe("#00ff00");
   });
 
   it("keeps a state's colour and opacity through a save and a reload", async () => {
     const { get, selectSceneContent } = await storeWithCubes();
-    const stateId = get().addState("a");
-    get().updateShownLooks({ a: { color: "#0000ff", opacity: 0 } });
+    const stateId = get().addState("own");
+    get().updateShownLooks({ own: { color: "#0000ff", opacity: 0 } });
 
     const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(get())))));
     expect(parsed.ok).toBe(true);
     get().loadScene(parsed.ok ? parsed.content : null);
 
     expect(get().animation.states[stateId].values).toMatchObject({ color: "#0000ff", opacity: 0 });
-    expect(topColor(get().materials.m.layers)).toBe("#00ff00");
   });
 });

@@ -9,9 +9,11 @@ import { StateValueExtra } from "../StateValueExtra";
  * The Color layer's drawer is the colour picker; its opacity is the layer's (the row's number).
  *
  * A state can set an object's colour, which is its top Color layer's (animation/objectStates.ts).
- * So while a selected object is shown in a state, the top Color layer's picker shows and edits
- * that state's colour, for that object alone, though the layers may be a material asset's. Other
- * Color layers, the layer's opacity, and the Material Builder always edit the layers themselves.
+ * So while a selected object with layers of its own is shown in a state, the top Color layer's
+ * picker shows and edits that state's colour. A material asset is one colour in every state, so
+ * for an object that uses one the picker edits the asset, shown in a state or not; to animate its
+ * colour, detach it. Other Color layers, the layer's opacity, and the Material Builder always edit
+ * the layers themselves.
  */
 export function ColorSettings({ row }: { row: LayerRowData }) {
   const update = useRowUpdate(row);
@@ -21,7 +23,8 @@ export function ColorSettings({ row }: { row: LayerRowData }) {
   const first = row.pairs[0].layer as ColorLayer;
 
   const isTopColor = row.pairs.every(({ owner, layer }) => colorLayerOf(owner.layers) === layer);
-  const entityIds = isTopColor ? row.pairs.flatMap(({ owner }) => owner.entityIds) : [];
+  // The objects whose own stack this is (an asset's owner ID is the asset's, never an object's).
+  const entityIds = isTopColor ? row.pairs.flatMap(({ owner }) => owner.entityIds.filter((id) => id === owner.id)) : [];
   const shownStates = entityIds.map((id) => getViewedState(viewedStates, objectStates, id));
   const inState = shownStates.some((state) => state !== null);
   // One object shown in a state: its colour gets the marker and "Reset to Base".

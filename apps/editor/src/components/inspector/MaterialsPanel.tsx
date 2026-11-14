@@ -10,10 +10,11 @@
  * button: their rows edit the asset, so every object using it changes. Detaching gives the objects
  * the layers as their own. Opacity is always each object's own.
  *
- * A state can set an object's opacity and its colour (its top Color layer's: layers/ColorSettings.tsx).
- * While an object is shown in a state, its Opacity here is that state's, with the marker and "Reset
- * to Base" the Transform panel's fields have; every other layer setting belongs to the object (or
- * its asset) in every state.
+ * A state can set an object's opacity, and the colour of an object with layers of its own (its top
+ * Color layer's: layers/ColorSettings.tsx). While an object is shown in a state, its Opacity here is
+ * that state's, with the marker and "Reset to Base" the Transform panel's fields have; every other
+ * layer setting belongs to the object in every state. A material asset is the same in every state:
+ * detach an object from it to animate its colour.
  *
  * Several selected objects with the same layers in the same order are edited row by row; with
  * different stacks, their Lighting and top Color layers are.
@@ -107,7 +108,7 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities, assetsOp
         </div>
 
         {sharedAsset && (
-          <div className="mat-asset-link" title="These layers are a material asset's: editing them changes every object that uses it">
+          <div className="mat-asset-link" title="These layers are a material asset's: editing them changes every object that uses it, in every state. Detach to animate this object's colour.">
             <AssetBall asset={sharedAsset} />
             <button type="button" className="mat-asset-name" title="Open in the Material Builder" onClick={() => onAssetsView({ assetId: sharedAsset.id })}>
               {sharedAsset.name}

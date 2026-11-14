@@ -32,9 +32,10 @@ import { sampleTransition, type StateRef, type TransitionAction } from "./transi
 
 /**
  * What the runtime needs of an object: where it is in Base (and a path's trim), its parent (for
- * clicks), and for its colour and opacity the layers it is drawn with and its own opacity. Give it
- * the entities as they are drawn (scene/materialAssets.ts, `resolveEntities`), so an object on a
- * material asset has the asset's layers.
+ * clicks), and for its colour and opacity the layers it is drawn with, whether they are a material
+ * asset's (no state recolours those: objectStates.ts), and its own opacity. Give it the entities as
+ * they are drawn (scene/materialAssets.ts, `resolveEntities`), so an object on a material asset has
+ * the asset's layers.
  */
 export interface RuntimeEntity {
   id: string;
@@ -45,6 +46,7 @@ export interface RuntimeEntity {
   trimStart?: number;
   trimEnd?: number;
   materialLayers?: MaterialLayer[];
+  materialAssetId?: string;
   opacity?: number;
 }
 
@@ -111,6 +113,7 @@ export class SceneRuntime {
         parentId: entity.parentId ?? null,
         ...withoutLook(resolveState(entity)), // copies of its vectors
         materialLayers: entity.materialLayers,
+        materialAssetId: entity.materialAssetId,
         opacity: entity.opacity,
       });
     }

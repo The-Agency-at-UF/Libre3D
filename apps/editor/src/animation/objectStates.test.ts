@@ -16,6 +16,7 @@ import {
   resolveState,
   unwrapRotation,
   withoutLook,
+  withoutStateColors,
   type ObjectState,
   type Pose,
 } from "./objectStates";
@@ -322,6 +323,29 @@ describe("colour and opacity", () => {
     const pose = resolveState(cube({ materialLayers: noColor }), makeState("s", "cube", { values: { color: "#0000ff", opacity: 0.5 } }));
     expect(pose).not.toHaveProperty("color");
     expect(pose.opacity).toBe(0.5);
+  });
+
+  it("leave an object on a material asset in the asset's colour, whatever a state says; its opacity still follows the state", () => {
+    const onAsset = cube({ materialAssetId: "m", opacity: 0.4 });
+    const ghost = makeState("ghost", "cube", { values: { color: "#0000ff", opacity: 0 } });
+
+    expect(resolveState(onAsset, ghost)).toMatchObject({ color: "#ff0000", opacity: 0 });
+  });
+
+  it("drop the colours of the states of objects that start using a material asset, and nothing else", () => {
+    const states = statesById(
+      makeState("ghost", "cube", { values: { position: [1, 5, 3], color: "#0000ff", opacity: 0 } }),
+      makeState("moved", "cube", { values: { position: [0, 0, 0] } }),
+      makeState("other", "ball", { values: { color: "#0000ff" } }),
+    );
+
+    const next = withoutStateColors(states, new Set(["cube"]));
+
+    expect(next.ghost.values).toEqual({ position: [1, 5, 3], opacity: 0 });
+    expect(next.moved).toBe(states.moved);
+    expect(next.other).toBe(states.other);
+    expect(states.ghost.values.color).toBe("#0000ff");
+    expect(withoutStateColors(states, new Set(["cone"]))).toBe(states);
   });
 
   it("keep an opacity inside 0 to 1", () => {

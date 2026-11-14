@@ -29,6 +29,7 @@ import {
   removeStatesOf,
   resolveState,
   withoutLook,
+  withoutStateColors,
   type ObjectState,
   type SceneAnimation,
   type StateValueKey,
@@ -313,9 +314,10 @@ export interface EditorState {
   updateShownTransforms: (updates: Record<string, StateValues>) => void;
   /**
    * Colour and opacity edits from the Materials panel (entity ID → what changed): each object's go
-   * to the state it's shown in, or in Base to its own opacity and to the top Color layer of the
-   * stack it's drawn with (its material asset's, when it uses one). One undo step for all of them.
-   * A colour is dropped for an object with no Color layer.
+   * to the state it's shown in, or in Base to its own opacity and its top Color layer. An object
+   * that uses a material asset is the asset's colour in every state, so its colour always goes to
+   * the asset's top Color layer. One undo step for all of them. A colour is dropped for an object
+   * with no Color layer.
    */
   updateShownLooks: (updates: Record<string, Look>) => void;
   /** "Reset to Base": the state stops setting that value, so it follows the object's own again. */
@@ -1358,6 +1360,8 @@ export const useEditorStore = create<EditorState>()(
               return {
                 materials: { ...state.materials, [asset.id]: asset },
                 ...(source ? { entities: state.entities.map((entity) => (entity === source ? { ...entity, materialAssetId: asset.id, materialLayers: [] } : entity)) } : null),
+                // An asset is one colour in every state.
+                ...(source ? withAnimation(state.animation, { states: withoutStateColors(state.animation.states, new Set([source.id])) }) : null),
               };
             });
             // Empty when the store refused it (view only): nothing was made.
@@ -1391,7 +1395,10 @@ export const useEditorStore = create<EditorState>()(
                     { ...entity, materialAssetId: assetId, materialLayers: [] }
                   : entity,
               );
-              return entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : state;
+              if (!entities.some((entity, index) => entity !== state.entities[index])) return state;
+              // An asset is one colour in every state: the colours these objects' states set go, in the same undo step.
+              const applied = new Set(entities.filter((entity, index) => entity !== state.entities[index]).map((entity) => entity.id));
+              return { entities, ...withAnimation(state.animation, { states: withoutStateColors(state.animation.states, applied) }) };
             }),
           detachMaterialAsset: (entityIds) =>
             set((state) => {
@@ -1426,9 +1433,12 @@ export const useEditorStore = create<EditorState>()(
                 const hasColorLayer = !!colorLayerOf(layersOf(entity, state.materials));
                 const color = hasColorLayer ? look.color : undefined;
                 const shown = selectViewedObjectState(state, entityId);
+                // An object on a material asset is the asset's colour in every state: its colour edits the asset.
+                const stateColor = shown && !entity.materialAssetId ? color : undefined;
+                if (color !== undefined && stateColor === undefined) baseColors[entityId] = (layers) => withTopColor(layers, color);
                 if (shown) {
                   const values: StateValues = {
-                    ...(color !== undefined ? { color } : null),
+                    ...(stateColor !== undefined ? { color: stateColor } : null),
                     ...(look.opacity !== undefined ? { opacity: Math.min(1, Math.max(0, look.opacity)) } : null),
                   };
                   if (Object.keys(values).length === 0) continue;
@@ -1437,7 +1447,6 @@ export const useEditorStore = create<EditorState>()(
                   isStateEdit = true;
                 } else {
                   if (look.opacity !== undefined) baseOpacities[entityId] = look.opacity;
-                  if (color !== undefined) baseColors[entityId] = (layers) => withTopColor(layers, color);
                 }
               }
 
