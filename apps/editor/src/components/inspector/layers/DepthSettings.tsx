@@ -31,10 +31,11 @@ export function DepthSettings({ row }: { row: LayerRowData }) {
   const depthEdit = useEditorStore((state) => state.depthEdit);
   const setDepthEdit = useEditorStore((state) => state.setDepthEdit);
   const layer = row.pairs[0].layer as DepthLayer;
-  const single = row.pairs.length === 1 ? row.pairs[0].entity : null;
+  // The object whose viewport handles edit this layer: the one object showing the stack.
+  const singleId = row.pairs.length === 1 ? row.pairs[0].owner.entityId : undefined;
   const [selected, setSelected] = useState(0);
   const camera = layer.originType === "camera";
-  const isEditing = !!single && depthEdit === single.id;
+  const isEditing = !!singleId && depthEdit === singleId;
 
   const setAxis = (key: "origin" | "direction", axis: number, value: number) => {
     if (value === layer[key][axis]) return;
@@ -69,7 +70,7 @@ export function DepthSettings({ row }: { row: LayerRowData }) {
       )}
       <NumberRow label="Near" value={layer.near} min={0} onChange={(near) => update({ near })} />
       <NumberRow label="Far" value={layer.far} min={0} onChange={(far) => update({ far })} />
-      {!camera && single && (
+      {!camera && singleId && (
         <div className="prop">
           <span className="prop-label">Viewport</span>
           <button
@@ -77,7 +78,7 @@ export function DepthSettings({ row }: { row: LayerRowData }) {
             className={`mat-drawer-btn ${isEditing ? "on" : ""}`}
             title={isEditing ? "Stop editing in the viewport (Enter)" : "Edit in the viewport: the gizmo moves the origin"}
             aria-pressed={isEditing}
-            onClick={() => (isEditing ? setDepthEdit(null) : editDepth(single.id, layer.id))}
+            onClick={() => (isEditing ? setDepthEdit(null) : editDepth(singleId, layer.id))}
           >
             <i className="ti ti-pointer"></i>
             <span>{isEditing ? "Editing" : "Edit"}</span>
