@@ -28,6 +28,7 @@ import {
   getViewedState,
   removeStatesOf,
   resolveState,
+  withoutLook,
   type ObjectState,
   type SceneAnimation,
   type StateValueKey,
@@ -1222,7 +1223,7 @@ export const useEditorStore = create<EditorState>()(
               const entity = state.entities.find((each) => each.id === entityId);
               if (!entity) return state;
               const pose = resolveState(entity, selectViewedObjectState(state, entityId));
-              const objectState = { ...createObjectState(state.animation.states, entityId), values: cloneStateValues(pose) };
+              const objectState = { ...createObjectState(state.animation.states, entityId), values: cloneStateValues(withoutLook(pose)) };
               stateId = objectState.id;
               return {
                 animation: { ...state.animation, states: { ...state.animation.states, [objectState.id]: objectState } },

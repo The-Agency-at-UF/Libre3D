@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { SceneEvent } from "./events";
 import type { ObjectState } from "./objectStates";
 import { SceneRuntime, type RuntimeEntity } from "./sceneRuntime";
+import type { MaterialLayer } from "../scene/types";
 import type { TransitionAction } from "./transitions";
 
 const DEG = Math.PI / 180;
@@ -312,5 +313,90 @@ describe("SceneRuntime: a path's trim", () => {
     runtime.tick(0.5);
 
     expect(runtime.poses().get("cube")).not.toHaveProperty("trimEnd");
+  });
+});
+
+describe("SceneRuntime: colour and opacity", () => {
+  const layers = [{ id: "light", type: "lighting" }, { id: "top", type: "color", color: "#000000" }] as unknown as MaterialLayer[];
+  const fade = (overrides: Partial<TransitionAction> = {}) =>
+    transition({ steps: [{ to: "ghost", duration: 1, easing: "linear" }], ...overrides });
+  const scene = (action: TransitionAction, extra: RuntimeEntity[] = []) =>
+    new SceneRuntime({
+      entities: [entity("cube", { materialLayers: layers }), ...extra],
+      animation: {
+        states: byId(state("ghost", "cube", { color: "#ffffff", opacity: 0.5 }), state("up", "cube", { position: [0, 2, 0] })),
+        events: byId(event("fade", { actions: [action] })),
+      },
+    });
+
+  it("fades opacity linearly and mixes colour in linear light, not on the sRGB values", () => {
+    const runtime = scene(fade());
+    runtime.start();
+    expect(runtime.poses().get("cube")).toMatchObject({ color: "#000000", opacity: 1 });
+
+    runtime.tick(0.5);
+    const half = runtime.poses().get("cube")!;
+    expect(half.opacity).toBeCloseTo(0.75, 6);
+    expect(half.color).toBe("#bcbcbc"); // the sRGB midpoint would be #808080
+
+    runtime.tick(0.5);
+    expect(runtime.poses().get("cube")).toMatchObject({ color: "#ffffff", opacity: 0.5 });
+  });
+
+  it("returns exactly to each end on a ping-pong", () => {
+    const runtime = scene(fade({ loop: "infinite", cycle: "pingPong" }));
+    runtime.start();
+    runtime.tick(1);
+    expect(runtime.poses().get("cube")).toMatchObject({ color: "#ffffff", opacity: 0.5 });
+    runtime.tick(1);
+    expect(runtime.poses().get("cube")).toMatchObject({ color: "#000000", opacity: 1 });
+  });
+
+  it("carries Base's look through a transition that only moves", () => {
+    const runtime = scene(transition());
+    runtime.start();
+    runtime.tick(0.5);
+    expect(runtime.poses().get("cube")).toMatchObject({ position: [0, 1, 0], color: "#000000", opacity: 1 });
+  });
+
+  it("starts an interrupting fade from the look the object has", () => {
+    const runtime = scene(fade());
+    runtime.start();
+    runtime.tick(0.5);
+    runtime.run(transition({ from: "ghost", steps: [{ to: "base", duration: 1, easing: "linear" }] }));
+    expect(runtime.poses().get("cube")!.opacity).toBeCloseTo(0.75, 6);
+    expect(runtime.poses().get("cube")!.color).toBe("#bcbcbc");
+  });
+
+  it("gives an object without a material no look, and one without a Color layer no colour", () => {
+    const noColor = [{ id: "noise", type: "noise" }] as unknown as MaterialLayer[];
+    const runtime = new SceneRuntime({
+      entities: [entity("group"), entity("blob", { materialLayers: noColor, opacity: 0.8 })],
+      animation: {
+        states: byId(state("g", "group", { color: "#ffffff", opacity: 0 }), state("b", "blob", { color: "#ffffff", opacity: 0 })),
+        events: byId(
+          event("e", {
+            ownerId: "group",
+            actions: [
+              transition({ id: "a1", targetId: "group", steps: [{ to: "g", duration: 1, easing: "linear" }] }),
+              transition({ id: "a2", targetId: "blob", steps: [{ to: "b", duration: 1, easing: "linear" }] }),
+            ],
+          }),
+        ),
+      },
+    });
+    runtime.start();
+    runtime.tick(0.5);
+
+    expect(runtime.poses().get("group")).toEqual({ position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] });
+    expect(runtime.poses().get("blob")).not.toHaveProperty("color");
+    expect(runtime.poses().get("blob")!.opacity).toBeCloseTo(0.4, 6);
+  });
+
+  it("leaves other objects out of it", () => {
+    const runtime = scene(fade(), [entity("other", { materialLayers: layers })]);
+    runtime.start();
+    runtime.tick(0.5);
+    expect(runtime.poses().has("other")).toBe(false);
   });
 });

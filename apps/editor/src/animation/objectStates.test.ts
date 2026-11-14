@@ -7,6 +7,7 @@ import {
   cloneStateValues,
   createObjectState,
   duplicateStates,
+  fadingObjects,
   getObjectStates,
   getViewedState,
   nextStateName,
@@ -14,9 +15,11 @@ import {
   removeStatesOf,
   resolveState,
   unwrapRotation,
+  withoutLook,
   type ObjectState,
   type Pose,
 } from "./objectStates";
+import type { MaterialLayer } from "../scene/types";
 import { reparentStates } from "./reparentStates";
 
 const DEG = Math.PI / 180;
@@ -284,5 +287,75 @@ describe("trim (paths)", () => {
     expect(moved.hidden).toBe(states.hidden); // a trim doesn't depend on the parent
     expect(moved.raised.values.trimStart).toBe(0.5);
     expect(Object.keys(moved.raised.values).sort()).toEqual(["position", "trimStart"]);
+  });
+});
+
+describe("colour and opacity", () => {
+  const layers = [
+    { id: "light", type: "lighting" },
+    { id: "top", type: "color", color: "#ff0000" },
+    { id: "under", type: "color", color: "#00ff00" },
+  ] as unknown as MaterialLayer[];
+  const cube = (overrides: object = {}) => ({ ...makeEntity("cube"), materialLayers: layers, ...overrides });
+
+  it("are the object's top Color layer and its own opacity in Base", () => {
+    expect(resolveState(cube())).toMatchObject({ color: "#ff0000", opacity: 1 });
+    expect(resolveState(cube({ opacity: 0.4 }))).toMatchObject({ color: "#ff0000", opacity: 0.4 });
+  });
+
+  it("are the state's over Base, an opacity of 0 included", () => {
+    const ghost = makeState("ghost", "cube", { values: { color: "#0000ff", opacity: 0 } });
+    expect(resolveState(cube({ opacity: 0.4 }), ghost)).toMatchObject({ color: "#0000ff", opacity: 0 });
+
+    const tinted = makeState("tinted", "cube", { values: { color: "#0000ff" } });
+    expect(resolveState(cube({ opacity: 0.4 }), tinted)).toMatchObject({ color: "#0000ff", opacity: 0.4 });
+  });
+
+  it("aren't part of a pose for an object without a material", () => {
+    const pose = resolveState(makeEntity("group"), makeState("s", "group", { values: { color: "#0000ff", opacity: 0.5 } }));
+    expect(pose).not.toHaveProperty("color");
+    expect(pose).not.toHaveProperty("opacity");
+  });
+
+  it("leave out the colour for an object with no Color layer", () => {
+    const noColor = [{ id: "light", type: "lighting" }, { id: "noise", type: "noise" }] as unknown as MaterialLayer[];
+    const pose = resolveState(cube({ materialLayers: noColor }), makeState("s", "cube", { values: { color: "#0000ff", opacity: 0.5 } }));
+    expect(pose).not.toHaveProperty("color");
+    expect(pose.opacity).toBe(0.5);
+  });
+
+  it("keep an opacity inside 0 to 1", () => {
+    expect(resolveState(cube(), makeState("s", "cube", { values: { opacity: 3 } })).opacity).toBe(1);
+    expect(resolveState(cube({ opacity: -1 })).opacity).toBe(0);
+  });
+
+  it("aren't in what a new state snapshots", () => {
+    expect(withoutLook(resolveState(cube({ opacity: 0.4 })))).toEqual({ position: [1, 2, 3], rotation: [0, 0.5, 0], scale: [1, 1, 1] });
+  });
+
+  it("survive copying, duplicating and a move to another parent, an opacity of 0 included", () => {
+    const states = statesById(makeState("ghost", "cube", { values: { position: [1, 5, 3], color: "#0000ff", opacity: 0 } }));
+
+    expect(cloneStateValues(states.ghost.values)).toEqual({ position: [1, 5, 3], color: "#0000ff", opacity: 0 });
+    expect(cloneAnimation({ states }).states.ghost.values).toEqual({ position: [1, 5, 3], color: "#0000ff", opacity: 0 });
+
+    const { states: next, stateIdMap } = duplicateStates(states, new Map([["cube", "copy"]]), new Map());
+    expect(next[stateIdMap.get("ghost")!].values).toMatchObject({ color: "#0000ff", opacity: 0 });
+
+    const parentWorld = composeLocalMatrix({ position: [4, 0, 0], rotation: [0, 0, 0], scale: [2, 2, 2] });
+    const moved = reparentStates(states, [{ entity: makeEntity("cube"), from: null, to: parentWorld }]);
+    expect(moved.ghost.values).toMatchObject({ color: "#0000ff", opacity: 0 });
+  });
+
+  it("lists the objects a state can fade, the same set for the same states", () => {
+    const states = statesById(
+      makeState("ghost", "cube", { values: { opacity: 0 } }),
+      makeState("solid", "ball", { values: { opacity: 1 } }),
+      makeState("tinted", "cone", { values: { color: "#0000ff" } }),
+    );
+
+    expect([...fadingObjects(states)].sort()).toEqual(["ball", "cube"]);
+    expect(fadingObjects(states)).toBe(fadingObjects(states));
+    expect(fadingObjects(undefined).size).toBe(0);
   });
 });

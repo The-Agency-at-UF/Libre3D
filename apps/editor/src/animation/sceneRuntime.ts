@@ -16,18 +16,26 @@
  * - One transition per object: a new one replaces the one that's running. If that one hadn't
  *   finished, the new one starts from where the object is instead of its row 1, so interrupting
  *   never jumps (Spline does the same).
- * - Values change linearly after easing (a path's trim too, which is how it writes itself on).
+ * - Values change linearly after easing (a path's trim too, which is how it writes itself on;
+ *   opacity too). Colour is mixed in linear light (utils/colorSpaces.ts), as THREE.Color.lerp would.
  *   Rotation changes per Euler component, so a state turned +360° about Y spins once, where the
  *   shortest way round (slerp) wouldn't move at all.
  * - A missing owner, target, or state (a deleted object or state, a damaged file) skips that action
  *   instead of throwing.
  */
 
+import type { MaterialLayer } from "../scene/types";
+import { mixHexLinear } from "../utils/colorSpaces";
 import { normalizeEvents, type SceneEvent } from "./events";
-import { resolveState, type ObjectState, type Pose, type SceneAnimation } from "./objectStates";
+import { resolveState, withoutLook, type ObjectState, type Pose, type SceneAnimation } from "./objectStates";
 import { sampleTransition, type StateRef, type TransitionAction } from "./transitions";
 
-/** What the runtime needs of an object: where it is in Base (and a path's trim), and its parent (for clicks). */
+/**
+ * What the runtime needs of an object: where it is in Base (and a path's trim), its parent (for
+ * clicks), and for its colour and opacity the layers it is drawn with and its own opacity. Give it
+ * the entities as they are drawn (scene/materialAssets.ts, `resolveEntities`), so an object on a
+ * material asset has the asset's layers.
+ */
 export interface RuntimeEntity {
   id: string;
   parentId?: string | null;
@@ -36,6 +44,8 @@ export interface RuntimeEntity {
   scale: [number, number, number];
   trimStart?: number;
   trimEnd?: number;
+  materialLayers?: MaterialLayer[];
+  opacity?: number;
 }
 
 export interface RuntimeScene {
@@ -57,6 +67,10 @@ const lerpVector = (
   progress: number,
 ): [number, number, number] => [lerp(from[0], to[0], progress), lerp(from[1], to[1], progress), lerp(from[2], to[2], progress)];
 
+// A row without a colour (it can't happen between two rows of one object) takes the other's.
+const mixedColor = (from: string | undefined, to: string | undefined, progress: number): string | undefined =>
+  from === undefined || to === undefined ? (from ?? to) : mixHexLinear(from, to, progress);
+
 const hasTrim = (pose: Pose) => pose.trimStart !== undefined || pose.trimEnd !== undefined;
 
 const lerpPose = (from: Pose, to: Pose, progress: number): Pose => {
@@ -69,6 +83,11 @@ const lerpPose = (from: Pose, to: Pose, progress: number): Pose => {
     pose.trimStart = lerp(from.trimStart ?? 0, to.trimStart ?? 0, progress);
     pose.trimEnd = lerp(from.trimEnd ?? 1, to.trimEnd ?? 1, progress);
   }
+  if (from.opacity !== undefined || to.opacity !== undefined) {
+    pose.opacity = Math.min(1, Math.max(0, lerp(from.opacity ?? 1, to.opacity ?? 1, progress)));
+  }
+  const color = mixedColor(from.color, to.color, progress);
+  if (color !== undefined) pose.color = color;
   return pose;
 };
 
@@ -90,7 +109,9 @@ export class SceneRuntime {
       this.entities.set(entity.id, {
         id: entity.id,
         parentId: entity.parentId ?? null,
-        ...resolveState(entity), // copies of its vectors
+        ...withoutLook(resolveState(entity)), // copies of its vectors
+        materialLayers: entity.materialLayers,
+        opacity: entity.opacity,
       });
     }
     this.states = { ...scene.animation.states };
