@@ -99,12 +99,17 @@ export interface LayerOwner {
   layers: MaterialLayerData[];
   /** The object whose stack this is, or the first selected object showing this asset; none for an asset on its own. */
   entityId?: string;
+  /**
+   * Every selected object showing this stack; none for an asset on its own (the Material Builder).
+   * A colour edit goes to the state each of them is shown in (ColorSettings.tsx).
+   */
+  entityIds: string[];
   /** Whether a Displace layer may be added: only primitives can be displaced (scene/layerStack.ts). */
   displaceable: boolean;
 }
 
 /** A material asset's stack, as the Material Builder edits it. */
-export const assetOwner = (asset: MaterialAsset): LayerOwner => ({ id: asset.id, layers: asset.layers, displaceable: false });
+export const assetOwner = (asset: MaterialAsset): LayerOwner => ({ id: asset.id, layers: asset.layers, entityIds: [], displaceable: false });
 
 /**
  * The stacks the selected objects show, each once: an object that uses a material asset shows the
@@ -118,8 +123,10 @@ export const ownersFor = (entities: Entity[], materials: Record<string, Material
     const id = asset?.id ?? entity.id;
     const displaceable = DISPLACEABLE_ENTITY_TYPES.includes(entity.type);
     const shown = owners.get(id);
-    if (shown) shown.displaceable &&= displaceable;
-    else owners.set(id, { id, layers: asset?.layers ?? entity.materialLayers, entityId: entity.id, displaceable });
+    if (shown) {
+      shown.displaceable &&= displaceable;
+      shown.entityIds.push(entity.id);
+    } else owners.set(id, { id, layers: asset?.layers ?? entity.materialLayers, entityId: entity.id, entityIds: [entity.id], displaceable });
   }
   return [...owners.values()];
 };

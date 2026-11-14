@@ -121,7 +121,7 @@ export function StatesPanel({ entity }: StatesPanelProps) {
 
         {viewed && (
           <p className="state-hint">
-            {isReadOnly ? `Viewing ${viewed.name}.` : `Editing ${viewed.name}: moving, turning, and scaling change this state, not Base.`}
+            {isReadOnly ? `Viewing ${viewed.name}.` : `Editing ${viewed.name}: moving, turning, scaling, and its opacity and top Color change this state, not Base.`}
           </p>
         )}
       </div>

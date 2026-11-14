@@ -76,7 +76,27 @@
 }
 
 .mat-object-opacity .prop-label {
-  flex: 0 0 84px;
+  /* Grows for the marker and "Reset to Base" of an opacity a state sets (StateValueExtra). */
+  flex: 1 0 84px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+/* No room for the words beside the number: the arrow alone, with its tooltip. */
+.mat-object-opacity .state-reset-btn span {
+  display: none;
+}
+
+/* Above the top Color layer's picker, while the shown state sets the colour (ColorSettings) */
+.mat-state-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  margin-bottom: 6px;
   font-size: 11px;
   color: var(--text-secondary);
 }

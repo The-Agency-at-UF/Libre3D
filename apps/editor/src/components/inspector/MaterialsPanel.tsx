@@ -10,16 +10,23 @@
  * button: their rows edit the asset, so every object using it changes. Detaching gives the objects
  * the layers as their own. Opacity is always each object's own.
  *
+ * A state can set an object's opacity and its colour (its top Color layer's: layers/ColorSettings.tsx).
+ * While an object is shown in a state, its Opacity here is that state's, with the marker and "Reset
+ * to Base" the Transform panel's fields have; every other layer setting belongs to the object (or
+ * its asset) in every state.
+ *
  * Several selected objects with the same layers in the same order are edited row by row; with
  * different stacks, their Lighting and top Color layers are.
  */
 
+import { getViewedState } from "../../animation/objectStates";
 import { useEditorStore, type Entity } from "../../store/useEditorStore";
 import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
 import { LayerStack } from "./LayerStack";
 import { AssetBall, FourCirclesIcon, type AssetsView } from "./MaterialAssetsDrawer";
 import { asOneUndoStep, ownersFor } from "./materialRows";
+import { StateValueExtra } from "./StateValueExtra";
 
 interface MaterialsPanelProps {
   selectedEntities: Entity[];
@@ -31,7 +38,9 @@ interface MaterialsPanelProps {
 export function MaterialsPanel({ selectedEntities: allSelectedEntities, assetsOpen, onAssetsView }: MaterialsPanelProps) {
   const materials = useEditorStore((state) => state.materials);
   const addMaterialLayer = useEditorStore((state) => state.addMaterialLayer);
-  const setEntityOpacity = useEditorStore((state) => state.setEntityOpacity);
+  const updateShownLooks = useEditorStore((state) => state.updateShownLooks);
+  const viewedStates = useEditorStore((state) => state.viewedStates);
+  const objectStates = useEditorStore((state) => state.animation.states);
   const detachMaterialAsset = useEditorStore((state) => state.detachMaterialAsset);
   const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
 
@@ -44,7 +53,11 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities, assetsOp
 
   if (selectedEntities.length === 0) return null;
 
-  const opacities = selectedEntities.map((entity) => entity.opacity ?? 1);
+  // Each object's opacity as it's shown: the state's it is shown in, over its own.
+  const shownStates = selectedEntities.map((entity) => getViewedState(viewedStates, objectStates, entity.id));
+  const opacities = selectedEntities.map((entity, i) => shownStates[i]?.values.opacity ?? entity.opacity ?? 1);
+  // One object shown in a state: its opacity gets a marker and a "Reset to Base".
+  const objectState = selectedEntities.length === 1 ? shownStates[0] : null;
   const opacityMixed = opacities.some((opacity) => opacity !== opacities[0]);
 
   return (
@@ -78,7 +91,10 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities, assetsOp
     >
       <div className="material-layer-stack">
         <div className="prop mat-object-opacity">
-          <span className="prop-label">Opacity</span>
+          <span className="prop-label">
+            Opacity
+            <StateValueExtra objectState={objectState} field="opacity" />
+          </span>
           <NumberField
             label="Object opacity (%)"
             value={opacityMixed ? null : Math.round(opacities[0] * 100)}
@@ -86,7 +102,7 @@ export function MaterialsPanel({ selectedEntities: allSelectedEntities, assetsOp
             max={100}
             step={1}
             integer
-            onChange={(percent) => setEntityOpacity(Object.fromEntries(selectedEntities.map((entity) => [entity.id, percent / 100])))}
+            onChange={(percent) => updateShownLooks(Object.fromEntries(selectedEntities.map((entity) => [entity.id, { opacity: percent / 100 }])))}
           />
         </div>
 

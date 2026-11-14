@@ -10,7 +10,7 @@ import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middl
 import { temporal } from "zundo";
 import { shallow } from "zustand/shallow";
 import { getDescendantIds, getChildren, getEntityIndex, filterMoveRoots, canReparentEntities } from "../scene/entityIndex";
-import { colorLayerOf } from "../scene/layers";
+import { colorLayerOf, withTopColor } from "../scene/layers";
 import type { SceneContent, StoredSceneContent } from "../utils/sceneDocument";
 import {
   getEntityWorldMatrix,
@@ -32,6 +32,7 @@ import {
   type ObjectState,
   type SceneAnimation,
   type StateValueKey,
+  type Look,
   type StateValues,
 } from "../animation/objectStates";
 import { reparentStates, type ParentChange } from "../animation/reparentStates";
@@ -310,6 +311,13 @@ export interface EditorState {
    * or to its own values in Base. One undo step for all of them.
    */
   updateShownTransforms: (updates: Record<string, StateValues>) => void;
+  /**
+   * Colour and opacity edits from the Materials panel (entity ID → what changed): each object's go
+   * to the state it's shown in, or in Base to its own opacity and to the top Color layer of the
+   * stack it's drawn with (its material asset's, when it uses one). One undo step for all of them.
+   * A colour is dropped for an object with no Color layer.
+   */
+  updateShownLooks: (updates: Record<string, Look>) => void;
   /** "Reset to Base": the state stops setting that value, so it follows the object's own again. */
   clearStateValue: (stateId: string, key: StateValueKey) => void;
   /** Adds an event to an object, last in its list, with one transition of the object. Returns its ID. */
@@ -415,6 +423,20 @@ const changeStacks = (state: EditorState, changes: Record<string, LayerChange>):
 };
 
 const changeLayers = (state: EditorState, ownerId: string, change: LayerChange) => changeStacks(state, { [ownerId]: change });
+
+// The entities with these opacities (entity ID → 0-1; 1 is stored as none), for the ones that have
+// a material; the same list when nothing changed.
+const withOpacities = (entities: Entity[], opacities: Record<string, number>): Entity[] => {
+  const next = entities.map((entity) => {
+    const opacity = opacities[entity.id];
+    if (opacity === undefined || !entity.materialLayers) return entity;
+    const clamped = Math.min(1, Math.max(0, opacity));
+    if ((entity.opacity ?? 1) === clamped) return entity;
+    const { opacity: _old, ...rest } = entity;
+    return clamped === 1 ? rest : { ...rest, opacity: clamped };
+  });
+  return next.some((entity, index) => entity !== entities[index]) ? next : entities;
+};
 
 // A stack with one layer's values changed; the same stack when it doesn't hold the layer.
 const withLayerUpdates =
@@ -1390,6 +1412,46 @@ export const useEditorStore = create<EditorState>()(
                 return [...layers.slice(0, index), newLayer, ...layers.slice(index)];
               }),
             ),
+          updateShownLooks: (updates) =>
+            set((state) => {
+              const { byId } = getEntityIndex(state.entities);
+              const states = { ...state.animation.states };
+              let isStateEdit = false;
+              const baseOpacities: Record<string, number> = {};
+              const baseColors: Record<string, LayerChange> = {};
+
+              for (const [entityId, look] of Object.entries(updates)) {
+                const entity = byId.get(entityId);
+                if (!entity?.materialLayers) continue;
+                const hasColorLayer = !!colorLayerOf(layersOf(entity, state.materials));
+                const color = hasColorLayer ? look.color : undefined;
+                const shown = selectViewedObjectState(state, entityId);
+                if (shown) {
+                  const values: StateValues = {
+                    ...(color !== undefined ? { color } : null),
+                    ...(look.opacity !== undefined ? { opacity: Math.min(1, Math.max(0, look.opacity)) } : null),
+                  };
+                  if (Object.keys(values).length === 0) continue;
+                  // `states[shown.id]`, not `shown`: nothing here edits a state twice, but it costs nothing to be safe.
+                  states[shown.id] = { ...states[shown.id], values: { ...states[shown.id].values, ...values } };
+                  isStateEdit = true;
+                } else {
+                  if (look.opacity !== undefined) baseOpacities[entityId] = look.opacity;
+                  if (color !== undefined) baseColors[entityId] = (layers) => withTopColor(layers, color);
+                }
+              }
+
+              // The colours first (an asset's stack, or the objects' own), then the opacities on top.
+              const stacks = changeStacks(state, baseColors) as Partial<EditorState>;
+              const entities = withOpacities(stacks.entities ?? state.entities, baseOpacities);
+              const materials = stacks.materials ?? state.materials;
+              if (entities === state.entities && materials === state.materials && !isStateEdit) return state;
+              return {
+                ...(entities !== state.entities ? { entities } : null),
+                ...(materials !== state.materials ? { materials } : null),
+                ...(isStateEdit ? { animation: { ...state.animation, states } } : null),
+              };
+            }),
           removeMaterialLayer: (ownerId, layerId) =>
             set((state) =>
               changeLayers(state, ownerId, (layers) => {
@@ -1410,15 +1472,8 @@ export const useEditorStore = create<EditorState>()(
             set((state) => changeLayers(state, ownerId, (layers) => moveLayer(layers, layerId, toIndex))),
           setEntityOpacity: (opacities) =>
             set((state) => {
-              const entities = state.entities.map((entity) => {
-                const opacity = opacities[entity.id];
-                if (opacity === undefined || !entity.materialLayers) return entity;
-                const clamped = Math.min(1, Math.max(0, opacity));
-                if ((entity.opacity ?? 1) === clamped) return entity;
-                const { opacity: _old, ...rest } = entity;
-                return clamped === 1 ? rest : { ...rest, opacity: clamped };
-              });
-              return entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : state;
+              const entities = withOpacities(state.entities, opacities);
+              return entities === state.entities ? state : { entities };
             }),
           updateMaterialLayer: (ownerId, layerId, updates) => set((state) => changeLayers(state, ownerId, withLayerUpdates(layerId, updates))),
           updateMultipleEntityMaterialLayers: (updatesMap) =>
