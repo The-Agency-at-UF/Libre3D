@@ -90,7 +90,7 @@ export function useSceneAutosave(sceneId: string, session: EditSession | null) {
       sceneId,
       readRevision: () => revisionRef.current,
       readDocument,
-      prepareSave: (document, report) => uploader.upload(collectAssetRefs((document as SceneDocument).scene.entities), report),
+      prepareSave: (document, report) => uploader.upload(collectAssetRefs((document as SceneDocument).scene.entities, (document as SceneDocument).scene.materials), report),
       onMissingAssets: (hashes) => uploader.reportMissing(hashes),
       onStatus: setStatus,
       onSaved: (revision, hasPendingEdits) => {

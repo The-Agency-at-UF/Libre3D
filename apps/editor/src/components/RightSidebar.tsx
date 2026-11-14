@@ -9,6 +9,7 @@ import { TransformPanel } from "./inspector/TransformPanel";
 import { PathPanel } from "./inspector/PathPanel";
 import { ShapePanel } from "./inspector/ShapePanel";
 import { MaterialsPanel } from "./inspector/MaterialsPanel";
+import { MaterialAssetsDrawer, type AssetsView } from "./inspector/MaterialAssetsDrawer";
 import { inspectSelection } from "./inspector/inspectedSelection";
 import { ScenePanel } from "./inspector/ScenePanel";
 import { CameraPanel } from "./inspector/CameraPanel";
@@ -50,6 +51,10 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
     if (editingEventId && !showEventEditor) setEditingEventId(null);
   }, [editingEventId, showEventEditor]);
 
+  // The Material Assets drawer: closed, its list, or the builder for one material. Kept here, not
+  // in the Materials panel that opens it, so it stays open while nothing is selected.
+  const [assetsView, setAssetsView] = useState<AssetsView | null>(null);
+
   // Hidden rather than unmounted while previewing so the inspector's own local
   // state (open panels, scroll position) is exactly where the user left it on Stop.
   return (
@@ -79,7 +84,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
         </fieldset>
 
         {hasSelectedEntities ? (
-          <SelectionPanels isReadOnly={isReadOnly} onEditEvent={setEditingEventId} />
+          <SelectionPanels isReadOnly={isReadOnly} onEditEvent={setEditingEventId} assetsOpen={!!assetsView} onAssetsView={setAssetsView} />
         ) : (
           <>
             <CameraPanel />
@@ -92,6 +97,9 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
       </div>
 
       {showEventEditor && <EditEventPanel event={editingEvent} onClose={closeEventEditor} />}
+
+      {/* A drawer beside the sidebar (it puts itself in the page's body), so Play hides it by not showing it. */}
+      {assetsView && !isPreviewMode && <MaterialAssetsDrawer view={assetsView} onView={setAssetsView} />}
     </aside>
   );
 }
@@ -105,9 +113,13 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare }: RightSi
 function SelectionPanels({
   isReadOnly,
   onEditEvent,
+  assetsOpen,
+  onAssetsView,
 }: {
   isReadOnly: boolean;
   onEditEvent: (eventId: string) => void;
+  assetsOpen: boolean;
+  onAssetsView: (view: AssetsView | null) => void;
 }) {
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const selectedEntities = useEditorStore(
@@ -128,7 +140,7 @@ function SelectionPanels({
         <TransformPanel selectedEntities={selectedEntities} />
         {selectedEntities.every((entity) => entity.type === "path") && <PathPanel entities={selectedEntities} />}
         {reachedShapes.length > 0 && <ShapePanel shapes={reachedShapes} selectedIds={selectedEntityIds} />}
-        <MaterialsPanel selectedEntities={selectedEntities} />
+        <MaterialsPanel selectedEntities={selectedEntities} assetsOpen={assetsOpen} onAssetsView={onAssetsView} />
       </fieldset>
     </>
   );

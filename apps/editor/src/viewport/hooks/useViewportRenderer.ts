@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
 import Stats from "three/examples/jsm/libs/stats.module.js";
 import { hasPendingThumbnail, renderPendingThumbnail } from "../thumbnailCapture";
+import { hasPendingPreviews, renderPendingPreviews } from "../materialPreview";
 import { hideEditorOnlyObjects } from "../editorOnly";
 import { setLiveRenderer } from "../liveViewport";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "../rendererSettings";
@@ -45,8 +46,11 @@ export function useViewportRenderer(
       animationFrameId = window.requestAnimationFrame(animate);
       statsRef.current?.update();
       if (onRender) onRender();
-      // A gallery picture asked for since the last frame (thumbnailCapture.ts) is taken here,
-      // before the normal render paints over it.
+      // A shaderball that changed since the last frame (materialPreview.ts) and a gallery picture
+      // asked for since then (thumbnailCapture.ts) are drawn and copied here, before the normal
+      // render paints over them.
+      if (hasPendingPreviews()) renderPendingPreviews(renderer);
+
       if (hasPendingThumbnail()) renderPendingThumbnail(renderer, scene, cameraRef.current);
       // Play shows the scene without the editor's own objects (grid, light helpers, selection
       // outlines, gizmo): the set exports and the gallery picture leave out. Hidden for each

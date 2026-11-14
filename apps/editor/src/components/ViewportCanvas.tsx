@@ -17,7 +17,8 @@
 import { useEffect, useRef, useMemo } from "react";
 import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
-import { useEditorStore } from "../store/useEditorStore";
+import { selectDrawnEntities, useEditorStore } from "../store/useEditorStore";
+
 import { getEntityIndex } from "../scene/entityIndex";
 import { getViewedState, resolveState } from "../animation/objectStates";
 import { SceneManager } from "../viewport/SceneManager";
@@ -55,7 +56,9 @@ export function ViewportCanvas() {
   const isEditingPoint  = useEditorStore((state) => state.penTool?.mode === "edit" && state.penTool.selectedPoints.length > 0);
   const isEditingDepth  = useEditorStore((state) => state.depthEdit !== null);
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
-  const entities        = useEditorStore((state) => state.entities);
+  // As they're drawn: an object that uses a material asset comes with the asset's layers.
+  const entities        = useEditorStore(selectDrawnEntities);
+
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const viewedStates    = useEditorStore((state) => state.viewedStates);
   const objectStates    = useEditorStore((state) => state.animation.states);

@@ -21,6 +21,8 @@
 import * as THREE from "three";
 import { SceneRuntime } from "../animation/sceneRuntime";
 import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialSceneDefaults } from "../scene/defaults";
+import { resolveEntities } from "../scene/materialAssets";
+
 import type { CameraProfile, SceneSettingsConfig } from "../scene/types";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
@@ -75,7 +77,9 @@ export class SceneViewer {
     let environment: THREE.RenderTarget | null = null;
 
     const objects = new ObjectManager(scene, new Map(), source, { getRenderer: () => renderer, editorHelpers: false });
-    objects.syncMeshes(content.entities, null, false);
+    // Objects that use a material asset are drawn with its layers, from the document alone.
+    objects.syncMeshes(resolveEntities(content.entities, content.materials), null, false);
+
     // Syncing to no objects disposes them all (geometry, materials, textures).
     this.disposers.push(() => {
       objects.syncMeshes([], null, false);

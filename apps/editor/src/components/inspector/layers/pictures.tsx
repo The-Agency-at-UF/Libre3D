@@ -5,26 +5,36 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { useEditorStore, type Entity, type TextureRef } from "../../../store/useEditorStore";
+import { useEditorStore, type Entity, type MaterialAsset, type TextureRef } from "../../../store/useEditorStore";
+
 import { loadTextureForScene } from "../../../utils/assetTransfers";
 import { importMapFile } from "../../../utils/importImage";
 
-// The pictures objects in the scene use (Image layers and Lighting maps), each once, named for the
-// map dropdowns: by its own name (an upload's file name), else the object it's on.
-export const scenePictures = (entities: Entity[]): Array<TextureRef & { name: string }> => {
+// The pictures the scene's objects and material assets use (Image layers and Lighting maps), each
+// once, named for the map dropdowns: by its own name (an upload's file name), else the object or
+// material it's on.
+export const scenePictures = (entities: Entity[], materials: Record<string, MaterialAsset> = {}): Array<TextureRef & { name: string }> => {
   const pictures = new Map<string, TextureRef & { name: string }>();
-  for (const entity of entities) {
-    for (const layer of entity.materialLayers ?? []) {
+  const stacks = [...entities.map((entity) => ({ name: entity.name, layers: entity.materialLayers ?? [] })), ...Object.values(materials)];
+  for (const { name, layers } of stacks) {
+    for (const layer of layers) {
       if (layer.type === "image" && !pictures.has(layer.textureAssetId)) {
-        pictures.set(layer.textureAssetId, { textureAssetId: layer.textureAssetId, wrapS: layer.wrapS, wrapT: layer.wrapT, flipY: layer.flipY, name: layer.name ?? entity.name });
+        pictures.set(layer.textureAssetId, { textureAssetId: layer.textureAssetId, wrapS: layer.wrapS, wrapT: layer.wrapT, flipY: layer.flipY, name: layer.name ?? name });
       }
       if (layer.type !== "lighting") continue;
       for (const [slot, ref] of Object.entries(layer.maps ?? {})) {
-        if (ref && !pictures.has(ref.textureAssetId)) pictures.set(ref.textureAssetId, { ...ref, name: ref.name ?? `${entity.name} (${slot})` });
+        if (ref && !pictures.has(ref.textureAssetId)) pictures.set(ref.textureAssetId, { ...ref, name: ref.name ?? `${name} (${slot})` });
       }
     }
   }
   return [...pictures.values()];
+};
+
+/** The scene's pictures, kept current. */
+export const useScenePictures = () => {
+  const entities = useEditorStore((state) => state.entities);
+  const materials = useEditorStore((state) => state.materials);
+  return scenePictures(entities, materials);
 };
 
 // A picture from the texture store as an object URL, for a thumbnail, while it shows; null while it
@@ -80,8 +90,7 @@ export function PictureFrame({ textureAssetId, label, onUpload }: { textureAsset
 
 /** The scene's pictures as thumbnails to pick from (a picture drawer's Assets tab). */
 export function PictureGrid({ current, onPick }: { current: string; onPick: (picture: TextureRef & { name: string }) => void }) {
-  const entities = useEditorStore((state) => state.entities);
-  const pictures = scenePictures(entities);
+  const pictures = useScenePictures();
   if (pictures.length === 0) return <p className="mat-drawer-note">No pictures in the scene yet: upload one under Custom.</p>;
   return (
     <div className="mat-picture-grid">

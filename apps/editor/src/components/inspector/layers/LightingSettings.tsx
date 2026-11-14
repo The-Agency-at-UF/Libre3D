@@ -8,7 +8,7 @@ import { Slider } from "../../ui/Slider";
 import { Switch } from "../../ui/Switch";
 import type { LayerRowData } from "../materialRows";
 import { useRowUpdate } from "../materialRows";
-import { scenePictures } from "./pictures";
+import { useScenePictures } from "./pictures";
 import { NumberRow } from "./rows";
 
 const LIGHTING_MODEL_OPTIONS: { label: string; value: LightingModel }[] = [
@@ -131,19 +131,18 @@ const UPLOAD = "upload";
  */
 function MapSelect({ row, slot, label }: { row: LayerRowData; slot: LightingMapSlot; label: string }) {
   const updateMultipleEntityMaterialLayers = useEditorStore((state) => state.updateMultipleEntityMaterialLayers);
-  const entities = useEditorStore((state) => state.entities);
   const file = useRef<HTMLInputElement>(null);
   const current = (row.pairs[0].layer as LightingLayer).maps?.[slot];
-  const pictures = scenePictures(entities);
+  const pictures = useScenePictures();
 
   const setMap = (ref: TextureRef | null) =>
     updateMultipleEntityMaterialLayers(
       Object.fromEntries(
-        row.pairs.map(({ entity, layer }) => {
+        row.pairs.map(({ owner, layer }) => {
           const maps = { ...(layer as LightingLayer).maps };
           if (ref) maps[slot] = ref;
           else delete maps[slot];
-          return [entity.id, { layerId: layer.id, updates: { maps } }];
+          return [owner.id, { layerId: layer.id, updates: { maps } }];
         }),
       ),
     );

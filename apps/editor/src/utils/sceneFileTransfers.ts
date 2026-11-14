@@ -32,7 +32,7 @@ export const downloadSceneFile = async (name: string): Promise<void> => {
   const assets: SceneFileAsset[] = [];
   let missing = 0;
 
-  for (const ref of sceneFileAssetRefs(document.scene.entities)) {
+  for (const ref of sceneFileAssetRefs(document.scene.entities, document.scene.materials)) {
     const data = ref.kind === "model" ? await loadModelAsset(ref.id) : await (await loadTextureAsset(ref.id))?.arrayBuffer();
     if (data) assets.push({ hash: ref.id, kind: ref.kind, bytes: new Uint8Array(data) });
     else missing += 1;
