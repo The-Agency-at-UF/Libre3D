@@ -20,7 +20,7 @@ import type { ViewportGizmo } from "three-viewport-gizmo";
 import { selectDrawnEntities, useEditorStore } from "../store/useEditorStore";
 
 import { getEntityIndex } from "../scene/entityIndex";
-import { getViewedState, resolveState } from "../animation/objectStates";
+import { fadingObjects, getViewedState, resolveState } from "../animation/objectStates";
 import { SceneManager } from "../viewport/SceneManager";
 import { setWireframe } from "../viewport/entityMaterials";
 import { whenRendererReady } from "../viewport/rendererSettings";
@@ -235,6 +235,8 @@ export function ViewportCanvas() {
     const transformTarget = transformControlsRef.current?.object ?? null;
     const isDragging      = !!transformControlsRef.current?.dragging;
 
+    // Before the sync, which draws the objects a state can fade as see-through ones.
+    objectManager.setFadingObjects(fadingObjects(objectStates));
     objectManager.syncMeshes(entities, transformTarget, isDragging);
 
     // This effect runs on every edit, and the loops below visit every object: an entity is looked up

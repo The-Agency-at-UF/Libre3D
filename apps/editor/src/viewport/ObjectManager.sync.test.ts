@@ -8,6 +8,7 @@ import type { Entity, EntityType, ImageLayer, MaterialAsset, MaterialLayer } fro
 
 import { PathMesh } from "../paths/PathMesh";
 import { stubBrowserGlobals } from "../testing/browserStubs";
+import { showBasePoses } from "./basePoses";
 import { ObjectManager } from "./ObjectManager";
 import type { SceneSource } from "./sceneSource";
 
@@ -615,5 +616,161 @@ describe("ObjectManager without the editor's helpers (the share-link viewer)", (
 
     // An outline each for the cube, the path, the shape, and the broken model, and the light's helper.
     expect(found.sort()).toEqual(["DirectionalLightHelper", "LineSegments", "LineSegments", "LineSegments", "LineSegments"]);
+  });
+});
+
+// A pose's colour and opacity (a state being viewed, or Play) go on the object's material as values.
+describe("ObjectManager.applyPose: colour and opacity", () => {
+  const materialOf = (object: THREE.Object3D) => (object as THREE.Mesh).material as THREE.MeshStandardMaterial;
+  const colorOf = (object: THREE.Object3D) => `#${materialOf(object).color.getHexString()}`;
+  const pose = (look: { color?: string; opacity?: number }) => ({ position: [0, 0, 0] as Vec3, rotation: [0, 0, 0] as Vec3, scale: [1, 1, 1] as Vec3, ...look });
+  const red = updateColor(createEntity("cube").materialLayers, { color: "#ff0000" });
+
+  // Synced twice, as the editor has by the time anything is posed. `fading`: the objects a state can fade.
+  const settled = (initial: Entity[], fading: string[] = [], materials: Record<string, MaterialAsset> = {}) => {
+    const scene = createScene(initial);
+    // As the editor's and the viewer's sources hand entities out: with their assets' layers.
+    scene.source.getEntities = () => resolveEntities(scene.entities, materials);
+    const built = createManager(scene.source);
+    const sync = (target: THREE.Object3D | null = null, dragging = false) => built.manager.syncMeshes(scene.source.getEntities(), target, dragging);
+    built.manager.setFadingObjects(new Set(fading));
+    sync();
+    sync();
+    return { scene, ...built, sync };
+  };
+
+  it("changes the colour and opacity without a new material or a shader rebuild", () => {
+    const { manager, object } = settled([make("cube", "a", { materialLayers: red })], ["a"]);
+    const material = materialOf(object("a"));
+    const version = material.version;
+
+    manager.applyPose("a", pose({ color: "#0000ff", opacity: 0.5 }));
+
+    expect(materialOf(object("a"))).toBe(material);
+    expect(colorOf(object("a"))).toBe("#0000ff");
+    expect(material.opacity).toBe(0.5);
+    // needsUpdate (a rebuild) bumps the version.
+    expect(material.version).toBe(version);
+  });
+
+  it("draws an object a state can fade with the see-through ones while it's solid, still writing depth", () => {
+    const { manager, object } = settled([make("cube", "a"), make("cube", "b")], ["a"]);
+
+    expect(materialOf(object("a"))).toMatchObject({ transparent: true, depthWrite: true, opacity: 1 });
+    expect(materialOf(object("b"))).toMatchObject({ transparent: false, depthWrite: true });
+
+    manager.applyPose("a", pose({ opacity: 0.2 }));
+    expect(materialOf(object("a"))).toMatchObject({ transparent: true, opacity: 0.2 });
+    manager.applyPose("a", pose({ opacity: 1 }));
+    expect(materialOf(object("a"))).toMatchObject({ transparent: true, opacity: 1 });
+  });
+
+  it("syncs again only the objects that start or stop being ones a state can fade", () => {
+    const { manager, object, sync } = settled([make("cube", "a"), make("cube", "b"), make("cube", "c")], ["a"]);
+    const synced = spyOnSyncedIds();
+
+    manager.setFadingObjects(new Set(["b"]));
+    sync();
+
+    expect(synced.ids()).toEqual(["a", "b"]);
+    expect(materialOf(object("a")).transparent).toBe(false);
+    expect(materialOf(object("b")).transparent).toBe(true);
+  });
+
+  it("puts the object's own colour and opacity back on the next sync", () => {
+    const { manager, object, sync } = settled([make("cube", "a", { materialLayers: red, opacity: 0.8 })], ["a"]);
+
+    manager.applyPose("a", pose({ color: "#0000ff", opacity: 0.1 }));
+    sync();
+
+    expect(colorOf(object("a"))).toBe("#ff0000");
+    expect(materialOf(object("a")).opacity).toBeCloseTo(0.8, 6);
+  });
+
+  it("keeps the gizmo's object in its pose's look while it's dragged", () => {
+    const { manager, object, sync } = settled([make("cube", "a", { materialLayers: red })], ["a"]);
+
+    manager.applyPose("a", pose({ color: "#0000ff", opacity: 0.5 }));
+    sync(object("a"), true);
+    expect(colorOf(object("a"))).toBe("#0000ff");
+    expect(materialOf(object("a")).opacity).toBe(0.5);
+
+    sync(object("a"), false);
+    expect(colorOf(object("a"))).toBe("#ff0000");
+  });
+
+  it("leaves another object with the same layers as it was", () => {
+    const { manager, object } = settled([make("cube", "a", { materialLayers: red }), make("cube", "b", { materialLayers: red })], ["a"]);
+
+    manager.applyPose("a", pose({ color: "#0000ff", opacity: 0.5 }));
+
+    expect(colorOf(object("b"))).toBe("#ff0000");
+    expect(materialOf(object("b"))).toMatchObject({ opacity: 1, transparent: false });
+  });
+
+  it("leaves another object on the same material asset, and the asset, as they were", () => {
+    const asset: MaterialAsset = { id: "m", name: "m", layers: red };
+    const layersBefore = JSON.stringify(asset.layers);
+    const { manager, object } = settled(
+      [make("cube", "a", { materialAssetId: "m", materialLayers: [] }), make("cube", "b", { materialAssetId: "m", materialLayers: [] })],
+      ["a"],
+      { m: asset },
+    );
+    expect(colorOf(object("a"))).toBe("#ff0000");
+
+    manager.applyPose("a", pose({ color: "#0000ff", opacity: 0.5 }));
+
+    expect(colorOf(object("a"))).toBe("#0000ff");
+    expect(colorOf(object("b"))).toBe("#ff0000");
+    expect(materialOf(object("b")).opacity).toBe(1);
+    expect(asset.layers).toBe(red);
+    expect(JSON.stringify(asset.layers)).toBe(layersBefore);
+  });
+
+  it("keeps the shader of a stack drawn per pixel, for it and for an object sharing its shape", () => {
+    const stack = [createDepthLayer(), ...red];
+    const { manager, object } = settled([make("cube", "a", { materialLayers: stack }), make("cube", "b", { materialLayers: stack })], ["a"]);
+    const shapeOf = (id: string) => (materialOf(object(id)) as unknown as Record<string, unknown>).libre3dLayerStack;
+    const [shape, version, other] = [shapeOf("a"), materialOf(object("a")).version, materialOf(object("b")).version];
+    expect(shape).toBeTypeOf("string");
+
+    manager.applyPose("a", pose({ color: "#0000ff", opacity: 0.5 }));
+
+    expect(shapeOf("a")).toBe(shape);
+    expect(shapeOf("b")).toBe(shape);
+    expect(materialOf(object("a")).version).toBe(version);
+    expect(materialOf(object("b")).version).toBe(other);
+    expect(materialOf(object("a")).opacity).toBe(0.5);
+  });
+
+  it("does nothing for a pose that looks like the object already does", () => {
+    const { manager, object } = settled([make("cube", "a", { materialLayers: red })]);
+    const applied = vi.spyOn(materialOf(object("a")).color, "setRGB");
+
+    manager.applyPose("a", pose({ color: "#ff0000", opacity: 1 }));
+    expect(applied).not.toHaveBeenCalled();
+
+    manager.applyPose("a", pose({ color: "#0000ff", opacity: 1 }));
+    manager.applyPose("a", pose({ color: "#0000ff", opacity: 1 }));
+    expect(applied).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows Base to exports and thumbnails, then the pose again", () => {
+    const { manager, object } = settled([make("cube", "a", { materialLayers: red })], ["a"]);
+    manager.applyPose("a", pose({ color: "#0000ff", opacity: 0.5 }));
+
+    const restore = showBasePoses(object("a").parent as THREE.Scene);
+    expect(colorOf(object("a"))).toBe("#ff0000");
+    expect(materialOf(object("a")).opacity).toBe(1);
+
+    restore();
+    expect(colorOf(object("a"))).toBe("#0000ff");
+    expect(materialOf(object("a")).opacity).toBe(0.5);
+  });
+
+  it("ignores a look on an object without a material", () => {
+    const { manager, object } = settled([make("group", "g")]);
+    expect(() => manager.applyPose("g", pose({ color: "#0000ff", opacity: 0.5 }))).not.toThrow();
+    expect(object("g").position.toArray()).toEqual([0, 0, 0]);
   });
 });

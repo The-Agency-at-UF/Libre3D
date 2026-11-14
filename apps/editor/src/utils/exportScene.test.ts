@@ -111,6 +111,27 @@ describe("createSceneExportBlob", () => {
     expect(materials).toEqual([expect.objectContaining({ pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1], metallicFactor: 1, roughnessFactor: 0.3 } })]);
   });
 
+  it("exports an object shown in a coloured, see-through state in Base, and puts the state's look back", async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
+    const store = () => useEditorStore.getState();
+    const cube = store().entities.find((entity) => entity.type === "cube")!;
+    store().updateMaterialLayer(cube.id, cube.materialLayers!.find((layer) => layer.type === "color")!.id, { color: "#ff0000" });
+    store().updateMaterialLayer(cube.id, cube.materialLayers!.find((layer) => layer.type === "lighting")!.id, { model: "physical", roughness: 0.3, metalness: 1 });
+    const scene = new THREE.Scene();
+    const meshMap = new Map<string, THREE.Object3D>();
+    const objectManager = createObjectManager(scene, meshMap);
+    objectManager.syncMeshes(store().entities, null, false);
+    objectManager.applyPose(cube.id, { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], color: "#0000ff", opacity: 0.5 });
+    const material = (meshMap.get(cube.id) as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    expect(material.color.getHexString()).toBe("0000ff");
+
+    const { materials } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(materials).toEqual([expect.objectContaining({ pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1], metallicFactor: 1, roughnessFactor: 0.3 } })]);
+    expect(material.color.getHexString()).toBe("0000ff");
+    expect(material.opacity).toBe(0.5);
+  });
+
   // Objects draw with node materials (three/webgpu); GLTFExporter reads them by the built-in flags they carry.
 
   it("writes the node materials' colour, roughness, metalness, emissive and unlit as glTF materials", async () => {

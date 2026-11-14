@@ -24,7 +24,7 @@ import type { Entity } from "../scene/types";
 import { getEntityIndex, isEffectivelyLocked } from "../scene/entityIndex";
 import type { SceneRenderer } from "./rendererSettings";
 import type { SceneSource } from "./sceneSource";
-import { forgetBasePose, rememberBasePose } from "./basePoses";
+import { forgetBasePose, rememberBaseLook, rememberBasePose } from "./basePoses";
 import type { Pose } from "../animation/objectStates";
 import { PathMesh } from "../paths/PathMesh";
 import { DEFAULT_STROKE, type PathData } from "../paths/pathGeometry";
@@ -84,6 +84,8 @@ export class ObjectManager {
   private unsettledObjects = new WeakSet<THREE.Object3D>();
   // The entities of the last sync by id, to tell when a lock or a parent changed anywhere.
   private lastSyncedById: Map<string, Entity> | null = null;
+  // The objects a state can fade (setFadingObjects).
+  private fadingObjects: ReadonlySet<string> = new Set();
 
   // Where the entities, the wireframe setting and imported assets come from, and where what it
   // derives for imported models goes: the editor's store, or a published scene (sceneSource.ts).
@@ -166,7 +168,7 @@ export class ObjectManager {
     } else if (entity.type === "path") {
       // The tube and its caps (paths/PathMesh.ts). The outline is the whole path's box, also while
       // it's trimmed: it doesn't jump while the trim is dragged, and it shows where a hidden path is.
-      const mesh = new PathMesh(pathOf(entity), strokeOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1));
+      const mesh = new PathMesh(pathOf(entity), strokeOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1, this.materials.fades(entity.id)));
       applyTransform(mesh, entity);
       mesh.setTrim(entity.trimStart ?? 0, entity.trimEnd ?? 1);
 
@@ -175,7 +177,7 @@ export class ObjectManager {
       return mesh;
     } else if (entity.type === "shape") {
       // A filled outline (paths/ShapeMesh.ts), flat or extruded.
-      const mesh = new ShapeMesh(shapeOf(entity), solidOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1));
+      const mesh = new ShapeMesh(shapeOf(entity), solidOf(entity), this.materials.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1, this.materials.fades(entity.id)));
       applyTransform(mesh, entity);
 
       if (this.editorHelpers) attachSelectionOutline(mesh, mesh.geometry.boundingBox!);
@@ -184,7 +186,7 @@ export class ObjectManager {
     } else {
       const geometry = createPrimitiveGeometry(entity);
       geometry.computeBoundingBox();
-      const mesh = new THREE.Mesh(geometry, this.materials.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1));
+      const mesh = new THREE.Mesh(geometry, this.materials.createMaterialFromLayers(entity.materialLayers, entity.opacity ?? 1, this.materials.fades(entity.id)));
       mesh.userData.displaceDetail = displaceDetail(entity);
       // A displaced surface reaches past the shape it's built from, which is all three's culling knows.
       mesh.frustumCulled = mesh.userData.displaceDetail === null;
@@ -295,7 +297,8 @@ export class ObjectManager {
     // undefined) skip this and keep their parsed glTF material untouched.
     let textureMissing = false;
     if (obj instanceof THREE.Mesh && entity.materialLayers) {
-      textureMissing = this.materials.syncMaterial(obj, entity);
+      // The gizmo's object stays in the look of the state it's shown in, as it stays where it is.
+      textureMissing = this.materials.syncMaterial(obj, entity, isBeingDragged);
     } else if (obj instanceof THREE.DirectionalLight) {
       obj.color.set(entity.color ?? "#ffffff");
       if (obj.userData.helper) {
@@ -448,9 +451,26 @@ export class ObjectManager {
     }
   }
 
+  /**
+   * Says which objects a state can fade (animation/objectStates.ts, `fadingObjects`), before the
+   * sync that should draw them so: they're drawn with the see-through objects for good, so a fade
+   * never rebuilds a shader (entityMaterials.ts). An object that joins or leaves the set is synced
+   * again whatever its entity.
+   */
+  public setFadingObjects(ids: ReadonlySet<string>): void {
+    if (ids === this.fadingObjects) return;
+    for (const id of new Set([...ids, ...this.fadingObjects])) {
+      const obj = ids.has(id) !== this.fadingObjects.has(id) ? this.meshMap.get(id) : undefined;
+      if (obj) this.unsettledObjects.add(obj);
+    }
+    this.fadingObjects = ids;
+    this.materials.setFadingObjects(ids);
+  }
+
   // Shows an object in a pose other than its own values (the state being viewed, or where Play has
   // moved it) without touching the store, so clicks, the outline, and the gizmo follow it. A path's
-  // pose includes its trim. syncMeshes puts every object back in Base, so the caller applies the
+  // pose includes its trim; a mesh's, its colour and opacity, which go on its material as values
+  // (EntityMaterials.showLook). syncMeshes puts every object back in Base, so the caller applies the
   // pose again after each sync (except in Play, which shows Base). Exports and thumbnails still see
   // Base (showBasePoses).
   public applyPose(entityId: string, pose: Pose): void {
@@ -463,6 +483,13 @@ export class ObjectManager {
     applyTransform(obj, pose);
     if (obj instanceof PathMesh && (pose.trimStart !== undefined || pose.trimEnd !== undefined)) {
       obj.setTrim(pose.trimStart ?? 0, pose.trimEnd ?? 1);
+    }
+    if (obj instanceof THREE.Mesh && (pose.color !== undefined || pose.opacity !== undefined)) {
+      const entity = getEntityIndex(this.source.getEntities()).byId.get(entityId);
+      if (entity?.materialLayers) {
+        this.materials.showLook(obj, entity, pose);
+        rememberBaseLook(obj, () => this.materials.showBaseLook(obj, entity));
+      }
     }
   }
 
