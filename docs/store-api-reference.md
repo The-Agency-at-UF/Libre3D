@@ -425,7 +425,13 @@ Reusable materials by ID (`{ id, name, layers }`, layers top first), saved with 
 Every action below is one `set` and one undo step, and changes nothing in view only.
 
 #### `createMaterialAsset(fromEntityId?: string) → string`
-Makes an asset and returns its ID, named Material, Material 2, … in turn. With no object, Lighting over a white Color layer. With an object, a copy of its layers (new layer IDs), and the object then uses it. Groups, lights and imported models' meshes make nothing. An asset is one colour in every state, so the colours the object's states set are dropped in the same undo step (their opacity stays).
+Makes an asset and returns its ID, named Material, Material 2, … in turn. With no object, Lighting over a white Color layer. With an object, a copy of its layers (new layer IDs), and the object then uses it. Groups, lights and imported models' meshes make nothing. The object's opacity becomes the asset's. An asset is one look in every state, so the colours and opacities the object's states set are dropped in the same undo step.
+
+#### `addMaterialAsset(source: { name, layers, opacity? }) → string`
+Adds a copy of a material from outside the scene (the Libre3D library) as an asset, its layers under new IDs, and returns its ID ("" in view only).
+
+#### `setMaterialAssetOpacity(assetId: string, opacity: number) → void`
+Sets how see-through every object using the asset is (0-1, clamped; 1 is stored as none). An object on an asset is drawn with the asset's opacity, not its own.
 
 #### `renameMaterialAsset(assetId: string, name: string) → void`
 Ignores an empty or unchanged name.
