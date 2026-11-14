@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createDepthLayer, createEntity } from "../scene/entityFactories";
 import { getDescendantIds } from "../scene/entityIndex";
-import type { Entity, EntityType, ImageLayer, MaterialLayer } from "../scene/types";
+import { resolveEntities } from "../scene/materialAssets";
+import type { Entity, EntityType, ImageLayer, MaterialAsset, MaterialLayer } from "../scene/types";
+
 import { PathMesh } from "../paths/PathMesh";
 import { stubBrowserGlobals } from "../testing/browserStubs";
 import { ObjectManager } from "./ObjectManager";
@@ -129,6 +131,81 @@ describe("ObjectManager.syncMeshes: what it skips", () => {
     expect(synced.ids()).toEqual(["a"]);
     manager.syncMeshes(scene.entities, null, false);
     expect(synced.ids()).toEqual(["a"]);
+  });
+});
+
+// Objects that use a material asset reach the sync with the asset's layers (resolveEntities), as the
+// editor's and the viewer's sources hand them out.
+describe("ObjectManager.syncMeshes: material assets", () => {
+  const colorOf = (object: THREE.Object3D) => `#${((object as THREE.Mesh).material as THREE.MeshStandardMaterial).color.getHexString()}`;
+  const assetOf = (id: string, color: string): MaterialAsset => ({ id, name: id, layers: updateColor(createEntity("cube").materialLayers, { color }) });
+
+  const settled = () => {
+    const scene = createScene([
+      make("cube", "a", { materialAssetId: "m" }),
+      make("cube", "b", { materialAssetId: "m" }),
+      make("cube", "c"),
+      make("cube", "d", { materialAssetId: "gone" }),
+      // As applying an asset leaves an object: no layers of its own. Its asset is missing (a damaged file).
+      make("cube", "e", { materialAssetId: "gone", materialLayers: [] }),
+    ]);
+    let materials: Record<string, MaterialAsset> = { m: assetOf("m", "#ff0000") };
+    const built = createManager(scene.source);
+    const sync = () => built.manager.syncMeshes(resolveEntities(scene.entities, materials), null, false);
+    sync();
+    sync();
+    return { scene, ...built, sync, setMaterials: (next: Record<string, MaterialAsset>) => (materials = next) };
+  };
+
+  it("builds an object from its asset's layers, and from its own when the asset is missing", () => {
+    const { object } = settled();
+
+    expect(colorOf(object("a"))).toBe("#ff0000");
+    expect(colorOf(object("b"))).toBe("#ff0000");
+    expect(colorOf(object("c"))).toBe("#ffffff");
+    expect(colorOf(object("d"))).toBe("#ffffff");
+    // Nothing to draw it from: a plain material, and no failure.
+    expect((object("e") as THREE.Mesh).material).toBeInstanceOf(THREE.Material);
+  });
+
+
+  it("applies an edited asset to every object that uses it, and to nothing else", () => {
+    const { object, sync, setMaterials } = settled();
+    const synced = spyOnSyncedIds();
+
+    sync();
+    expect(synced.ids()).toEqual([]);
+
+    setMaterials({ m: assetOf("m", "#00ff00") });
+    sync();
+
+    expect(synced.ids()).toEqual(["a", "b"]);
+    expect(colorOf(object("a"))).toBe("#00ff00");
+    expect(colorOf(object("b"))).toBe("#00ff00");
+    expect(colorOf(object("c"))).toBe("#ffffff");
+  });
+
+  it("applies only the object whose own values changed, though it uses an asset", () => {
+    const { scene, object, sync } = settled();
+    const synced = spyOnSyncedIds();
+
+    scene.update("a", { position: [2, 0, 0] });
+    sync();
+
+    expect(synced.ids()).toEqual(["a"]);
+    expect(object("a").position.toArray()).toEqual([2, 0, 0]);
+    expect(colorOf(object("a"))).toBe("#ff0000");
+  });
+
+  it("draws an object from its own layers once it's detached, and from the asset once it's applied", () => {
+    const { scene, object, sync } = settled();
+
+    scene.update("a", { materialAssetId: undefined });
+    scene.update("c", { materialAssetId: "m" });
+    sync();
+
+    expect(colorOf(object("a"))).toBe("#ffffff");
+    expect(colorOf(object("c"))).toBe("#ff0000");
   });
 });
 

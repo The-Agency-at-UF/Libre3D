@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import type { SceneRenderer } from "../rendererSettings";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
-import { useEditorStore, type DepthLayer, type EditorState } from "../../store/useEditorStore";
+import { selectDrawnEntities, useEditorStore, type DepthLayer, type EditorState } from "../../store/useEditorStore";
 import { getEntityIndex } from "../../scene/entityIndex";
 import {
   SPREAD_CIRCLE_POINTS,
@@ -31,9 +31,11 @@ const store = () => useEditorStore.getState();
 let editedLayerId: string | null = null;
 
 const editedLayer = (state: EditorState): DepthLayer | null => {
-  const { depthEdit, selectedEntityIds, entities } = state;
+  const { depthEdit, selectedEntityIds } = state;
   if (!depthEdit || selectedEntityIds.length !== 1 || selectedEntityIds[0] !== depthEdit) return null;
-  const entity = getEntityIndex(entities).byId.get(depthEdit);
+  // As it's drawn: an object that uses a material asset is edited through the asset's Depth layer.
+  const entity = getEntityIndex(selectDrawnEntities(state)).byId.get(depthEdit);
+
   const depths = (entity?.materialLayers ?? []).filter(
     (each): each is DepthLayer => each.type === "depth" && each.enabled && each.originType !== "camera",
   );

@@ -97,7 +97,20 @@ describe("a published scene's source", () => {
     expect(source.isWireframe()).toBe(false);
   });
 
+  it("hands out objects that use a material asset with the asset's layers, from the document's assets", () => {
+    const own: MaterialLayer[] = [{ id: "own", type: "color", enabled: true, opacity: 1, blendMode: "normal", color: "#111111" }];
+    const shared: MaterialLayer[] = [{ id: "shared", type: "color", enabled: true, opacity: 1, blendMode: "normal", color: "#ff0000" }];
+    const entities = [{ ...entity("cube-1"), materialLayers: own, materialAssetId: "m" }, { ...entity("cube-2"), materialLayers: own }, { ...entity("cube-3"), materialLayers: own, materialAssetId: "gone" }];
+
+    const source = createPublishedSceneSource(entities, {}, { m: { id: "m", name: "Red", layers: shared } });
+
+    expect(source.getEntities().map((each) => each.materialLayers)).toEqual([shared, own, own]);
+    // Without the assets (an older caller), every object keeps its own layers.
+    expect(createPublishedSceneSource(entities, {}).getEntities()).toBe(entities);
+  });
+
   it("keeps a texture derived from an imported model in memory, and loads it back without a download", async () => {
+
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const source = createPublishedSceneSource([entity("cube-1")], {});

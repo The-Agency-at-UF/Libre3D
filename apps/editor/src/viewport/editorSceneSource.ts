@@ -1,4 +1,4 @@
-import { useEditorStore } from "../store/useEditorStore";
+import { selectDrawnEntities, useEditorStore } from "../store/useEditorStore";
 import { loadModelForScene, loadTextureForScene } from "../utils/assetTransfers";
 import { saveTextureAsset } from "../utils/textureAssetStore";
 import type { SceneSource } from "./sceneSource";
@@ -10,7 +10,9 @@ import type { SceneSource } from "./sceneSource";
  * textures it takes out of a model's materials go to this browser's storage, and from there to the cloud.
  */
 export const editorSceneSource: SceneSource = {
-  getEntities: () => useEditorStore.getState().entities,
+  // As they're drawn: an object that uses a material asset comes with the asset's layers.
+  getEntities: () => selectDrawnEntities(useEditorStore.getState()),
+
   isWireframe: () => useEditorStore.getState().sceneSettings.wireframe,
   loadModel: loadModelForScene,
   loadTexture: loadTextureForScene,

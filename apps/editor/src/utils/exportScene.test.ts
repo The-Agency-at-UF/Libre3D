@@ -93,7 +93,26 @@ describe("createSceneExportBlob", () => {
     expect(materials[0].extensions.KHR_materials_clearcoat).toEqual({ clearcoatFactor: 1, clearcoatRoughnessFactor: 0.05 });
   });
 
+  it("writes an object that uses a material asset with the asset's material", async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
+    const { selectDrawnEntities } = await import("../store/useEditorStore");
+    const store = () => useEditorStore.getState();
+    const cube = store().entities.find((entity) => entity.type === "cube")!;
+    const assetId = store().createMaterialAsset();
+    const layers = store().materials[assetId].layers;
+    store().updateMaterialLayer(assetId, layers.find((layer) => layer.type === "color")!.id, { color: "#ff0000" });
+    store().updateMaterialLayer(assetId, layers.find((layer) => layer.type === "lighting")!.id, { model: "physical", roughness: 0.3, metalness: 1 });
+    store().applyMaterialAsset(assetId, [cube.id]);
+    const scene = new THREE.Scene();
+    createObjectManager(scene, new Map()).syncMeshes(selectDrawnEntities(store()), null, false);
+
+    const { materials } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(materials).toEqual([expect.objectContaining({ pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1], metallicFactor: 1, roughnessFactor: 0.3 } })]);
+  });
+
   // Objects draw with node materials (three/webgpu); GLTFExporter reads them by the built-in flags they carry.
+
   it("writes the node materials' colour, roughness, metalness, emissive and unlit as glTF materials", async () => {
     const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
     const store = useEditorStore.getState();
