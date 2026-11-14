@@ -74,7 +74,26 @@ describe("collectAssetRefs", () => {
     ]);
   });
 
+  it("finds a picture used only inside a material asset, after the entities' own", () => {
+    const entities = [{ materialAssetId: "m", materialLayers: [{ type: "image", textureAssetId: TEXTURE }] }];
+    const materials = {
+      m: { id: "m", name: "Gloss", layers: [{ type: "matcap", textureAssetId: MODEL }, { type: "lighting", maps: { normal: { textureAssetId: "c".repeat(64) } } }] },
+      n: { id: "n", name: "Same picture", layers: [{ type: "image", textureAssetId: TEXTURE }] },
+    };
+
+    expect(collectAssetRefs(entities, materials)).toEqual([
+      { id: TEXTURE, kind: "texture" },
+      { id: MODEL, kind: "texture" },
+      { id: "c".repeat(64), kind: "texture" },
+    ]);
+    expect(collectAssetHashes([], materials)).toEqual([MODEL, "c".repeat(64), TEXTURE]);
+    // Whatever a request body holds for `materials`.
+    expect(collectAssetRefs([], "nope")).toEqual([]);
+    expect(collectAssetRefs([], { m: null, n: { layers: "nope" }, o: { layers: [null, { type: "image" }] } })).toEqual([]);
+  });
+
   it("includes the random IDs of assets imported before cloud assets", () => {
+
     expect(collectAssetRefs([{ assetId: "asset-old" }])).toEqual([{ id: "asset-old", kind: "model" }]);
   });
 

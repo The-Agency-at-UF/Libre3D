@@ -52,11 +52,12 @@ export const assetHashToBase64 = (hash: string): string => {
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
 /**
- * Every asset the entities reference, once each, in order of first use: imported models
- * (`assetId`) and image layers' textures (`textureAssetId`). Tolerates malformed input, since the
- * server reads it from a request body.
+ * Every asset a scene references, once each, in order of first use: imported models (`assetId`)
+ * and the pictures in layers (`textureAssetId`), the entities' own and those of the scene's
+ * material assets (`materials`, by ID). Tolerates malformed input, since the server reads it from a
+ * request body.
  */
-export const collectAssetRefs = (entities: unknown): AssetRef[] => {
+export const collectAssetRefs = (entities: unknown, materials?: unknown): AssetRef[] => {
   const refs = new Map<string, AssetRef>();
   const add = (id: unknown, kind: AssetKind) => {
     if (typeof id === "string" && id && !refs.has(id)) {
@@ -64,37 +65,41 @@ export const collectAssetRefs = (entities: unknown): AssetRef[] => {
     }
   };
 
-  if (!Array.isArray(entities)) {
-    return [];
-  }
+  const addLayers = (layers: unknown) => {
+    if (!Array.isArray(layers)) return;
+    for (const layer of layers) {
+      if (isObject(layer) && (layer.type === "image" || layer.type === "matcap" || layer.type === "displace")) {
+        add(layer.textureAssetId, "texture");
+      }
+      // A Lighting layer's maps (normal, roughness, …): pictures too.
+      if (isObject(layer) && layer.type === "lighting" && isObject(layer.maps)) {
+        for (const map of Object.values(layer.maps)) {
+          if (isObject(map)) add(map.textureAssetId, "texture");
+        }
+      }
+    }
+  };
 
-  for (const entity of entities) {
+  for (const entity of Array.isArray(entities) ? entities : []) {
     if (!isObject(entity)) {
       continue;
     }
 
     add(entity.assetId, "model");
+    addLayers(entity.materialLayers);
+  }
 
-    if (Array.isArray(entity.materialLayers)) {
-      for (const layer of entity.materialLayers) {
-        if (isObject(layer) && (layer.type === "image" || layer.type === "matcap" || layer.type === "displace")) {
-          add(layer.textureAssetId, "texture");
-        }
-        // A Lighting layer's maps (normal, roughness, …): pictures too.
-        if (isObject(layer) && layer.type === "lighting" && isObject(layer.maps)) {
-          for (const map of Object.values(layer.maps)) {
-            if (isObject(map)) add(map.textureAssetId, "texture");
-          }
-        }
-      }
-    }
+  // A picture used only inside a material asset is the scene's too: without it, the objects that
+  // use the asset would lose it when the scene is saved, published or written to a file.
+  for (const asset of isObject(materials) ? Object.values(materials) : []) {
+    if (isObject(asset)) addLayers(asset.layers);
   }
 
   return Array.from(refs.values());
 };
 
-/** The content addresses among the assets the entities reference (old random IDs left out). */
-export const collectAssetHashes = (entities: unknown): string[] =>
-  collectAssetRefs(entities)
+/** The content addresses among the assets a scene references (old random IDs left out). */
+export const collectAssetHashes = (entities: unknown, materials?: unknown): string[] =>
+  collectAssetRefs(entities, materials)
     .map((ref) => ref.id)
     .filter(isAssetHash);

@@ -329,7 +329,9 @@ const checkDocumentAssets = async (
   document: unknown,
   known: Set<string>,
 ): Promise<AssetCheck> => {
-  const hashes = collectAssetHashes((document as { scene?: { entities?: unknown } }).scene?.entities);
+  const scene = (document as { scene?: { entities?: unknown; materials?: unknown } }).scene;
+  const hashes = collectAssetHashes(scene?.entities, scene?.materials);
+
 
   if (hashes.length > MAX_SCENE_ASSETS) {
     return { ok: false, response: errorResponse(413, "This scene has too many imported files to save.") };
