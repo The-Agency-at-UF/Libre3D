@@ -378,4 +378,13 @@ describe("schema v5: the material layer stack", () => {
 
     expect(parsed).toEqual({ ok: true, content });
   });
+
+  it("opens a document whose object names a material asset that isn't there", () => {
+    const content = makeContent();
+    content.entities[0] = { ...content.entities[0], materialAssetId: "gone" };
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    expect(parsed).toEqual({ ok: true, content });
+  });
 });
+

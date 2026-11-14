@@ -69,6 +69,8 @@ import {
   type PaintLayerType,
 } from "../scene/entityFactories";
 import { canRemoveLayer, canSwitchLayerType, isColorLayerType, moveLayer, newLayerIndex } from "../scene/layerStack";
+import { assetOf, canUseMaterialAsset, copyLayers, createMaterialAssetLayers, layersOf, nextMaterialAssetName, resolveEntities } from "../scene/materialAssets";
+
 import type {
   CameraProfile,
   DeepPartial,
@@ -324,18 +326,38 @@ export interface EditorState {
    */
   materials: Record<string, MaterialAsset>;
   /**
-   * Adds a layer to an object's stack (scene/layerStack.ts): a colour layer just under Lighting (a
+   * Makes a material asset and returns its ID: a new one (Lighting over a white Color layer), or,
+   * given an object, one with a copy of that object's layers, which the object then uses.
+   */
+  createMaterialAsset: (fromEntityId?: string) => string;
+  renameMaterialAsset: (assetId: string, name: string) => void;
+  /** Deletes an asset. The objects using it keep its look as layers of their own, in the same undo step. */
+  removeMaterialAsset: (assetId: string) => void;
+  /**
+   * Makes objects use an asset in place of their own layers, which are discarded (scene/materialAssets.ts).
+   * Groups, lights and imported models' meshes are left as they are.
+   */
+  applyMaterialAsset: (assetId: string, entityIds: string[]) => void;
+  /** Gives objects their asset's layers as their own (new layer IDs) and unlinks them from it. */
+  detachMaterialAsset: (entityIds: string[]) => void;
+  /**
+   * The layer actions below take the ID of whose stack they edit: an object's, or a material
+   * asset's. An object that uses an asset has its asset's stack edited, so every object using it
+   * changes.
+   *
+   * Adds a layer to a stack (scene/layerStack.ts): a colour layer just under Lighting (a
    * Fresnel layer over it, where it glows), or a Lighting layer on top when it has none. `depthFar`:
    * where a new Depth layer's ramp ends (its object's reach); 2 when not given.
    */
-  addMaterialLayer: (entityId: string, layerType: MaterialLayerType, depthFar?: number) => void;
+  addMaterialLayer: (ownerId: string, layerType: MaterialLayerType, depthFar?: number) => void;
   /** Removes a layer the stack rules allow removing (never Lighting; a painting layer only while another one stays). */
-  removeMaterialLayer: (entityId: string, layerId: string) => void;
+  removeMaterialLayer: (ownerId: string, layerId: string) => void;
   /** Turns a colour layer into another colour type, keeping its ID, eye, opacity, blend mode and Mode. */
-  switchMaterialLayerType: (entityId: string, layerId: string, type: PaintLayerType, depthFar?: number) => void;
+  switchMaterialLayerType: (ownerId: string, layerId: string, type: PaintLayerType, depthFar?: number) => void;
   /** Moves a layer to `toIndex` in the stack (top = 0), above the Image layers. */
-  moveMaterialLayer: (entityId: string, layerId: string, toIndex: number) => void;
-  updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
+  moveMaterialLayer: (ownerId: string, layerId: string, toIndex: number) => void;
+  updateMaterialLayer: (ownerId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
+  /** One layer of each stack (owner ID → layer and changes), one undo step for all of them. */
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
   /** Sets how see-through objects are (entity ID → 0-1), one undo step for all of them. */
   setEntityOpacity: (opacities: Record<string, number>) => void;
@@ -360,12 +382,58 @@ const withLayers = (entity: Entity, change: (layers: MaterialLayer[]) => Materia
   return layers === entity.materialLayers ? entity : { ...entity, materialLayers: layers };
 };
 
-// `state`'s entities with `change` applied to the one with `entityId`'s layers, or no update at all
-// when nothing changed, so an action the stack rules refuse records no undo step.
-const changeLayers = (state: EditorState, entityId: string, change: (layers: MaterialLayer[]) => MaterialLayer[]) => {
-  const entities = state.entities.map((entity) => (entity.id === entityId ? withLayers(entity, change) : entity));
-  return entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : state;
+type LayerChange = (layers: MaterialLayer[]) => MaterialLayer[];
+
+// The update that applies each change to its owner's stack (owner ID → change), or no update at
+// all when nothing changed, so an action the stack rules refuse records no undo step. An owner is a
+// material asset, an object that uses one (its asset's stack is changed, once, however many of its
+// users are named), or an object with layers of its own.
+const changeStacks = (state: EditorState, changes: Record<string, LayerChange>): Partial<EditorState> | EditorState => {
+  const { byId } = getEntityIndex(state.entities);
+  const ownChanges = new Map<string, LayerChange>();
+  let materials = state.materials;
+  const changedAssets = new Set<string>();
+
+  for (const [ownerId, change] of Object.entries(changes)) {
+    const entity = byId.get(ownerId);
+    const asset = state.materials[ownerId] ?? (entity && assetOf(entity, state.materials));
+    if (!asset) {
+      ownChanges.set(ownerId, change);
+    } else if (!changedAssets.has(asset.id)) {
+      changedAssets.add(asset.id);
+      const layers = change(asset.layers);
+      if (layers !== asset.layers) materials = { ...materials, [asset.id]: { ...asset, layers } };
+    }
+  }
+
+  const entities =
+    ownChanges.size > 0 ? state.entities.map((entity) => (ownChanges.has(entity.id) ? withLayers(entity, ownChanges.get(entity.id)!) : entity)) : state.entities;
+  const entitiesChanged = entities.some((entity, index) => entity !== state.entities[index]);
+  if (!entitiesChanged && materials === state.materials) return state;
+  return { ...(entitiesChanged ? { entities } : null), ...(materials !== state.materials ? { materials } : null) };
 };
+
+const changeLayers = (state: EditorState, ownerId: string, change: LayerChange) => changeStacks(state, { [ownerId]: change });
+
+// A stack with one layer's values changed; the same stack when it doesn't hold the layer.
+const withLayerUpdates =
+  (layerId: string, updates: Partial<MaterialLayer>): LayerChange =>
+  (layers) =>
+    layers.some((layer) => layer.id === layerId) ? layers.map((layer) => (layer.id === layerId ? ({ ...layer, ...updates } as MaterialLayer) : layer)) : layers;
+
+// `entity` with a copy of its asset's layers as its own, no longer using the asset.
+const detached = (entity: Entity, materials: Record<string, MaterialAsset>): Entity => {
+  if (!entity.materialAssetId) return entity;
+  const { materialAssetId: _assetId, ...rest } = entity;
+  const asset = assetOf(entity, materials);
+  return asset && entity.materialLayers ? { ...rest, materialLayers: copyLayers(asset.layers) } : rest;
+};
+
+/**
+ * The entities as the viewport draws them: each object that uses a material asset with the asset's
+ * layers (scene/materialAssets.ts). The same list while the entities and assets are the same.
+ */
+export const selectDrawnEntities = (state: Pick<EditorState, "entities" | "materials">): Entity[] => resolveEntities(state.entities, state.materials);
 
 /** The parts of the state that are saved as the scene (see utils/sceneDocument.ts). */
 export const selectSceneContent = (state: EditorState): SceneContent => ({
@@ -1253,9 +1321,64 @@ export const useEditorStore = create<EditorState>()(
               frame: deepMerge(state.frame, updates),
             })),
           materials: {},
-          addMaterialLayer: (entityId, layerType, depthFar) =>
+          createMaterialAsset: (fromEntityId) => {
+            let assetId = "";
+            set((state) => {
+              const source = fromEntityId ? getEntityIndex(state.entities).byId.get(fromEntityId) : undefined;
+              if (fromEntityId && !(source && canUseMaterialAsset(source))) return state;
+              const asset: MaterialAsset = {
+                id: createEntityId(),
+                name: nextMaterialAssetName(state.materials),
+                layers: source ? copyLayers(layersOf(source, state.materials)!) : createMaterialAssetLayers(),
+              };
+              assetId = asset.id;
+              return {
+                materials: { ...state.materials, [asset.id]: asset },
+                ...(source ? { entities: state.entities.map((entity) => (entity === source ? { ...entity, materialAssetId: asset.id, materialLayers: [] } : entity)) } : null),
+              };
+            });
+            // Empty when the store refused it (view only): nothing was made.
+            return get().materials[assetId] ? assetId : "";
+          },
+          renameMaterialAsset: (assetId, name) =>
+            set((state) => {
+              const asset = state.materials[assetId];
+              const trimmed = name.trim();
+              if (!asset || !trimmed || trimmed === asset.name) return state;
+              return { materials: { ...state.materials, [assetId]: { ...asset, name: trimmed } } };
+            }),
+          removeMaterialAsset: (assetId) =>
+            set((state) => {
+              if (!state.materials[assetId]) return state;
+              const { [assetId]: _removed, ...materials } = state.materials;
+              const usesIt = state.entities.some((entity) => entity.materialAssetId === assetId);
+              return {
+                materials,
+                ...(usesIt ? { entities: state.entities.map((entity) => (entity.materialAssetId === assetId ? detached(entity, state.materials) : entity)) } : null),
+              };
+            }),
+          applyMaterialAsset: (assetId, entityIds) =>
+            set((state) => {
+              const asset = state.materials[assetId];
+              if (!asset) return state;
+              const ids = new Set(entityIds);
+              const entities = state.entities.map((entity) =>
+                ids.has(entity.id) && canUseMaterialAsset(entity) && entity.materialAssetId !== assetId
+                  ? // Its own layers are discarded: it's drawn with the asset's (scene/materialAssets.ts).
+                    { ...entity, materialAssetId: assetId, materialLayers: [] }
+                  : entity,
+              );
+              return entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : state;
+            }),
+          detachMaterialAsset: (entityIds) =>
+            set((state) => {
+              const ids = new Set(entityIds);
+              const entities = state.entities.map((entity) => (ids.has(entity.id) ? detached(entity, state.materials) : entity));
+              return entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : state;
+            }),
+          addMaterialLayer: (ownerId, layerType, depthFar) =>
             set((state) =>
-              changeLayers(state, entityId, (layers) => {
+              changeLayers(state, ownerId, (layers) => {
                 if (layerType === "lighting") {
                   return layers.some((layer) => layer.type === "lighting") ? layers : [createLightingLayer(), ...layers];
                 }
@@ -1266,24 +1389,24 @@ export const useEditorStore = create<EditorState>()(
                 return [...layers.slice(0, index), newLayer, ...layers.slice(index)];
               }),
             ),
-          removeMaterialLayer: (entityId, layerId) =>
+          removeMaterialLayer: (ownerId, layerId) =>
             set((state) =>
-              changeLayers(state, entityId, (layers) => {
+              changeLayers(state, ownerId, (layers) => {
                 const layer = layers.find((each) => each.id === layerId);
                 return layer && canRemoveLayer(layers, layer) ? layers.filter((each) => each.id !== layerId) : layers;
               }),
             ),
-          switchMaterialLayerType: (entityId, layerId, type, depthFar) =>
+          switchMaterialLayerType: (ownerId, layerId, type, depthFar) =>
             set((state) =>
-              changeLayers(state, entityId, (layers) => {
+              changeLayers(state, ownerId, (layers) => {
                 const layer = layers.find((each) => each.id === layerId);
                 if (!layer || layer.type === type || !canSwitchLayerType(layers, layer, type)) return layers;
                 const color = colorLayerOf(layers.filter((each) => each.id !== layerId))?.color;
                 return layers.map((each) => (each.id === layerId ? switchLayerType(each, type, depthFar, color) : each));
               }),
             ),
-          moveMaterialLayer: (entityId, layerId, toIndex) =>
-            set((state) => changeLayers(state, entityId, (layers) => moveLayer(layers, layerId, toIndex))),
+          moveMaterialLayer: (ownerId, layerId, toIndex) =>
+            set((state) => changeLayers(state, ownerId, (layers) => moveLayer(layers, layerId, toIndex))),
           setEntityOpacity: (opacities) =>
             set((state) => {
               const entities = state.entities.map((entity) => {
@@ -1296,31 +1419,14 @@ export const useEditorStore = create<EditorState>()(
               });
               return entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : state;
             }),
-          updateMaterialLayer: (entityId, layerId, updates) =>
-            set((state) => ({
-              entities: state.entities.map((entity) => {
-                if (entity.id !== entityId || !entity.materialLayers) return entity;
-                return {
-                  ...entity,
-                  materialLayers: entity.materialLayers.map((layer) =>
-                    layer.id === layerId ? ({ ...layer, ...updates } as MaterialLayer) : layer,
-                  ),
-                };
-              }),
-            })),
+          updateMaterialLayer: (ownerId, layerId, updates) => set((state) => changeLayers(state, ownerId, withLayerUpdates(layerId, updates))),
           updateMultipleEntityMaterialLayers: (updatesMap) =>
-            set((state) => ({
-              entities: state.entities.map((entity) => {
-                const change = updatesMap[entity.id];
-                if (!change || !entity.materialLayers) return entity;
-                return {
-                  ...entity,
-                  materialLayers: entity.materialLayers.map((layer) =>
-                    layer.id === change.layerId ? ({ ...layer, ...change.updates } as MaterialLayer) : layer,
-                  ),
-                };
-              }),
-            })),
+            set((state) =>
+              changeStacks(
+                state,
+                Object.fromEntries(Object.entries(updatesMap).map(([ownerId, change]) => [ownerId, withLayerUpdates(change.layerId, change.updates)])),
+              ),
+            ),
           // Replaces an entity's whole layer stack. Used when hydrating imported models
           // (viewport/importedModels.ts) to write the layers derived from an imported mesh's
           // parsed glTF material.
