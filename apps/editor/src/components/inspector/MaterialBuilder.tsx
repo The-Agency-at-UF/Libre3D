@@ -1,11 +1,13 @@
 /**
- * PURPOSE: The Material Builder: one material asset, edited in the Material Assets drawer
- * (MaterialAssetsDrawer.tsx). Top to bottom: its name, the shaderball (drag to turn it), "Select
- * objects using this material", "Apply to selection", and its layer stack under a "Material"
- * heading with a "+" that adds a Color layer (LayerStack.tsx, the rows the Materials panel uses).
+ * PURPOSE: The Material Builder ("Edit Material Asset"): one material asset, edited in the Material
+ * Assets drawer (MaterialAssetsDrawer.tsx). Top to bottom: its name; the shaderball (drag to turn
+ * it), with "Select objects using this material" in its corner; then a "Material" heading with the
+ * material's opacity (every object using it is that see-through) and a "+" that adds a Color layer;
+ * and its layer stack (LayerStack.tsx, the rows the Materials panel uses). The × goes back to the
+ * list, where a material is applied to the selected objects.
  *
- * INPUT: The asset and the selected objects that have a material. OUTPUT: Edits through the store's
- * asset and layer actions; the selection, from "Select objects using this material".
+ * INPUT: The asset. OUTPUT: Edits through the store's asset and layer actions; the selection, from
+ * "Select objects using this material".
  *
  * The shaderball (viewport/materialPreview.ts) is made when the builder opens, draws only when the
  * material or the view changes, and is disposed when the builder closes.
@@ -13,23 +15,24 @@
 
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { useEditorStore, type Entity, type MaterialAsset, type MaterialLayer } from "../../store/useEditorStore";
-import { canUseMaterialAsset, usersOfMaterialAsset } from "../../scene/materialAssets";
+import { useEditorStore, type MaterialAsset, type MaterialLayer } from "../../store/useEditorStore";
+import { assetOpacity, usersOfMaterialAsset } from "../../scene/materialAssets";
+import { NumberField } from "../ui/NumberField";
 import { MaterialPreview } from "../../viewport/materialPreview";
 import { LayerStack } from "./LayerStack";
 import { assetOwner } from "./materialRows";
 
 // The shaderball's canvas, in device pixels at up to twice the size it's shown.
-const BALL_CSS_SIZE = 148;
+const BALL_CSS_SIZE = 124;
 
-function Shaderball({ layers }: { layers: MaterialLayer[] }) {
+function Shaderball({ layers, opacity }: { layers: MaterialLayer[]; opacity: number }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const preview = useRef<MaterialPreview | null>(null);
   const drag = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     if (!canvas.current) return;
-    const made = new MaterialPreview(canvas.current, layers);
+    const made = new MaterialPreview(canvas.current, layers, opacity);
     preview.current = made;
     return () => {
       made.dispose();
@@ -40,8 +43,8 @@ function Shaderball({ layers }: { layers: MaterialLayer[] }) {
   }, []);
 
   useEffect(() => {
-    preview.current?.setLayers(layers);
-  }, [layers]);
+    preview.current?.setLayers(layers, opacity);
+  }, [layers, opacity]);
 
   const size = Math.round(BALL_CSS_SIZE * Math.min(2, window.devicePixelRatio || 1));
 
@@ -74,19 +77,9 @@ function Shaderball({ layers }: { layers: MaterialLayer[] }) {
   );
 }
 
-export function MaterialBuilder({
-  asset,
-  selectedEntities,
-  onBack,
-  onClose,
-}: {
-  asset: MaterialAsset;
-  selectedEntities: Entity[];
-  onBack: () => void;
-  onClose: () => void;
-}) {
+export function MaterialBuilder({ asset, onBack }: { asset: MaterialAsset; onBack: () => void }) {
   const renameMaterialAsset = useEditorStore((state) => state.renameMaterialAsset);
-  const applyMaterialAsset = useEditorStore((state) => state.applyMaterialAsset);
+  const setMaterialAssetOpacity = useEditorStore((state) => state.setMaterialAssetOpacity);
   const addMaterialLayer = useEditorStore((state) => state.addMaterialLayer);
   const selectEntities = useEditorStore((state) => state.selectEntities);
   const userIds = useEditorStore(useShallow((state) => usersOfMaterialAsset(state.entities, asset.id).map((entity) => entity.id)));
@@ -96,15 +89,16 @@ export function MaterialBuilder({
   // The name follows the asset (an undo, another asset in the same builder) while it isn't being typed.
   useEffect(() => setName(asset.name), [asset.id, asset.name]);
 
-  const targets = selectedEntities.filter(canUseMaterialAsset);
-  const applied = targets.length > 0 && targets.every((entity) => entity.materialAssetId === asset.id);
-
   return (
     <>
       <div className="mat-drawer-header">
-        <button type="button" className="mat-icon-btn" title="All materials" aria-label="Back to the material assets" onClick={onBack}>
-          <i className="ti ti-arrow-left"></i>
+        <span>Edit Material Asset</span>
+        <button type="button" className="mat-icon-btn" title="Back to the material assets" aria-label="Close the Material Builder" onClick={onBack}>
+          <i className="ti ti-x"></i>
         </button>
+      </div>
+
+      <div className="mat-assets-body">
         <input
           className="mat-asset-rename"
           type="text"
@@ -125,37 +119,34 @@ export function MaterialBuilder({
             }
           }}
         />
-        <button type="button" className="mat-icon-btn" title="Close" aria-label="Close the Material Builder" onClick={onClose}>
-          <i className="ti ti-x"></i>
-        </button>
-      </div>
 
-      <div className="mat-assets-body">
-        <Shaderball layers={asset.layers} />
-
-        <button
-          type="button"
-          className="mat-drawer-btn mat-builder-btn"
-          disabled={userIds.length === 0}
-          title={userIds.length === 0 ? "No object uses this material yet" : undefined}
-          onClick={() => selectEntities(userIds)}
-        >
-          <i className="ti ti-click"></i>
-          Select objects using this material ({userIds.length})
-        </button>
-        <button
-          type="button"
-          className="mat-drawer-btn mat-builder-btn"
-          disabled={isReadOnly || targets.length === 0 || applied}
-          title={applied ? "The selected objects use this material" : targets.length === 0 ? "Select an object to apply this material to" : "Replaces the selected objects' own layers"}
-          onClick={() => applyMaterialAsset(asset.id, targets.map((entity) => entity.id))}
-        >
-          <i className="ti ti-link"></i>
-          {applied ? "Applied to the selection" : "Apply to the selected objects"}
-        </button>
+        <div className="mat-preview">
+          <Shaderball layers={asset.layers} opacity={assetOpacity(asset)} />
+          <button
+            type="button"
+            className="mat-icon-btn mat-preview-select"
+            disabled={userIds.length === 0}
+            title={userIds.length === 0 ? "No object uses this material yet" : `Select the ${userIds.length === 1 ? "object" : `${userIds.length} objects`} using this material`}
+            aria-label="Select objects using this material"
+            onClick={() => selectEntities(userIds)}
+          >
+            <i className="ti ti-drag-drop"></i>
+          </button>
+        </div>
 
         <div className="mat-builder-heading">
           <span>Material</span>
+          <NumberField
+            className="mat-opacity-field"
+            label="Material opacity (%)"
+            value={Math.round(assetOpacity(asset) * 100)}
+            min={0}
+            max={100}
+            step={1}
+            integer
+            disabled={isReadOnly}
+            onChange={(percent) => setMaterialAssetOpacity(asset.id, percent / 100)}
+          />
           <button
             type="button"
             className="mat-icon-btn"
