@@ -4,11 +4,22 @@ import type { SceneRenderer } from "../rendererSettings";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { useEditorStore, type DepthLayer, type EditorState } from "../../store/useEditorStore";
 import { getEntityIndex } from "../../scene/entityIndex";
-import { distanceAlongAxis, dragFar, dragNear, dragStop, pointOnAxis, stopDistance } from "../../utils/depthGizmo";
+import {
+  SPREAD_CIRCLE_POINTS,
+  distanceAlongAxis,
+  dragFar,
+  dragNear,
+  dragStop,
+  pointOnAxis,
+  spreadCircle,
+  stopDistance,
+  type SpreadCircle,
+} from "../../utils/depthGizmo";
 import type { ObjectManager } from "../ObjectManager";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const CONE_LIFT = 22; // pixels the near and far markers sit above their place on the axis
+const SPREAD_CIRCLES: SpreadCircle[] = ["flat", "upright"];
 
 type Handle = { kind: "near" } | { kind: "far" } | { kind: "stop"; index: number };
 
@@ -67,10 +78,11 @@ const pool = <T extends SVGElement>(group: SVGGElement, count: number, make: () 
  *
  * While an object's Depth layer is being edited (`depthEdit` in the store; `editDepth`, the Depth
  * layer's button), an SVG over the canvas shows its axis from the origin to far, the near and far
- * markers (triangles above the axis), each stop as a dot in its colour, and for a radial layer a
- * ring at each stop's distance (facing the view, around the origin). It's redrawn from the 3D
- * positions each frame (ViewportCanvas runs `frameRef` before each render), so it follows the
- * camera and the object.
+ * markers (triangles above the axis), each stop as a dot in its colour, and for a radial layer
+ * each stop's spread: two circles around the origin at the stop's distance, one flat on the
+ * layer's XZ plane and one upright through the axis. The circles lie in the scene (each point is
+ * projected), so they turn with the view. It's redrawn from the 3D positions each frame (ViewportCanvas runs `frameRef` before each
+ * render), so it follows the camera and the object.
  *
  * The transform gizmo moves the origin, not the object: ViewportCanvas attaches it (translate only)
  * to a stand-in this hook keeps on the origin, and its drags are written back to the layer.
@@ -100,7 +112,7 @@ export function useViewportDepthGizmo(
     const canvas = renderer.domElement;
 
     const svg = svgElement("svg", "depth-gizmo");
-    const rings = svgElement("g", "depth-gizmo-rings");
+    const rings = svgElement("g", "");
     const axis = svgElement("line", "depth-gizmo-axis");
     const cones = svgElement("g", "");
     const stops = svgElement("g", "");
@@ -120,6 +132,8 @@ export function useViewportDepthGizmo(
     const transformControls = transformControlsRef.current;
 
     const raycaster = new THREE.Raycaster();
+    const circlePoints = new Float32Array(SPREAD_CIRCLE_POINTS * 3);
+    const circlePoint = new THREE.Vector3();
     let gesture: { handle: Handle; entityId: string; layerId: string; plane: THREE.Plane | null; historyPaused: boolean } | null = null;
     let pendingMove: PointerEvent | null = null;
     let moveFrame = 0;
@@ -155,6 +169,10 @@ export function useViewportDepthGizmo(
       const target = findTarget(objectManager);
       if (!target) return hide();
       const { layer, matrix } = target;
+      // The camera controls move the camera between frames, but its matrices are only brought up
+      // to date by the render that follows this. Without this the overlay is projected through
+      // last frame's camera and trails the scene by a frame while orbiting.
+      cameraRef.current.updateMatrixWorld();
       const world = (local: THREE.Vector3) => local.applyMatrix4(matrix);
       const originWorld = world(new THREE.Vector3(...layer.origin));
       const originAt = toScreen(originWorld);
@@ -192,20 +210,28 @@ export function useViewportDepthGizmo(
         cone.setAttribute("points", `${at.x - 7},${top - 10} ${at.x + 7},${top - 10} ${at.x},${top + 2}`);
       });
 
-      // A radial layer's rings, one per stop, facing the view.
-      const right = new THREE.Vector3().setFromMatrixColumn(cameraRef.current.matrixWorld, 0).normalize();
-      const ringRadii =
-        layer.gradientType === "radial"
-          ? layer.stops.map((stop) => {
-              const distance = world(pointOnAxis(layer, stopDistance(layer, stop.position))).distanceTo(originWorld);
-              const edge = toScreen(originWorld.clone().addScaledVector(right, distance));
-              return edge ? edge.distanceTo(originAt) : 0;
-            })
-          : [];
-      pool(rings, ringRadii.length, () => svgElement("circle", "depth-gizmo-ring")).forEach((ring, i) => {
-        ring.setAttribute("cx", `${originAt.x}`);
-        ring.setAttribute("cy", `${originAt.y}`);
-        ring.setAttribute("r", `${ringRadii[i]}`);
+      // A radial layer's spread: both circles at each stop's distance, their points projected one
+      // by one. A line breaks where a point is behind the camera.
+      const ringCount = layer.gradientType === "radial" ? layer.stops.length * SPREAD_CIRCLES.length : 0;
+      const rect = canvas.getBoundingClientRect();
+      const box = container.getBoundingClientRect();
+      pool(rings, ringCount, () => svgElement("path", "depth-gizmo-ring")).forEach((ring, n) => {
+        const stop = layer.stops[Math.floor(n / SPREAD_CIRCLES.length)];
+        spreadCircle(layer, SPREAD_CIRCLES[n % SPREAD_CIRCLES.length], stopDistance(layer, stop.position), circlePoints);
+        let path = "";
+        let drawing = false;
+        for (let i = 0; i <= SPREAD_CIRCLE_POINTS; i++) {
+          const at = (i % SPREAD_CIRCLE_POINTS) * 3;
+          circlePoint.set(circlePoints[at], circlePoints[at + 1], circlePoints[at + 2]).applyMatrix4(matrix).project(cameraRef.current);
+          const visible = circlePoint.z >= -1 && circlePoint.z <= 1;
+          if (visible) {
+            const x = rect.left - box.left + ((circlePoint.x + 1) / 2) * rect.width;
+            const y = rect.top - box.top + ((1 - circlePoint.y) / 2) * rect.height;
+            path += `${drawing ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`;
+          }
+          drawing = visible;
+        }
+        ring.setAttribute("d", path);
       });
 
       pool(stops, layer.stops.length, () => svgElement("circle", "depth-gizmo-handle depth-gizmo-stop")).forEach((dot, i) => {
@@ -321,9 +347,11 @@ export function useViewportDepthGizmo(
     };
 
     // Before useHotkeys: Enter and Escape end editing; the object's transform keys and Delete wait.
+    // Delete on a ramp stop in the drawer is the ramp's own (RampEditor removes the stop).
     const onKeyDown = (event: KeyboardEvent) => {
       if (!store().depthEdit || isTyping() || event.ctrlKey || event.metaKey || event.altKey) return;
       const key = event.key.toLowerCase();
+      if ((key === "delete" || key === "backspace") && document.activeElement?.closest(".ramp-bar")) return;
       if (key === "enter" || key === "escape") store().setDepthEdit(null);
       else if (!["w", "e", "r", "delete", "backspace"].includes(key)) return;
       event.preventDefault();
