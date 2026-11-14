@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { NumberField } from "./NumberField";
 
 export interface Vector3InputProps {
   label: string;
@@ -32,12 +33,10 @@ export function Vector3Input({ label, values, onChange, labelExtra }: Vector3Inp
             >
               {axis}
             </span>
-            <input
-              type="number"
-              step="0.1"
-              value={values[i] === null ? "" : Number((values[i] as number).toFixed(2))}
-              placeholder={values[i] === null ? "---" : ""}
-              onChange={(e) => onChange(i, parseFloat(e.target.value) || 0)}
+            <NumberField
+              label={`${label} ${axis}`}
+              value={values[i]}
+              onChange={(value) => onChange(i, value)}
               style={{
                 width: "100%",
                 background: "var(--bg-input)",

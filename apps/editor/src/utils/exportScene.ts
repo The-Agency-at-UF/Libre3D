@@ -1,5 +1,8 @@
 import * as THREE from "three";
 import { PathMesh } from "../paths/PathMesh";
+import { showBasePoses } from "../viewport/basePoses";
+import { hideEditorOnlyObjects } from "../viewport/editorOnly";
+import { aimLightsAtOrigin } from "../viewport/lightTargets";
 
 type GLTFExporterResult = ArrayBuffer | Blob | string | Record<string, unknown>;
 
@@ -11,19 +14,7 @@ type GLTFExporterOptions = {
   embedImages?: boolean;
 };
 
-type LiveSceneWindow = Window & {
-  __libre3dScene?: THREE.Scene | null;
-};
-
 const FILE_BASE_NAME = "libre3d-scene";
-
-const getSceneWindow = (): LiveSceneWindow | null => {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  return window as LiveSceneWindow;
-};
 
 export const createDownload = (content: BlobPart, fileName: string, mimeType: string): void => {
   const blob = new Blob([content], { type: mimeType });
@@ -39,92 +30,6 @@ export const createDownload = (content: BlobPart, fileName: string, mimeType: st
   anchor.click();
   anchor.remove();
   window.URL.revokeObjectURL(objectUrl);
-};
-
-// The live scene the exporter reads is the *editor's* scene, so it also holds
-// viewport furniture the user never asked to publish: the grid, directional-light
-// helpers, selection outlines, the multi-select proxy and the transform gizmo.
-// Left in, they end up as line/mesh nodes in every exported and published GLB.
-// The light helper is the worst of them — three sets matrixAutoUpdate = false on
-// it and drives it by matrix, so with `trs: true` the exporter reads its untouched
-// position/quaternion/scale and writes the helper to the origin with no rotation,
-// which is why it looked like the light moved between the editor and preview.
-//
-// Objects opt out by tagging themselves `userData.editorOnly` at creation. The
-// export already runs with `onlyVisible: true`, so hiding them for the duration of
-// the parse is enough to keep them out without touching the scene graph. The gallery
-// thumbnail (viewport/thumbnailCapture.ts) hides them the same way for its render, and
-// so does every Play frame (viewport/hooks/useViewportRenderer.ts).
-export const hideEditorOnlyObjects = (scene: THREE.Scene): (() => void) => {
-  const hidden: THREE.Object3D[] = [];
-
-  scene.traverse((object) => {
-    if (object.userData?.editorOnly && object.visible) {
-      object.visible = false;
-      hidden.push(object);
-    }
-  });
-
-  return () => {
-    for (const object of hidden) {
-      object.visible = true;
-    }
-  };
-};
-
-// The editor shows the selected object in the state being viewed by moving its Three object
-// (ObjectManager.applyPose), so clicks, the selection outline, and the gizmo all follow it. Exports
-// and the gallery thumbnail read that same scene and show every object in Base: each posed object's
-// Base transform (and a path's Base trim) is kept here and put back for them. A WeakMap rather than
-// userData, which the exporter writes into the file.
-interface BasePose {
-  position: THREE.Vector3;
-  quaternion: THREE.Quaternion;
-  scale: THREE.Vector3;
-  trim?: [number, number];
-}
-
-const basePoses = new WeakMap<THREE.Object3D, BasePose>();
-
-/** Call before posing an object that's still in Base. */
-export const rememberBasePose = (object: THREE.Object3D): void => {
-  if (basePoses.has(object)) return;
-  basePoses.set(object, {
-    position: object.position.clone(),
-    quaternion: object.quaternion.clone(),
-    scale: object.scale.clone(),
-    ...(object instanceof PathMesh ? { trim: object.getTrim() } : null),
-  });
-};
-
-/** Call when an object is put back in Base. */
-export const forgetBasePose = (object: THREE.Object3D): void => {
-  basePoses.delete(object);
-};
-
-/** Puts every posed object in Base; returns what puts them back. */
-export const showBasePoses = (scene: THREE.Scene): (() => void) => {
-  const restores: (() => void)[] = [];
-
-  scene.traverse((object) => {
-    const base = basePoses.get(object);
-    if (!base) return;
-
-    const posed = { position: object.position.clone(), quaternion: object.quaternion.clone(), scale: object.scale.clone() };
-    object.position.copy(base.position);
-    object.quaternion.copy(base.quaternion);
-    object.scale.copy(base.scale);
-    const path = object instanceof PathMesh && base.trim ? { mesh: object, posedTrim: object.getTrim() } : null;
-    path?.mesh.setTrim(...base.trim!);
-    restores.push(() => {
-      object.position.copy(posed.position);
-      object.quaternion.copy(posed.quaternion);
-      object.scale.copy(posed.scale);
-      path?.mesh.setTrim(...path.posedTrim);
-    });
-  });
-
-  return () => restores.forEach((restore) => restore());
 };
 
 // A path is trimmed by its tube's draw range (paths/PathMesh.ts), which GLTFExporter ignores (three
@@ -169,7 +74,7 @@ const trimPathsForExport = (scene: THREE.Scene): (() => void) => {
 //
 // The plain values go by name. The references go by type: a file's extras are JSON, so they can't
 // hold a Three object, and a node of the user's own with an extra called `target` keeps it.
-const EDITOR_USER_DATA_KEYS = new Set(["editorOnly", "entityId", "entityType", "parentEntityId", "locked", "assetId", "loadError"]);
+const EDITOR_USER_DATA_KEYS = new Set(["editorOnly", "entityId", "entityType", "parentEntityId", "locked", "assetId", "loadError", "displaceDetail"]);
 
 const isEditorUserData = (key: string, value: unknown): boolean =>
   EDITOR_USER_DATA_KEYS.has(key) || value instanceof THREE.Object3D;
@@ -197,6 +102,62 @@ const hideEditorUserData = (scene: THREE.Scene): (() => void) => {
   };
 };
 
+// glTF has PBR (standard) and unlit materials only: GLTFExporter warns and guesses for any other.
+// New 3D objects are Phong (task D2), so Phong, Lambert and Toon go out as a standard material with
+// the same colour, maps, emissive and surface for the length of the export. Phong's shininess sets
+// the roughness (the usual Blinn-Phong to GGX approximation); Lambert and Toon are fully rough.
+const isBuiltInFlag = (material: THREE.Material, flag: string): boolean => (material as unknown as Record<string, unknown>)[flag] === true;
+
+const standardCopyOf = (material: THREE.Material): THREE.MeshStandardMaterial => {
+  const source = material as THREE.MeshPhongMaterial;
+  const shininess = isBuiltInFlag(material, "isMeshPhongMaterial") ? source.shininess : 0;
+  return new THREE.MeshStandardMaterial({
+    name: source.name,
+    color: source.color,
+    map: source.map,
+    opacity: source.opacity,
+    transparent: source.transparent,
+    alphaTest: source.alphaTest,
+    alphaMap: source.alphaMap,
+    side: source.side,
+    vertexColors: source.vertexColors,
+    emissive: source.emissive,
+    emissiveIntensity: source.emissiveIntensity,
+    emissiveMap: source.emissiveMap,
+    normalMap: source.normalMap,
+    normalScale: source.normalScale,
+    aoMap: source.aoMap,
+    aoMapIntensity: source.aoMapIntensity,
+    roughness: shininess > 0 ? Math.sqrt(2 / (shininess + 2)) : 1,
+    metalness: 0,
+  });
+};
+
+const standardMaterialsForExport = (scene: THREE.Scene): (() => void) => {
+  const copies = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+  const restores: (() => void)[] = [];
+
+  scene.traverse((object) => {
+    if (!(object instanceof THREE.Mesh) || Array.isArray(object.material)) return;
+    const material = object.material as THREE.Material;
+    if (!["isMeshPhongMaterial", "isMeshLambertMaterial", "isMeshToonMaterial"].some((flag) => isBuiltInFlag(material, flag))) return;
+    let copy = copies.get(material);
+    if (!copy) {
+      copy = standardCopyOf(material);
+      copies.set(material, copy);
+    }
+    object.material = copy;
+    restores.push(() => {
+      object.material = material;
+    });
+  });
+
+  return () => {
+    restores.forEach((restore) => restore());
+    copies.forEach((copy) => copy.dispose());
+  };
+};
+
 const hasExportableMeshes = (scene: THREE.Scene): boolean => {
   let meshCount = 0;
 
@@ -208,8 +169,6 @@ const hasExportableMeshes = (scene: THREE.Scene): boolean => {
 
   return meshCount > 0;
 };
-
-export const getLiveScene = (): THREE.Scene | null => getSceneWindow()?.__libre3dScene ?? null;
 
 const parseScene = async (
   exporter: {
@@ -241,6 +200,11 @@ export const createSceneExportBlob = async (
   const restorePoses = showBasePoses(scene);
   const restoreTrimmedPaths = trimPathsForExport(scene);
   const restoreEditorUserData = hideEditorUserData(scene);
+  // A glTF material can't hold layers drawn per pixel (Depth, Gradient, Noise, Fresnel): those go
+  // out as the material's own colour. (.glb export goes with task G.)
+  const restoreMaterials = standardMaterialsForExport(scene);
+  // glTF reads a light's direction from its rotation; the editor's lights shine at the origin.
+  const restoreLights = aimLightsAtOrigin(scene);
 
   try {
     const result = await parseScene(
@@ -285,6 +249,8 @@ export const createSceneExportBlob = async (
     restoreTrimmedPaths();
     restorePoses();
     restoreEditorUserData();
+    restoreMaterials();
+    restoreLights();
   }
 };
 

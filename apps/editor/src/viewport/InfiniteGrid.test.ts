@@ -8,7 +8,7 @@ import {
   computeGridExtent,
 } from "./InfiniteGrid";
 
-// The shader itself needs WebGL and is checked by eye in the dev server; these
+// The shader itself needs a GPU and is checked by eye in the dev server; these
 // cover the CPU side — how the quad is sized, faded and placed each frame, and
 // the material flags the look and export rely on.
 
@@ -33,7 +33,7 @@ const placeCamera = <T extends THREE.Camera>(camera: T, x: number, y: number, z:
 
 const render = (grid: InfiniteGrid, camera: THREE.Camera) =>
   grid.onBeforeRender(
-    null as unknown as THREE.WebGLRenderer,
+    null,
     null as unknown as THREE.Scene,
     camera,
   );
@@ -141,13 +141,12 @@ describe("InfiniteGrid", () => {
     expect(worldPosition.toArray()).toEqual([5, 0, 9]);
   });
 
-  it("feeds the camera position and fade distance to the shader", () => {
+  // The camera's position is three's own shader input (`cameraPosition`), so only the fade is fed.
+  it("feeds the fade distance to the shader", () => {
     const grid = new InfiniteGrid();
     render(grid, placeCamera(makePerspective(), 1, 4, 2));
 
-    const { uCameraPosition, uFadeDistance } = grid.material.uniforms;
-    expect((uCameraPosition.value as THREE.Vector3).toArray()).toEqual([1, 4, 2]);
-    expect(uFadeDistance.value).toBe(4 * FADE_DISTANCE_PER_HEIGHT);
+    expect(grid.fadeDistance.value).toBe(4 * FADE_DISTANCE_PER_HEIGHT);
   });
 
   it("uses the camera's world position, not its local one", () => {
@@ -162,17 +161,17 @@ describe("InfiniteGrid", () => {
     render(grid, camera);
 
     expect(grid.position.toArray()).toEqual([101, 0, 3]);
-    expect((grid.material.uniforms.uCameraPosition.value as THREE.Vector3).y).toBe(12);
+    expect(grid.fadeDistance.value).toBe(12 * FADE_DISTANCE_PER_HEIGHT);
   });
 
   it("re-sizes when the active camera switches between perspective and ortho", () => {
     const grid = new InfiniteGrid();
     render(grid, placeCamera(makePerspective(1000), 0, 2, 0));
-    expect(grid.material.uniforms.uFadeDistance.value).toBe(2 * FADE_DISTANCE_PER_HEIGHT);
+    expect(grid.fadeDistance.value).toBe(2 * FADE_DISTANCE_PER_HEIGHT);
 
     render(grid, placeCamera(makeOrtho(0.01, 1000, 2), 0, 2, 0));
     expect(grid.scale.x).toBe(4000);
-    expect(grid.material.uniforms.uFadeDistance.value).toBe(4000 * FADE_EDGE_RATIO);
+    expect(grid.fadeDistance.value).toBe(4000 * FADE_EDGE_RATIO);
   });
 
   it("disposes its geometry and material", () => {

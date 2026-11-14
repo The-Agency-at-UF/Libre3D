@@ -39,7 +39,7 @@ const loadModules = async () => {
   ]);
   // The editor's own objects, built from the store as the viewport builds them.
   const createObjectManager = (scene: THREE.Scene, meshMap: Map<string, THREE.Object3D>) =>
-    new ObjectManager(scene, meshMap, editorSceneSource);
+    new ObjectManager(scene, meshMap, editorSceneSource, { getRenderer: () => null });
   return { useEditorStore, createObjectManager, createSceneExportBlob };
 };
 
@@ -83,7 +83,7 @@ describe("createSceneExportBlob", () => {
     const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
     const cube = useEditorStore.getState().entities.find((entity) => entity.type === "cube")!;
     const lighting = cube.materialLayers!.find((layer) => layer.type === "lighting")!;
-    useEditorStore.getState().updateMaterialLayer(cube.id, lighting.id, { clearcoat: 1, clearcoatRoughness: 0.05 });
+    useEditorStore.getState().updateMaterialLayer(cube.id, lighting.id, { model: "physical", clearcoat: 1, clearcoatRoughness: 0.05 });
     const scene = new THREE.Scene();
     createObjectManager(scene, new Map()).syncMeshes(useEditorStore.getState().entities, null, false);
 
@@ -91,6 +91,97 @@ describe("createSceneExportBlob", () => {
 
     expect(extensionsUsed).toContain("KHR_materials_clearcoat");
     expect(materials[0].extensions.KHR_materials_clearcoat).toEqual({ clearcoatFactor: 1, clearcoatRoughnessFactor: 0.05 });
+  });
+
+  it("writes an object that uses a material asset with the asset's material", async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
+    const { selectDrawnEntities } = await import("../store/useEditorStore");
+    const store = () => useEditorStore.getState();
+    const cube = store().entities.find((entity) => entity.type === "cube")!;
+    const assetId = store().createMaterialAsset();
+    const layers = store().materials[assetId].layers;
+    store().updateMaterialLayer(assetId, layers.find((layer) => layer.type === "color")!.id, { color: "#ff0000" });
+    store().updateMaterialLayer(assetId, layers.find((layer) => layer.type === "lighting")!.id, { model: "physical", roughness: 0.3, metalness: 1 });
+    store().applyMaterialAsset(assetId, [cube.id]);
+    const scene = new THREE.Scene();
+    createObjectManager(scene, new Map()).syncMeshes(selectDrawnEntities(store()), null, false);
+
+    const { materials } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(materials).toEqual([expect.objectContaining({ pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1], metallicFactor: 1, roughnessFactor: 0.3 } })]);
+  });
+
+  it("exports an object shown in a coloured, see-through state in Base, and puts the state's look back", async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
+    const store = () => useEditorStore.getState();
+    const cube = store().entities.find((entity) => entity.type === "cube")!;
+    store().updateMaterialLayer(cube.id, cube.materialLayers!.find((layer) => layer.type === "color")!.id, { color: "#ff0000" });
+    store().updateMaterialLayer(cube.id, cube.materialLayers!.find((layer) => layer.type === "lighting")!.id, { model: "physical", roughness: 0.3, metalness: 1 });
+    const scene = new THREE.Scene();
+    const meshMap = new Map<string, THREE.Object3D>();
+    const objectManager = createObjectManager(scene, meshMap);
+    objectManager.syncMeshes(store().entities, null, false);
+    objectManager.applyPose(cube.id, { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], color: "#0000ff", opacity: 0.5 });
+    const material = (meshMap.get(cube.id) as THREE.Mesh).material as THREE.MeshStandardMaterial;
+    expect(material.color.getHexString()).toBe("0000ff");
+
+    const { materials } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(materials).toEqual([expect.objectContaining({ pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1], metallicFactor: 1, roughnessFactor: 0.3 } })]);
+    expect(material.color.getHexString()).toBe("0000ff");
+    expect(material.opacity).toBe(0.5);
+  });
+
+  // Objects draw with node materials (three/webgpu); GLTFExporter reads them by the built-in flags they carry.
+
+  it("writes the node materials' colour, roughness, metalness, emissive and unlit as glTF materials", async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
+    const store = useEditorStore.getState();
+    const layer = (id: string, type: string) => useEditorStore.getState().entities.find((e) => e.id === id)!.materialLayers!.find((l) => l.type === type)!;
+    const metal = store.addEntity("sphere");
+    store.updateMaterialLayer(metal, layer(metal, "color").id, { color: "#ff0000" });
+    store.updateMaterialLayer(metal, layer(metal, "lighting").id, { model: "physical", roughness: 0.2, metalness: 0.9, emissive: "#00ff00", emissiveIntensity: 1 });
+    const unlit = store.addEntity("cube");
+    store.updateMaterialLayer(unlit, layer(unlit, "lighting").id, { model: "none" });
+    const scene = new THREE.Scene();
+    createObjectManager(scene, new Map()).syncMeshes(useEditorStore.getState().entities, null, false);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { materials, extensionsUsed } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(materials).toContainEqual(
+      expect.objectContaining({
+        pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1], metallicFactor: 0.9, roughnessFactor: 0.2 },
+        emissiveFactor: [0, 1, 0],
+      }),
+    );
+    expect(extensionsUsed).toContain("KHR_materials_unlit");
+    expect(warn.mock.calls.flat().join(" ")).not.toMatch(/MeshStandardMaterial or MeshBasicMaterial/);
+    warn.mockRestore();
+  });
+
+  it("writes Phong, Lambert and Toon as standard materials, without a warning, and puts them back", async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await buildStarterScene();
+    const store = useEditorStore.getState();
+    const layer = (id: string, type: string) => useEditorStore.getState().entities.find((e) => e.id === id)!.materialLayers!.find((l) => l.type === type)!;
+    const shiny = store.addEntity("sphere"); // Phong, as every new 3D object
+    store.updateMaterialLayer(shiny, layer(shiny, "color").id, { color: "#ff0000" });
+    store.updateMaterialLayer(shiny, layer(shiny, "lighting").id, { shininess: 48 }); // roughness √(2 / (48 + 2)) = 0.2
+    const matte = store.addEntity("torus");
+    store.updateMaterialLayer(matte, layer(matte, "lighting").id, { model: "toon" });
+    const scene = new THREE.Scene();
+    const meshMap = new Map<string, THREE.Object3D>();
+    createObjectManager(scene, meshMap).syncMeshes(useEditorStore.getState().entities, null, false);
+    const before = (meshMap.get(shiny) as THREE.Mesh).material;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const { materials } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(materials).toContainEqual(expect.objectContaining({ pbrMetallicRoughness: { baseColorFactor: [1, 0, 0, 1], metallicFactor: 0, roughnessFactor: 0.2 } }));
+    expect(materials).toContainEqual(expect.objectContaining({ pbrMetallicRoughness: expect.objectContaining({ metallicFactor: 0 }) }));
+    expect(warn.mock.calls.flat().join(" ")).not.toMatch(/MeshStandardMaterial or MeshBasicMaterial/);
+    expect((meshMap.get(shiny) as THREE.Mesh).material).toBe(before);
+    warn.mockRestore();
   });
 
   it("keeps the extras an imported glTF node brought with it", async () => {
@@ -224,5 +315,26 @@ describe("createSceneExportBlob with paths", () => {
 
     expect(drawnIndexCounts(gltf)).toEqual([]);
     expect(path.visible).toBe(true);
+  });
+});
+
+describe("directional lights in an export", () => {
+  it("writes a light turned toward the world origin, whatever its rotation, and puts the rotation back", async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await loadModules();
+    const scene = new THREE.Scene();
+    const meshMap = new Map<string, THREE.Object3D>();
+    const lightEntity = useEditorStore.getState().entities.find((entity) => entity.type === "directionalLight")!;
+    useEditorStore.getState().updateEntityTransform(lightEntity.id, { position: [0, 5, 0], rotation: [0.4, 1.2, -0.3] });
+    createObjectManager(scene, meshMap).syncMeshes(useEditorStore.getState().entities, null, false);
+    const light = meshMap.get(lightEntity.id)!;
+    const turned = light.quaternion.clone();
+
+    const { nodes } = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+    const node = nodes.find((each: { extensions?: Record<string, unknown> }) => each.extensions?.KHR_lights_punctual);
+
+    // glTF lights shine down their node's -Z: straight down from (0, 5, 0) to the origin.
+    const shines = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(...node.rotation));
+    expect(shines.y).toBeCloseTo(-1, 5);
+    expect(light.quaternion.equals(turned)).toBe(true);
   });
 });

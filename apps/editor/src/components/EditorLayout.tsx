@@ -1,8 +1,15 @@
+/**
+ * PURPOSE: The three-pane editor workspace layout shell. Coordinates the left hierarchy sidebar,
+ * center 3D viewport canvas with floating toolbars, and right inspector sidebar.
+ * Manages global keyboard shortcuts, drag-and-drop file import overlays, and export/share modals.
+ */
+
 import { useEffect, useState, type ReactNode } from "react";
 import { showAlert } from "./ui/Dialog";
 
 // tsx components for editor scene and UI
-import { HierarchyPanel } from "./HierarchyPanel";
+import { AssetsBrowser } from "./AssetsBrowser";
+import { HierarchyPanel } from "./hierarchy/HierarchyPanel";
 import { ViewportCanvas } from "./ViewportCanvas";
 import { ViewportOverlays } from "./ViewportOverlays";
 import { RightSidebar } from "./RightSidebar";
@@ -17,7 +24,8 @@ import { useRightSidebarState } from "../hooks/useRightSidebarState";
 import { useHotkeys } from "../hooks/useHotkeys";
 
 //import tsx utils for editor export and publish
-import { exportLiveScene, getLiveScene } from "../utils/exportScene";
+import { exportLiveScene } from "../utils/exportScene";
+import { getLiveScene } from "../viewport/liveViewport";
 import { publishScene, PublishError } from "../utils/publishScene";
 import { downloadSceneFile } from "../utils/sceneFileTransfers";
 import { ApiAuthError } from "../utils/apiFetch";
@@ -86,9 +94,10 @@ export function EditorLayout({
   const [publishId, setPublishId] = useState<string | null>(publishing?.initialPublishId ?? null);
   const setEditorState = useEditorStore((state) => state.setEditorState);
   const duplicateEntity = useEditorStore((state) => state.duplicateEntity);
-  const sceneSettings = useEditorStore((state) => state.sceneSettings);
+  // Only this flag, not all of `sceneSettings`: a background colour drag would otherwise re-render
+  // the whole editor shell on every step.
+  const showAxisGuides = useEditorStore((state) => state.sceneSettings.showAxisGuides === true);
   const updateSceneSettings = useEditorStore((state) => state.updateSceneSettings);
-  const showAxisGuides = sceneSettings.showAxisGuides === true;
   const handleToggleAxisGuides = () => updateSceneSettings({ showAxisGuides: !showAxisGuides });
 
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
@@ -280,7 +289,7 @@ export function EditorLayout({
               <input
                 className="sidebar-search-input"
                 type="text"
-                placeholder="Search directory..."
+                placeholder="Search assets..."
                 value={sidebarUI.searchQuery}
                 onChange={(e) => sidebarUI.setSearchQuery(e.target.value)}
               />
@@ -291,9 +300,7 @@ export function EditorLayout({
             {sidebarUI.activeSidebarTab === "objects" ? (
               <HierarchyPanel searchQuery={sidebarUI.searchQuery} />
             ) : (
-              <div className="editor-meta" style={{ padding: "0.5rem" }}>
-                Asset browser is empty.
-              </div>
+              <AssetsBrowser searchQuery={sidebarUI.searchQuery} assetsView={sidebarUI.assetsView} onAssetsView={sidebarUI.setAssetsView} />
             )}
           </div>
 
@@ -331,6 +338,8 @@ export function EditorLayout({
           setIsModalOpen={sidebarUI.setIsModalOpen}
           setActiveTab={sidebarUI.setActiveTab}
           canShare={publishing !== null}
+          assetsView={sidebarUI.assetsView}
+          setAssetsView={sidebarUI.setAssetsView}
         />
       </div>
 

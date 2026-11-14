@@ -20,10 +20,11 @@ import { clearAllSceneCaches } from "./sceneCache";
 /**
  * `userId` is the ID token's `sub`, the same ID the server takes from the verified access token.
  * Here it's unverified, so it only keys this browser's per-user data (sceneCache.ts); the server
- * never trusts anything the browser says about who it is.
+ * never trusts anything the browser says about who it is. `groups` are the user's Cognito groups,
+ * unverified too: they only decide which controls are shown (materialLibrary.ts).
  */
 export type AuthSnapshot =
-  | { status: "signedIn"; email: string | null; userId: string | null }
+  | { status: "signedIn"; email: string | null; userId: string | null; groups: string[] }
   | { status: "signedOut" };
 
 interface StoredTokens {
@@ -118,11 +119,13 @@ const buildSnapshot = (): AuthSnapshot => {
   const claims = decodeJwtPayload(tokens.idToken);
   const email = claims?.email;
   const userId = claims?.sub;
+  const groups = claims?.["cognito:groups"];
 
   return {
     status: "signedIn",
     email: typeof email === "string" ? email : null,
     userId: typeof userId === "string" ? userId : null,
+    groups: Array.isArray(groups) ? groups.filter((group): group is string => typeof group === "string") : [],
   };
 };
 

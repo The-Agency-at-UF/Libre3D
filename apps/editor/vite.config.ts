@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 
+import { handleMaterialLibraryRequest } from "./src/utils/awsLibraryHandler";
 import { handlePublishRequest, handlePublishedSceneRequest } from "./src/utils/awsPublishHandler";
 import { handleScenesRequest, type SceneSubresource } from "./src/utils/awsSceneHandler";
 
@@ -20,6 +21,8 @@ const SCENES_ROUTE_PATTERN = /^\/api\/scenes(?:\/([^/?]*)(?:\/(lock|assets\/uplo
 // `/api/scene/:publishId` (the public viewer) and `/api/publish`.
 const PUBLISHED_SCENE_ROUTE_PATTERN = /^\/api\/scene\/([^/?]*)\/?(?:\?.*)?$/;
 const PUBLISH_ROUTE_PATTERN = /^\/api\/publish\/?(?:\?.*)?$/;
+// `/api/library/materials` (the Libre3D material library).
+const LIBRARY_MATERIALS_ROUTE_PATTERN = /^\/api\/library\/materials\/?(?:\?.*)?$/;
 
 const readSubresource = (value: string | undefined): SceneSubresource | null =>
   value === "lock" || value === "assets/uploads" || value === "assets/downloads" || value === "thumbnail" ? value : null;
@@ -84,6 +87,18 @@ const awsPublishRoutePlugin = (env: Record<string, string>): Plugin => ({
         return;
       }
 
+      // The dev copy of api/library/materials.ts, around the same handler (awsLibraryHandler.ts).
+      if (req.url?.match(LIBRARY_MATERIALS_ROUTE_PATTERN)) {
+        const method = req.method ?? "GET";
+        const result = await handleMaterialLibraryRequest({ method, headers: req.headers, body: method === "GET" ? "" : await readRequestBody(req) }, env);
+
+        res.statusCode = result.status;
+        Object.entries(result.headers ?? {}).forEach(([name, value]) => res.setHeader(name, value));
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(result.body));
+        return;
+      }
+
       next();
     });
   },
@@ -98,44 +113,40 @@ export default defineConfig(({ mode }) => {
     // VITE_-prefixed values reach the browser bundle; the AWS keys beside them stay server-side.
     envDir: repoRootDir,
     resolve: {
-      alias: {
-        three: threeModulePath,
-      },
+      // The first two are three's own subpath exports (the WebGPU renderer and its shader
+      // language): pointing `three` at a folder skips the package's export map, so they're spelled out.
+      alias: [
+        { find: /^three\/webgpu$/, replacement: path.join(threeModulePath, "build/three.webgpu.js") },
+        { find: /^three\/tsl$/, replacement: path.join(threeModulePath, "build/three.tsl.js") },
+        { find: "three", replacement: threeModulePath },
+      ],
       dedupe: ["three"],
     },
     optimizeDeps: {
-      // "three-viewport-gizmo" (the top-right navigation gizmo) also imports
-      // "three" internally. If Vite's dep optimizer pre-bundled it while
-      // "three" stays excluded (just above), the optimizer's copy of
-      // "three-viewport-gizmo" could end up pointing at a second, separately
-      // -evaluated module instance of "three" instead of the single aliased
-      // copy everything else uses — which would be a real correctness risk
-      // for a library that receives this app's own THREE.Camera/
-      // THREE.WebGLRenderer instances and does `instanceof` checks against
-      // them internally. Excluding it here keeps it un-bundled, so its
-      // "three" import resolves through the same alias as everything else.
-      //
-      // (Verified this app already shows three.js's own "Multiple instances
-      // of Three.js being imported" console warning even before this
-      // feature, unrelated to either of the above — it comes from
-      // <model-viewer>'s CDN bundle, which vendors its own three.js. Not
-      // something this file can fix; noted here so it isn't mistaken for a
-      // regression introduced by the gizmo.)
+      // Exclude "three" and "three-viewport-gizmo" from pre-bundling so the gizmo resolves
+      // through the same aliased Three.js instance without duplicate module evaluations.
       exclude: ["three", "three-viewport-gizmo"],
     },
     server: {
       port: 5173,
     },
     build: {
-      // Three.js core alone is ~550 kB minified and can't usefully shrink. The limit sits just
-      // above it so the warning still catches any other chunk (especially the entry) growing.
-      chunkSizeWarningLimit: 600,
+      // Three.js core with its WebGPU renderer is ~815 kB minified and can't usefully shrink. The
+      // limit sits just above it so the warning still catches any other chunk (especially the
+      // entry) growing.
+      chunkSizeWarningLimit: 850,
       rollupOptions: {
         output: {
           // Three.js core in its own chunk: it changes far less often than the editor, so browsers
           // keep it cached across deploys. Only the lazily loaded editor imports it.
           // Matched by package path: pnpm resolves the alias above to `.pnpm/three@…/node_modules/three`.
-          manualChunks: (id) => (id.replace(/\\/g, "/").includes("/node_modules/three/build/") ? "three" : undefined),
+          // The WebGL renderer's own build is apart: only the editor's navigation gizmo still draws
+          // with it, so the share page never downloads it.
+          manualChunks: (id) => {
+            const file = id.replace(/\\/g, "/");
+            if (!file.includes("/node_modules/three/build/")) return undefined;
+            return file.endsWith("/three.module.js") ? "three-webgl" : "three";
+          },
         },
       },
     },

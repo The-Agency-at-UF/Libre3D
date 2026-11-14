@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useEditorStore } from "../store/useEditorStore";
-import { isEffectivelyLocked } from "../store/entityIndex";
+import { isEffectivelyLocked } from "../scene/entityIndex";
 import { editPath } from "../viewport/hooks/useViewportPenTool";
 
 interface UseHotkeysProps {

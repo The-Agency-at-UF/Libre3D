@@ -62,7 +62,7 @@ const AXIS_COLORS = {
  *  chrome (compare `.axis-orb-gizmo`'s 48px ring at a smaller visual weight,
  *  and the floating toolbar's 32px buttons) rather than the library's own
  *  general-purpose default. */
-export const GIZMO_SIZE = 88;
+const GIZMO_SIZE = 88;
 
 /** A parsed CSS color: a solid `#rrggbb` (for THREE.Color / ColorRepresentation,
  *  which doesn't accept an alpha channel) plus the alpha split out separately,

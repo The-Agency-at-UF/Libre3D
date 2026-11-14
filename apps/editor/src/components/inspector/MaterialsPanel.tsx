@@ -1,774 +1,161 @@
-import { useState, useEffect, useRef, type ReactNode } from "react";
-import * as THREE from "three";
-import {
-  useEditorStore,
-  type Entity,
-  type ColorLayer,
-  type LightingLayer,
-  type LightingModel,
-  type MaterialLayer as MaterialLayerData,
-  type ImageLayer,
-  type ImageSlot,
-  type DepthLayer,
-} from "../../store/useEditorStore";
-import { loadTextureForScene } from "../../utils/assetTransfers";
-import { depthReach } from "../../utils/depthColors";
-import { getLiveScene } from "../../utils/exportScene";
+/**
+ * PURPOSE: Inspector panel for the selected objects' material: the material asset they use, or
+ * their own layer stack (LayerStack.tsx, top of the stack first) and opacity.
+ *
+ * Right after the title, the four-circles button opens the Material Assets drawer
+ * (MaterialAssetsDrawer.tsx: the scene's reusable materials, the Libre3D library, and the Material
+ * Builder; the right sidebar holds it, so it stays open while nothing is selected).
+ *
+ * Objects with a material of their own: at the right of the title, their opacity and a "+" that
+ * adds a Color layer; under it, their layer rows.
+ *
+ * Objects that use a material asset: a row naming the asset (a click opens it in the Material
+ * Builder, where its layers and its opacity are edited, for every object using it), and at the
+ * right of the title a detach button, which gives the objects the asset's layers and opacity as
+ * their own.
+ *
+ * A state can set the opacity and the colour (the top Color layer's: layers/ColorSettings.tsx) of
+ * an object with a material of its own. While such an object is shown in a state, its opacity here
+ * is that state's, with the marker and "Reset to Base" the Transform panel's fields have; every
+ * other layer setting belongs to the object in every state. A material asset is the same in every
+ * state, its opacity included: detach an object from it to animate its colour or opacity.
+ *
+ * Several selected objects with the same layers in the same order are edited row by row; with
+ * different stacks, their Lighting and top Color layers are.
+ */
+
+import { getViewedState } from "../../animation/objectStates";
+import { useEditorStore, type Entity, type MaterialAsset } from "../../store/useEditorStore";
+import { NumberField } from "../ui/NumberField";
 import { PanelSection } from "../ui/PanelSection";
-import { Slider } from "../ui/Slider";
-import { Select } from "../ui/Select";
-import { Switch } from "../ui/Switch";
-import { Vector3Input } from "../ui/Vector3Input";
-import { DepthRamp } from "./DepthRamp";
-import { editDepth } from "../../viewport/hooks/useViewportDepthGizmo";
-
-// ─── Layer chrome ────────────────────────────────────────────────────────────
-// Each material category (Color, Lighting, texture maps) renders as a compact
-// "layer": a one-line header (chevron · icon · name · trailing action) with its
-// property rows indented directly beneath it. The header toggle and the trailing
-// action are sibling buttons rather than nested, so clicking the action can never
-// bubble into a collapse — no stopPropagation needed.
-
-function MaterialLayer({
-  icon,
-  name,
-  action,
-  defaultOpen = true,
-  children,
-}: {
-  icon: ReactNode;
-  name: string;
-  action?: ReactNode;
-  defaultOpen?: boolean;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-
-  return (
-    <div className="mat-layer" data-open={open}>
-      <div className="mat-layer-header">
-        <button
-          type="button"
-          className="mat-layer-toggle"
-          onClick={() => setOpen((o) => !o)}
-          aria-expanded={open}
-        >
-          <i className="ti ti-chevron-right chevron"></i>
-          <span className="mat-layer-icon">{icon}</span>
-          <span className="mat-layer-name">{name}</span>
-        </button>
-        {action && <div className="mat-layer-action">{action}</div>}
-      </div>
-      {open && <div className="mat-layer-body">{children}</div>}
-    </div>
-  );
-}
-
-// Trash affordance on a layer header. Color and Lighting are mandatory in the
-// store (removeMaterialLayer refuses them), so the button stays disabled with an
-// explanatory tooltip — same behaviour as before, just restyled.
-function LayerDeleteButton({ title }: { title: string }) {
-  return (
-    <button type="button" className="mat-icon-btn" disabled title={title} aria-label={title}>
-      <i className="ti ti-trash"></i>
-    </button>
-  );
-}
-
-// Compound swatch + hex control that sits in the control column of a standard
-// label/control row (the shared Slider/Select/Switch render the same `.prop` row,
-// so everything lines up on the shared label width).
-function ColorSwatchField({
-  label,
-  value,
-  mixed,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  mixed: boolean;
-  onChange: (color: string) => void;
-}) {
-  const [localValue, setLocalValue] = useState(value);
-  // What the picker shows: the colour it was last moved to, which the store catches up with a frame later.
-  const [pickedColor, setPickedColor] = useState(value);
-
-  useEffect(() => {
-    setLocalValue(value);
-  }, [value]);
-
-  // The native picker fires on every move of a drag. The store gets one write per frame, and the whole
-  // drag is one undo step: its first colour records the step, and history resumes when the picker
-  // closes (its `change` event).
-  const picker = useRef<HTMLInputElement>(null);
-  const latestOnChange = useRef(onChange);
-  latestOnChange.current = onChange;
-  const shown = useRef(value);
-  const pending = useRef<string | null>(null);
-  const written = useRef<string | null>(null); // the colour this picker last wrote, while it's open
-  const frame = useRef<number | null>(null);
-  const historyPaused = useRef(false);
-
-  const flush = () => {
-    frame.current = null;
-    const color = pending.current;
-    if (color === null) return;
-    pending.current = null;
-    written.current = color;
-    latestOnChange.current(color);
-  };
-
-  const endPicking = () => {
-    if (frame.current !== null) window.cancelAnimationFrame(frame.current);
-    flush();
-    written.current = null;
-    if (historyPaused.current) {
-      historyPaused.current = false;
-      useEditorStore.temporal.getState().resume();
-    }
-  };
-
-  useEffect(() => {
-    const input = picker.current;
-    input?.addEventListener("change", endPicking);
-    return () => {
-      input?.removeEventListener("change", endPicking);
-      endPicking();
-    };
-    // Set up once: endPicking reads only refs and the store.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    // The store catching up with the colours being dragged (a frame behind) leaves the picker alone.
-    if (value === written.current) return;
-    shown.current = value;
-    setPickedColor(value);
-  }, [value]);
-
-  const pickColor = (color: string) => {
-    // The picker's change event fires again with the colour already shown: nothing to do.
-    if (color === shown.current) return;
-    shown.current = color;
-    setLocalValue(color);
-    setPickedColor(color);
-    if (!historyPaused.current) {
-      latestOnChange.current(color);
-      useEditorStore.temporal.getState().pause();
-      historyPaused.current = true;
-      return;
-    }
-    pending.current = color;
-    if (frame.current === null) frame.current = window.requestAnimationFrame(flush);
-  };
-
-  const hexRegex = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-
-  const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let val = e.target.value.replace(/^#+/, "");
-    val = val.length > 0 ? "#" + val : "#";
-    setLocalValue(val);
-    if (hexRegex.test(val)) onChange(val);
-  };
-
-  const handleBlur = () => {
-    if (!hexRegex.test(localValue)) setLocalValue(value);
-  };
-
-  return (
-    <div className="prop">
-      <span className="prop-label">{label}</span>
-      <div className="inspector-color-field">
-        <div
-          className="inspector-color-swatch"
-          style={{ background: mixed ? "repeating-linear-gradient(45deg, #444 0 4px, #666 4px 8px)" : value }}
-        >
-          <input
-            ref={picker}
-            type="color"
-            value={mixed ? "#ffffff" : pickedColor}
-            onChange={(e) => pickColor(e.target.value)}
-            aria-label={`${label} picker`}
-          />
-        </div>
-        <input
-          type="text"
-          className="hex-input"
-          value={mixed ? "Mixed" : localValue}
-          onChange={handleTextChange}
-          onBlur={handleBlur}
-          onFocus={(e) => e.currentTarget.select()}
-          aria-label={`${label} hex value`}
-        />
-      </div>
-    </div>
-  );
-}
-
-// ─── Image layers ────────────────────────────────────────────────────────────
-
-// Labelled "Base Color" (not "Color") so an image row reads distinctly from the
-// Color layer above it in the stack.
-const IMAGE_SLOT_LABELS: Record<ImageSlot, string> = {
-  color: "Base Color",
-  normal: "Normal",
-  metallicRoughness: "Metallic / Roughness",
-  emissive: "Emissive",
-  ao: "Ambient Occlusion",
-};
-
-const getImageLayers = (entity: Entity): ImageLayer[] =>
-  entity.materialLayers?.filter((layer): layer is ImageLayer => layer.type === "image") ?? [];
-
-// One layer per imported texture map. The thumbnail is loaded lazily from the OPFS
-// texture store (the pixels never live in the store), so an object URL is created
-// on mount and revoked on unmount. MVP surfacing of what import derived — enabled
-// toggle + opacity slider, no from-scratch authoring or projection modes yet.
-function ImageLayerRow({
-  layer,
-  onToggle,
-  onOpacity,
-}: {
-  layer: ImageLayer;
-  onToggle: (enabled: boolean) => void;
-  onOpacity: (opacity: number) => void;
-}) {
-  const [thumbUrl, setThumbUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    let objectUrl: string | null = null;
-    let cancelled = false;
-    loadTextureForScene(layer.textureAssetId)
-      .then((blob) => {
-        if (cancelled || !blob) return;
-        objectUrl = URL.createObjectURL(blob);
-        setThumbUrl(objectUrl);
-      })
-      .catch(() => {
-        /* thumbnail is best-effort; a missing asset just shows the placeholder */
-      });
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [layer.textureAssetId]);
-
-  const name = IMAGE_SLOT_LABELS[layer.slot];
-
-  return (
-    <MaterialLayer
-      name={name}
-      defaultOpen={false}
-      icon={
-        <span
-          className="mat-layer-thumb"
-          style={{ backgroundImage: thumbUrl ? `url(${thumbUrl})` : undefined }}
-        />
-      }
-      action={
-        <label className="toggle" title={layer.enabled ? "Hide this map" : "Show this map"}>
-          <input
-            type="checkbox"
-            checked={layer.enabled}
-            onChange={(e) => onToggle(e.target.checked)}
-            aria-label={`${name} map enabled`}
-          />
-          <span className="toggle-track" />
-        </label>
-      }
-    >
-      <Slider
-        label="Opacity"
-        min={0}
-        max={100}
-        step={1}
-        value={Math.round(layer.opacity * 100)}
-        onChange={(val) => onOpacity(val / 100)}
-      />
-    </MaterialLayer>
-  );
-}
-
-// ─── Depth layer ─────────────────────────────────────────────────────────────
-
-// Two or three choices side by side, in a label/control row.
-function SegmentedRow<T extends string>({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: { label: string; value: T }[];
-  value: T;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div className="prop">
-      <span className="prop-label">{label}</span>
-      <div className="seg" style={{ flex: 1 }}>
-        {options.map((option) => (
-          <button
-            key={option.value}
-            type="button"
-            className={`seg-btn ${option.value === value ? "on" : ""}`}
-            onClick={() => onChange(option.value)}
-          >
-            {option.label}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function NumberRow({ label, value, min, onChange }: { label: string; value: number; min?: number; onChange: (value: number) => void }) {
-  return (
-    <div className="prop">
-      <span className="prop-label">{label}</span>
-      <input
-        type="number"
-        step="0.1"
-        min={min}
-        value={Number(value.toFixed(2))}
-        onChange={(e) => {
-          const next = parseFloat(e.target.value);
-          if (Number.isFinite(next) && next !== value) onChange(min === undefined ? next : Math.max(min, next));
-        }}
-        aria-label={label}
-      />
-    </div>
-  );
-}
-
-const DEPTH_TYPE_OPTIONS: { label: string; value: DepthLayer["gradientType"] }[] = [
-  { label: "Radial", value: "radial" },
-  { label: "Linear", value: "linear" },
-];
-
-const BLENDING_OPTIONS: { label: string; value: "linear" | "smooth" }[] = [
-  { label: "Linear", value: "linear" },
-  { label: "Smooth", value: "smooth" },
-];
-
-// The Depth layer of one object (utils/depthColors.ts says how it colours). The picked stop is this
-// panel's own state; it starts on the first stop for each layer (MaterialsPanel keys it by layer).
-function DepthLayerSection({
-  layer,
-  isEditing,
-  onToggleEditing,
-  onUpdate,
-  onRemove,
-}: {
-  layer: DepthLayer;
-  isEditing: boolean;
-  onToggleEditing: () => void;
-  onUpdate: (updates: Partial<DepthLayer>) => void;
-  onRemove: () => void;
-}) {
-  const [selected, setSelected] = useState(0);
-  const index = Math.min(selected, layer.stops.length - 1);
-  const stop = layer.stops[index];
-
-  const setVector = (key: "origin" | "direction", axis: number, value: number) => {
-    if (value === layer[key][axis]) return;
-    const next: [number, number, number] = [...layer[key]];
-    next[axis] = value;
-    onUpdate({ [key]: next });
-  };
-
-  const setStop = (updates: Partial<DepthLayer["stops"][number]>) =>
-    onUpdate({ stops: layer.stops.map((each, i) => (i === index ? { ...each, ...updates } : each)) });
-
-  return (
-    <MaterialLayer
-      name="Depth"
-      icon={<i className="ti ti-circles"></i>}
-      action={
-        <>
-          <button
-            type="button"
-            className={`mat-icon-btn ${isEditing ? "on" : ""}`}
-            title={isEditing ? "Stop editing in the viewport (Enter)" : "Edit in the viewport: the gizmo moves the origin"}
-            aria-label="Edit the Depth layer in the viewport"
-            aria-pressed={isEditing}
-            onClick={onToggleEditing}
-          >
-            <i className="ti ti-pointer"></i>
-          </button>
-          <button type="button" className="mat-icon-btn" title="Remove the Depth layer" aria-label="Remove the Depth layer" onClick={onRemove}>
-            <i className="ti ti-trash"></i>
-          </button>
-        </>
-      }
-    >
-      <SegmentedRow label="Type" options={DEPTH_TYPE_OPTIONS} value={layer.gradientType} onChange={(gradientType) => onUpdate({ gradientType })} />
-      <SegmentedRow
-        label="Blending"
-        options={BLENDING_OPTIONS}
-        value={layer.smooth ? "smooth" : "linear"}
-        onChange={(value) => onUpdate({ smooth: value === "smooth" })}
-      />
-      <DepthRamp layer={layer} selected={index} onSelect={setSelected} onChange={(stops) => onUpdate({ stops })} />
-      {stop && (
-        <>
-          <ColorSwatchField label="Stop Color" value={stop.color} mixed={false} onChange={(color) => setStop({ color })} />
-          <div className="prop">
-            <span className="prop-label">Stop Position</span>
-            <input
-              type="number"
-              min={0}
-              max={100}
-              step={1}
-              value={Math.round(stop.position * 100)}
-              onChange={(e) => setStop({ position: Math.min(1, Math.max(0, (parseFloat(e.target.value) || 0) / 100)) })}
-              aria-label="Stop position"
-            />
-            <button
-              type="button"
-              className="mat-icon-btn"
-              disabled={layer.stops.length <= 2}
-              title={layer.stops.length <= 2 ? "A ramp needs two stops" : "Remove this stop"}
-              aria-label="Remove this stop"
-              onClick={() => {
-                onUpdate({ stops: layer.stops.filter((_, i) => i !== index) });
-                setSelected(Math.max(0, index - 1));
-              }}
-            >
-              <i className="ti ti-trash"></i>
-            </button>
-          </div>
-        </>
-      )}
-      <Vector3Input label="Origin" values={layer.origin} onChange={(axis, value) => setVector("origin", axis, value)} />
-      {layer.gradientType === "linear" && (
-        <Vector3Input label="Direction" values={layer.direction} onChange={(axis, value) => setVector("direction", axis, value)} />
-      )}
-      <NumberRow label="Near" value={layer.near} min={0} onChange={(near) => onUpdate({ near })} />
-      <NumberRow label="Far" value={layer.far} min={0} onChange={(far) => onUpdate({ far })} />
-      <Slider
-        label="Opacity"
-        min={0}
-        max={100}
-        step={1}
-        value={Math.round(layer.opacity * 100)}
-        onChange={(val) => onUpdate({ opacity: val / 100 })}
-      />
-    </MaterialLayer>
-  );
-}
-
-// ─── Panel ───────────────────────────────────────────────────────────────────
+import { LayerStack } from "./LayerStack";
+import { AssetBall, FourCirclesIcon, type AssetsView } from "./MaterialAssetsDrawer";
+import { assetOf, opacityOf } from "../../scene/materialAssets";
+import { asOneUndoStep, ownersFor } from "./materialRows";
+import { StateValueExtra } from "./StateValueExtra";
 
 interface MaterialsPanelProps {
   selectedEntities: Entity[];
+  /** Whether the Material Assets drawer is open (the right sidebar holds it), and how to show a view of it. */
+  assetsOpen: boolean;
+  onAssetsView: (view: AssetsView | null) => void;
 }
 
-const LIGHTING_MODEL_OPTIONS: { label: string; value: LightingModel }[] = [
-  { label: "None", value: "none" },
-  { label: "Lambert", value: "lambert" },
-  { label: "Phong", value: "phong" },
-  { label: "Physical", value: "physical" },
-  { label: "Toon", value: "toon" },
-];
-
-type AlphaMode = NonNullable<ColorLayer["alphaMode"]>;
-
-// Mirrors glTF's alphaMode. Opaque ignores alpha; Mask is a hard alpha-tested
-// cutout (writes depth, so it sorts correctly); Blend is true translucency
-// (disables depth-write). Exporters frequently mis-flag a hard-edged cutout as
-// Blend, which then clips against opaque geometry behind it -- switching such a
-// material to Mask is the fix.
-const ALPHA_MODE_OPTIONS: { label: string; value: AlphaMode }[] = [
-  { label: "Opaque", value: "OPAQUE" },
-  { label: "Mask", value: "MASK" },
-  { label: "Blend", value: "BLEND" },
-];
-
-const getColorLayer = (entity: Entity): ColorLayer | undefined =>
-  entity.materialLayers?.find((layer): layer is ColorLayer => layer.type === "color");
-
-const getLightingLayer = (entity: Entity): LightingLayer | undefined =>
-  entity.materialLayers?.find((layer): layer is LightingLayer => layer.type === "lighting");
-
-const getDepthLayer = (entity: Entity): DepthLayer | undefined =>
-  entity.materialLayers?.find((layer): layer is DepthLayer => layer.type === "depth");
-
-// How far a new Depth layer on `entityId` reaches: its mesh's farthest point, measured in the live
-// scene (only a mesh takes depth paint). Undefined, for the default, while it isn't drawn yet.
-const liveDepthReach = (entityId: string): number | undefined => {
-  let mesh: THREE.Mesh | undefined;
-  getLiveScene()?.traverse((object) => {
-    if (!mesh && object instanceof THREE.Mesh && object.userData.entityId === entityId) mesh = object;
-  });
-  return (mesh && depthReach(mesh.geometry)) ?? undefined;
-};
-
-export function MaterialsPanel({ selectedEntities: allSelectedEntities }: MaterialsPanelProps) {
-  const updateMultipleEntityMaterialLayers = useEditorStore((state) => state.updateMultipleEntityMaterialLayers);
-  const updateMaterialLayer = useEditorStore((state) => state.updateMaterialLayer);
+export function MaterialsPanel({ selectedEntities: allSelectedEntities, assetsOpen, onAssetsView }: MaterialsPanelProps) {
+  const materials = useEditorStore((state) => state.materials);
   const addMaterialLayer = useEditorStore((state) => state.addMaterialLayer);
-  const removeMaterialLayer = useEditorStore((state) => state.removeMaterialLayer);
-  const depthEdit = useEditorStore((state) => state.depthEdit);
-  const setDepthEdit = useEditorStore((state) => state.setDepthEdit);
+  const updateShownLooks = useEditorStore((state) => state.updateShownLooks);
+  const viewedStates = useEditorStore((state) => state.viewedStates);
+  const objectStates = useEditorStore((state) => state.animation.states);
+  const detachMaterialAsset = useEditorStore((state) => state.detachMaterialAsset);
+  const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
 
-  // Imported meshes now carry derived materialLayers, so they belong here too —
-  // only the layer stack existing matters, not the entity type. Directional lights
-  // (no material) and import nodes still awaiting their backfill are excluded.
+  // Imported meshes carry derived materialLayers too: only the stack existing matters. Directional
+  // lights (no material) and import nodes still awaiting their layers are left out.
   const selectedEntities = allSelectedEntities.filter((e) => e.type !== "directionalLight" && e.materialLayers);
+
   if (selectedEntities.length === 0) return null;
 
-  // Image layers are surfaced only on a single selection — one texture stack per
-  // mesh, no meaningful "mixed" merge across a multi-select the way Color/Lighting has.
-  const imageLayers = selectedEntities.length === 1 ? getImageLayers(selectedEntities[0]) : [];
-  // The Depth layer too: its ramp and origin are one object's.
-  const depthLayer = selectedEntities.length === 1 ? getDepthLayer(selectedEntities[0]) : undefined;
-  const entitiesMissingDepth = selectedEntities.filter((e) => !getDepthLayer(e));
+  // The selected objects that use a material asset, and those assets, each once. With any, the
+  // panel names them: their layers are edited in the Material Builder.
+  const onAssets = selectedEntities.filter((entity) => assetOf(entity, materials));
+  const usedAssets = [...new Set(onAssets.map((entity) => assetOf(entity, materials)!))];
 
-  const colorLayers = selectedEntities.map((e) => ({ entity: e, layer: getColorLayer(e) })).filter((x) => x.layer);
-  const lightingLayers = selectedEntities.map((e) => ({ entity: e, layer: getLightingLayer(e) })).filter((x) => x.layer);
+  const assetsButton = (
+    <button
+      type="button"
+      className={`mat-icon-btn ${assetsOpen ? "on" : ""}`}
+      title="Material assets: materials to reuse on several objects"
+      aria-label="Material assets"
+      aria-expanded={assetsOpen}
+      onClick={() => onAssetsView(assetsOpen ? null : { assetId: null })}
+    >
+      <FourCirclesIcon />
+    </button>
+  );
 
-  // Every entity normally carries both mandatory layers, so these are empty and
-  // the add buttons stay disabled; if a stack is ever missing one, the button
-  // becomes the way to restore it.
-  const entitiesMissingColor = selectedEntities.filter((e) => !getColorLayer(e));
-  const entitiesMissingLighting = selectedEntities.filter((e) => !getLightingLayer(e));
+  if (usedAssets.length > 0) {
+    return (
+      <PanelSection
+        title="Material"
+        defaultOpen={true}
+        titleAction={assetsButton}
+        action={
+          <button
+            type="button"
+            className="mat-icon-btn"
+            title="Detach: give the object the material's layers and opacity as its own (to edit it alone, or to animate its colour or opacity)"
+            aria-label="Detach from the material asset"
+            disabled={isReadOnly}
+            onClick={() => detachMaterialAsset(onAssets.map((entity) => entity.id))}
+          >
+            <i className="ti ti-unlink"></i>
+          </button>
+        }
+      >
+        <div className="material-layer-stack">
+          {usedAssets.map((asset) => (
+            <UsedAsset key={asset.id} asset={asset} onOpen={() => onAssetsView({ assetId: asset.id })} />
+          ))}
+          {onAssets.length < selectedEntities.length && <p className="mat-drawer-note">Some of the selected objects have layers of their own: select them alone to edit those.</p>}
+        </div>
+      </PanelSection>
+    );
+  }
 
-  const firstColor = colorLayers[0]?.layer as ColorLayer | undefined;
-  const firstLighting = lightingLayers[0]?.layer as LightingLayer | undefined;
-
-  const colorMixed = colorLayers.some(({ layer }) => (layer as ColorLayer).color !== firstColor?.color);
-  const colorOpacityMixed = colorLayers.some(({ layer }) => (layer as ColorLayer).opacity !== firstColor?.opacity);
-  const modelMixed = lightingLayers.some(({ layer }) => (layer as LightingLayer).model !== firstLighting?.model);
-  const emissiveMixed = lightingLayers.some(({ layer }) => (layer as LightingLayer).emissive !== firstLighting?.emissive);
-
-  // alphaMode/doubleSided are optional (primitives predate them) -- fall back to
-  // the glTF defaults (OPAQUE / single-sided) so the controls always show a value.
-  const firstAlphaMode: AlphaMode = firstColor?.alphaMode ?? "OPAQUE";
-  const firstDoubleSided = firstColor?.doubleSided ?? false;
-  const alphaModeMixed = colorLayers.some(({ layer }) => ((layer as ColorLayer).alphaMode ?? "OPAQUE") !== firstAlphaMode);
-  const doubleSidedMixed = colorLayers.some(({ layer }) => ((layer as ColorLayer).doubleSided ?? false) !== firstDoubleSided);
-
-  const applyColorUpdate = (updates: Partial<ColorLayer>) => {
-    const updatesMap: Record<string, { layerId: string; updates: Partial<MaterialLayerData> }> = {};
-    colorLayers.forEach(({ entity, layer }) => {
-      updatesMap[entity.id] = { layerId: (layer as ColorLayer).id, updates };
-    });
-    updateMultipleEntityMaterialLayers(updatesMap);
-  };
-
-  const applyLightingUpdate = (updates: Partial<LightingLayer>) => {
-    const updatesMap: Record<string, { layerId: string; updates: Partial<MaterialLayerData> }> = {};
-    lightingLayers.forEach(({ entity, layer }) => {
-      updatesMap[entity.id] = { layerId: (layer as LightingLayer).id, updates };
-    });
-    updateMultipleEntityMaterialLayers(updatesMap);
-  };
+  const owners = ownersFor(selectedEntities, materials);
+  // Each object's opacity as it's shown: the state's it is shown in, over its own.
+  const shownStates = selectedEntities.map((entity) => getViewedState(viewedStates, objectStates, entity.id));
+  const opacities = selectedEntities.map((entity, i) => shownStates[i]?.values.opacity ?? opacityOf(entity, materials));
+  // One object shown in a state: its opacity gets a marker and a "Reset to Base".
+  const objectState = selectedEntities.length === 1 ? shownStates[0] : null;
+  const opacityMixed = opacities.some((opacity) => opacity !== opacities[0]);
 
   return (
-    <PanelSection title="Materials" defaultOpen={true}>
-      <div className="material-layer-stack">
-        {/* Color layer */}
-        {firstColor && (
-          <MaterialLayer
-            name="Color"
-            icon={<i className="ti ti-palette"></i>}
-            action={<LayerDeleteButton title="Color is a mandatory layer" />}
-          >
-            <ColorSwatchField
-              label="Color"
-              value={firstColor.color ?? "#ffffff"}
-              mixed={colorMixed}
-              onChange={(color) => applyColorUpdate({ color })}
-            />
-            <Slider
-              label="Opacity"
-              min={0}
-              max={100}
-              step={1}
-              value={Math.round((colorOpacityMixed ? 1 : firstColor.opacity ?? 1) * 100)}
-              onChange={(val) => applyColorUpdate({ opacity: val / 100 })}
-            />
-            <Select
-              label="Alpha Mode"
-              options={alphaModeMixed ? [{ label: "Mixed", value: "" }, ...ALPHA_MODE_OPTIONS] : ALPHA_MODE_OPTIONS}
-              value={alphaModeMixed ? "" : firstAlphaMode}
-              onChange={(val) => {
-                if (!val) return;
-                // Seed a sensible cutoff when entering Mask so an alpha-tested
-                // cutout has something to test against immediately.
-                const updates: Partial<ColorLayer> =
-                  val === "MASK"
-                    ? { alphaMode: "MASK", alphaCutoff: firstColor.alphaCutoff ?? 0.5 }
-                    : { alphaMode: val as AlphaMode };
-                applyColorUpdate(updates);
-              }}
-            />
-            {!alphaModeMixed && firstAlphaMode === "MASK" && (
-              <Slider
-                label="Alpha Cutoff"
-                min={0}
-                max={1}
-                step={0.01}
-                value={firstColor.alphaCutoff ?? 0.5}
-                onChange={(val) => applyColorUpdate({ alphaCutoff: val })}
-              />
-            )}
-            <Switch
-              label="Double Sided"
-              checked={doubleSidedMixed ? false : firstDoubleSided}
-              onChange={(val) => applyColorUpdate({ doubleSided: val })}
-            />
-          </MaterialLayer>
-        )}
-
-        {/* Lighting layer */}
-        {firstLighting && (
-          <MaterialLayer
-            name="Lighting"
-            icon={<i className="ti ti-bulb"></i>}
-            action={<LayerDeleteButton title="Lighting is a mandatory layer" />}
-          >
-            <Select
-              label="Model"
-              options={modelMixed ? [{ label: "Mixed", value: "" }, ...LIGHTING_MODEL_OPTIONS] : LIGHTING_MODEL_OPTIONS}
-              value={modelMixed ? "" : (firstLighting.model ?? "physical")}
-              onChange={(val) => {
-                if (!val) return;
-                applyLightingUpdate({ model: val as LightingModel });
-              }}
-            />
-
-            {!modelMixed && firstLighting.model !== "none" && (
-              <>
-                {firstLighting.model === "physical" && (
-                  <>
-                    <Slider
-                      label="Roughness"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={firstLighting.roughness ?? 0.45}
-                      onChange={(val) => applyLightingUpdate({ roughness: val })}
-                    />
-                    <Slider
-                      label="Metalness"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={firstLighting.metalness ?? 0.08}
-                      onChange={(val) => applyLightingUpdate({ metalness: val })}
-                    />
-                    <Slider
-                      label="Clearcoat"
-                      min={0}
-                      max={1}
-                      step={0.01}
-                      value={firstLighting.clearcoat ?? 0}
-                      onChange={(val) => applyLightingUpdate({ clearcoat: val })}
-                    />
-                    {(firstLighting.clearcoat ?? 0) > 0 && (
-                      <Slider
-                        label="Coat Rough."
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        value={firstLighting.clearcoatRoughness ?? 0}
-                        onChange={(val) => applyLightingUpdate({ clearcoatRoughness: val })}
-                      />
-                    )}
-                  </>
-                )}
-
-                {firstLighting.model === "phong" && (
-                  <Slider
-                    label="Shininess"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={firstLighting.shininess ?? 30}
-                    onChange={(val) => applyLightingUpdate({ shininess: val })}
-                  />
-                )}
-
-                <ColorSwatchField
-                  label="Emissive"
-                  value={firstLighting.emissive ?? "#000000"}
-                  mixed={emissiveMixed}
-                  onChange={(color) => applyLightingUpdate({ emissive: color })}
-                />
-                <Slider
-                  label="Emissive Int."
-                  min={0}
-                  max={5}
-                  step={0.1}
-                  value={firstLighting.emissiveIntensity ?? 1}
-                  onChange={(val) => applyLightingUpdate({ emissiveIntensity: val })}
-                />
-              </>
-            )}
-          </MaterialLayer>
-        )}
-
-        {depthLayer && (
-          <DepthLayerSection
-            key={depthLayer.id}
-            layer={depthLayer}
-            isEditing={depthEdit === selectedEntities[0].id}
-            onToggleEditing={() => (depthEdit === selectedEntities[0].id ? setDepthEdit(null) : editDepth(selectedEntities[0].id))}
-            onUpdate={(updates) => updateMaterialLayer(selectedEntities[0].id, depthLayer.id, updates)}
-            onRemove={() => removeMaterialLayer(selectedEntities[0].id, depthLayer.id)}
+    <PanelSection
+      title="Material"
+      defaultOpen={true}
+      titleAction={assetsButton}
+      action={
+        <div className="mat-header-controls">
+          <StateValueExtra objectState={objectState} field="opacity" />
+          <NumberField
+            className="mat-opacity-field"
+            label="Object opacity (%)"
+            value={opacityMixed ? null : Math.round(opacities[0] * 100)}
+            min={0}
+            max={100}
+            step={1}
+            integer
+            disabled={isReadOnly}
+            onChange={(percent) => updateShownLooks(Object.fromEntries(selectedEntities.map((entity) => [entity.id, { opacity: percent / 100 }])))}
           />
-        )}
-
-        {/* Image layers — one per texture map derived from an imported material */}
-        {imageLayers.map((layer) => (
-          <ImageLayerRow
-            key={layer.id}
-            layer={layer}
-            onToggle={(enabled) => updateMaterialLayer(selectedEntities[0].id, layer.id, { enabled })}
-            onOpacity={(opacity) => updateMaterialLayer(selectedEntities[0].id, layer.id, { opacity })}
-          />
-        ))}
-
-        {/* Add-layer actions (scaffolding for future layer types) */}
-        <div className="mat-layer-add">
           <button
             type="button"
-            className="mat-add-btn"
-            disabled={entitiesMissingColor.length === 0}
-            title={entitiesMissingColor.length === 0 ? "Color layer already present" : "Add a Color layer"}
-            onClick={() => entitiesMissingColor.forEach((e) => addMaterialLayer(e.id, "color"))}
+            className="mat-icon-btn"
+            title="Add a Color layer (its type can be changed in its row)"
+            aria-label="Add a layer"
+            disabled={isReadOnly}
+            onClick={() => asOneUndoStep(owners.map((owner) => () => addMaterialLayer(owner.id, "color")))}
           >
             <i className="ti ti-plus"></i>
-            <span>Color</span>
-          </button>
-          <button
-            type="button"
-            className="mat-add-btn"
-            disabled={entitiesMissingLighting.length === 0}
-            title={entitiesMissingLighting.length === 0 ? "Lighting layer already present" : "Add a Lighting layer"}
-            onClick={() => entitiesMissingLighting.forEach((e) => addMaterialLayer(e.id, "lighting"))}
-          >
-            <i className="ti ti-plus"></i>
-            <span>Lighting</span>
-          </button>
-          <button
-            type="button"
-            className="mat-add-btn"
-            disabled={entitiesMissingDepth.length === 0}
-            title={entitiesMissingDepth.length === 0 ? "Depth layer already present" : "Add a Depth layer: colours by distance from a point"}
-            onClick={() => {
-              entitiesMissingDepth.forEach((e) => addMaterialLayer(e.id, "depth", liveDepthReach(e.id)));
-              // One object's new layer opens for editing in the viewport.
-              if (selectedEntities.length === 1) editDepth(selectedEntities[0].id);
-            }}
-          >
-            <i className="ti ti-plus"></i>
-            <span>Depth</span>
           </button>
         </div>
+      }
+    >
+      <div className="material-layer-stack">
+        <LayerStack owners={owners} />
       </div>
     </PanelSection>
+  );
+}
+
+/** The material asset the selected objects use: its ball and name. A click opens it in the Material Builder. */
+function UsedAsset({ asset, onOpen }: { asset: MaterialAsset; onOpen: () => void }) {
+  return (
+    <button type="button" className="mat-asset-card" title="Edit in the Material Builder: changes every object using this material" onClick={onOpen}>
+      <AssetBall asset={asset} />
+      <span className="mat-asset-name">{asset.name}</span>
+    </button>
   );
 }

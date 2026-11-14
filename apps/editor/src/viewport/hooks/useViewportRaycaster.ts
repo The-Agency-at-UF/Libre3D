@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import * as THREE from "three";
+import type { SceneRenderer } from "../rendererSettings";
 import { useEditorStore } from "../../store/useEditorStore";
-import { getSelectionRootId } from "../../store/entityIndex";
+import { getSelectionRootId } from "../../scene/entityIndex";
 import { pickEntityAt } from "../pickEntity";
 import { editPath } from "./useViewportPenTool";
 import type { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
@@ -13,7 +14,7 @@ const DRAG_THRESHOLD_PX = 10;
 export function useViewportRaycaster(
   // Accept a ref so raycasting always uses the current active camera.
   cameraRef: React.RefObject<THREE.Camera>,
-  rendererRef: React.RefObject<THREE.WebGLRenderer | null>,
+  rendererRef: React.RefObject<SceneRenderer | null>,
   meshMap: Map<string, THREE.Object3D>,
   transformControlsRef: React.RefObject<TransformControls | null>
 ) {

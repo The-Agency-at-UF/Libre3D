@@ -1,14 +1,23 @@
+/**
+ * PURPOSE: Manages Three.js camera OrbitControls and object TransformControls (translate/rotate/scale gizmo).
+ * Switches the mouse between orbiting and panning (Alt, Space, the middle button), writes a gizmo
+ * drag of one object to the store as one undo step, and writes the camera back to the active
+ * profile at most once a frame.
+ */
+
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
+import type { SceneRenderer } from "../rendererSettings";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { selectViewedObjectState, useEditorStore } from "../../store/useEditorStore";
+import { getEntityIndex } from "../../scene/entityIndex";
 import { resolveState, unwrapRotation } from "../../animation/objectStates";
 
 export function useViewportControls(
   // Accept a ref so OrbitControls / TransformControls always use the live camera.
   cameraRef: React.RefObject<THREE.Camera>,
-  rendererRef: React.RefObject<THREE.WebGLRenderer | null>,
+  rendererRef: React.RefObject<SceneRenderer | null>,
   scene: THREE.Scene,
 ) {
   const orbitControlsRef = useRef<OrbitControls | null>(null);
@@ -370,8 +379,9 @@ export function useViewportControls(
     transformControls.addEventListener("objectChange", () => {
       const target = transformControls.object;
       const store = useEditorStore.getState();
+      // Through the index: this runs on every pointer event of a drag.
       const entity = target?.userData.entityId
-        ? store.entities.find((e) => e.id === target.userData.entityId)
+        ? getEntityIndex(store.entities).byId.get(target.userData.entityId)
         : undefined;
       if (target && entity && !target.userData.locked) {
         // The gizmo hands back rotations wrapped to ±180° (they go through a quaternion); keep the

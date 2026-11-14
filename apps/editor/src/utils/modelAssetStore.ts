@@ -29,7 +29,3 @@ export function loadModelAsset(assetId: string): Promise<ArrayBuffer | null> {
 export function hasModelAsset(assetId: string): Promise<boolean> {
   return store.has(assetId);
 }
-
-export function deleteModelAsset(assetId: string): Promise<void> {
-  return store.remove(assetId);
-}

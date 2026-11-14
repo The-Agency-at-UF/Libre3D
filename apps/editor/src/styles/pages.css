@@ -303,15 +303,6 @@
   min-width: 0;
 }
 
-.page-account {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text-tertiary);
-  font-size: var(--font-size-sm);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .page-main {
   flex: 1;
   display: flex;

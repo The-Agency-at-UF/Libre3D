@@ -13,19 +13,36 @@
  * share-link viewer can use it as is. Nor on Three.js: the scene document reads states through
  * here, so every page loads this file, and only the editor may download Three (App.tsx). The
  * matrix math for states whose object changes parent is in reparentStates.ts.
+ *
+ * Colour and opacity: a state's `opacity` is the object's opacity, and its `color` is the colour of
+ * the object's top Color layer (scene/layers.ts, `colorLayerOf`). An object with no Color layer has
+ * no colour to set. An object that uses a material asset has neither to set: an asset is one whole
+ * look, its opacity included, the same in every state (so its shaderball is always what its objects
+ * look like), and such an object is its asset's colour and opacity whatever a state says. To
+ * animate them, detach it from the asset; applying an asset drops the colours and opacities its
+ * states set (`withoutStateLooks`). A new state doesn't snapshot colour or opacity: it sets one
+ * only once it's edited while the state is shown, so recolouring Base still reaches every state.
  */
 
+import { colorLayerOf } from "../scene/layers";
+import type { MaterialLayer } from "../scene/types";
+import { cloneVector } from "../scene/vec3";
 import { createId } from "../utils/createId";
 import type { EntityTRS } from "../utils/entityTransforms";
 import type { SceneEvent } from "./events";
 
-/** What a state can set: transform, and a path's trim (0–1, see paths/). Colour and opacity may follow. */
+/**
+ * What a state can set: transform, a path's trim (0–1, see paths/), and the object's colour ("#rrggbb")
+ * and opacity (0–1; the file header says what they mean on a layer stack).
+ */
 export interface StateValues {
   position?: [number, number, number];
   rotation?: [number, number, number];
   scale?: [number, number, number];
   trimStart?: number;
   trimEnd?: number;
+  color?: string;
+  opacity?: number;
 }
 
 export type StateValueKey = keyof StateValues;
@@ -48,15 +65,25 @@ export interface SceneAnimation {
 /** A path's trim: how much of it shows, from `trimStart` to `trimEnd` (0–1 of its length). */
 export type Trim = Pick<StateValues, "trimStart" | "trimEnd">;
 
+/** An object's colour (its top Color layer's, "#rrggbb") and opacity (0–1). */
+export type Look = Pick<StateValues, "color" | "opacity">;
+
 /**
  * Where an object is and how it looks: its Base values with a state's on top. Its transform always;
- * a trim only when the object or the state has one (paths).
+ * a trim only when the object or the state has one (paths); an opacity only for an object with a
+ * material, and a colour only when that material has a Color layer (the state's only for an object
+ * with a material of its own, not a material asset).
  */
-export type Pose = EntityTRS & Trim;
+export type Pose = EntityTRS & Trim & Look;
+
+/**
+ * What a pose is worked out from: an object's own transform and trim, and for its look the layers
+ * and opacity it is drawn with (its material asset's when it uses one: scene/materialAssets.ts,
+ * `resolveEntities`). An entity as drawn is one.
+ */
+export type PoseSource = EntityTRS & Trim & { materialLayers?: MaterialLayer[]; materialAssetId?: string; opacity?: number };
 
 const FULL_TURN = Math.PI * 2;
-
-const cloneVector = (vector: [number, number, number]): [number, number, number] => [vector[0], vector[1], vector[2]];
 
 export const createEmptyAnimation = (): SceneAnimation => ({ states: {}, events: {} });
 
@@ -68,6 +95,8 @@ export const cloneStateValues = (values: StateValues): StateValues => ({
   ...(values.scale ? { scale: cloneVector(values.scale) } : null),
   ...(typeof values.trimStart === "number" ? { trimStart: values.trimStart } : null),
   ...(typeof values.trimEnd === "number" ? { trimEnd: values.trimEnd } : null),
+  ...(typeof values.color === "string" ? { color: values.color } : null),
+  ...(typeof values.opacity === "number" ? { opacity: values.opacity } : null),
 });
 
 const cloneObjectState = (state: ObjectState): ObjectState => ({
@@ -84,7 +113,7 @@ export const cloneAnimation = (animation: Partial<SceneAnimation> | undefined): 
 });
 
 /** Where an object is in a state: the state's values over the object's own. No state = Base. */
-export const resolveState = (entity: EntityTRS & Trim, state?: ObjectState | null): Pose => {
+export const resolveState = (entity: PoseSource, state?: ObjectState | null): Pose => {
   const pose: Pose = {
     position: cloneVector(state?.values.position ?? entity.position),
     rotation: cloneVector(state?.values.rotation ?? entity.rotation),
@@ -96,7 +125,62 @@ export const resolveState = (entity: EntityTRS & Trim, state?: ObjectState | nul
     pose.trimStart = trimStart ?? 0;
     pose.trimEnd = trimEnd ?? 1;
   }
+  if (entity.materialLayers) {
+    // An object on a material asset is the asset's colour and opacity in every state.
+    const look = entity.materialAssetId ? undefined : state?.values;
+    pose.opacity = clampOpacity(look?.opacity ?? entity.opacity ?? 1);
+    const baseColor = colorLayerOf(entity.materialLayers)?.color;
+    if (baseColor !== undefined) pose.color = look?.color ?? baseColor;
+  }
   return pose;
+};
+
+const clampOpacity = (opacity: number): number => Math.min(1, Math.max(0, opacity));
+
+/** A pose's transform and trim without its look: what a new state snapshots (see the file header). */
+export const withoutLook = (pose: Pose): Pose => {
+  const { color: _color, opacity: _opacity, ...rest } = pose;
+  return rest;
+};
+
+/**
+ * The states without the colours and opacities those of `entityIds` set: for objects that start
+ * using a material asset, which is one look in every state. The same states when none of them set one.
+ */
+export const withoutStateLooks = (states: Record<string, ObjectState>, entityIds: ReadonlySet<string>): Record<string, ObjectState> => {
+  const set = Object.values(states).filter(
+    (state) => entityIds.has(state.targetId) && (state.values.color !== undefined || state.values.opacity !== undefined),
+  );
+  if (set.length === 0) return states;
+  const next = { ...states };
+  for (const state of set) {
+    const { color: _color, opacity: _opacity, ...values } = state.values;
+    next[state.id] = { ...state, values };
+  }
+  return next;
+};
+
+// The objects with a state that sets an opacity, by the states they were worked out from.
+const fadingByStates = new WeakMap<Record<string, ObjectState>, ReadonlySet<string>>();
+const NO_OBJECTS: ReadonlySet<string> = new Set();
+
+/**
+ * The IDs of the objects some state gives an opacity: the ones a transition can fade. The viewport
+ * draws those as see-through objects for good (viewport/entityMaterials.ts), because switching an
+ * object between solid and see-through mid-fade rebuilds its shader. The same set for the same states.
+ */
+export const fadingObjects = (states: Record<string, ObjectState> | undefined): ReadonlySet<string> => {
+  if (!states) return NO_OBJECTS;
+  let fading = fadingByStates.get(states);
+  if (!fading) {
+    fading = new Set(
+      Object.values(states)
+        .filter((state) => typeof state.values?.opacity === "number")
+        .map((state) => state.targetId),
+    );
+    fadingByStates.set(states, fading);
+  }
+  return fading;
 };
 
 /**
@@ -152,7 +236,7 @@ export const createObjectState = (states: Record<string, ObjectState>, entityId:
 };
 
 /** The angle equal to `angle` (in radians, give or take whole turns) nearest `reference`. */
-export const unwrapAngle = (angle: number, reference: number): number =>
+const unwrapAngle = (angle: number, reference: number): number =>
   angle + FULL_TURN * Math.round((reference - angle) / FULL_TURN);
 
 /**

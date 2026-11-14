@@ -3,8 +3,11 @@ import * as THREE from "three";
 import { useEditorStore } from "../../store/useEditorStore";
 import Stats from "three/examples/jsm/libs/stats.module.js";
 import { hasPendingThumbnail, renderPendingThumbnail } from "../thumbnailCapture";
-import { hideEditorOnlyObjects } from "../../utils/exportScene";
-import { createSceneRenderer, exposeLiveRenderer } from "../rendererSettings";
+import { hasPendingPreviews, renderPendingPreviews } from "../materialPreview";
+import { hideEditorOnlyObjects } from "../editorOnly";
+import { setLiveRenderer } from "../liveViewport";
+import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "../rendererSettings";
+import { RIGHT_SIDEBAR_CLEARANCE } from "./useViewportGizmo";
 
 export function useViewportRenderer(
   containerRef: React.RefObject<HTMLDivElement | null>,
@@ -20,7 +23,8 @@ export function useViewportRenderer(
   // the main `renderer.render(scene, camera)` call below.
   onAfterRender?: () => void
 ) {
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const rendererRef = useRef<SceneRenderer | null>(null);
+  // The FPS panel, while the HUD shows it (see the effect below); null otherwise.
   const statsRef    = useRef<Stats | null>(null);
 
   useEffect(() => {
@@ -33,23 +37,20 @@ export function useViewportRenderer(
     rendererRef.current = renderer;
 
     // KTX2 decoding in .glb imports (non-component code) needs the live renderer.
-    const unexposeRenderer = exposeLiveRenderer(renderer);
-
-    const stats = new Stats();
-    stats.dom.style.position = "absolute";
-    stats.dom.style.top  = "10px";
-    stats.dom.style.left = "10px";
-    container.appendChild(stats.dom);
-    statsRef.current = stats;
+    const clearLiveRenderer = setLiveRenderer(renderer);
 
     let animationFrameId = 0;
+    let disposed = false;
 
     const animate = () => {
       animationFrameId = window.requestAnimationFrame(animate);
-      stats.update();
+      statsRef.current?.update();
       if (onRender) onRender();
-      // A gallery picture asked for since the last frame (thumbnailCapture.ts) is taken here,
-      // before the normal render paints over it.
+      // A shaderball that changed since the last frame (materialPreview.ts) and a gallery picture
+      // asked for since then (thumbnailCapture.ts) are drawn and copied here, before the normal
+      // render paints over them.
+      if (hasPendingPreviews()) renderPendingPreviews(renderer);
+
       if (hasPendingThumbnail()) renderPendingThumbnail(renderer, scene, cameraRef.current);
       // Play shows the scene without the editor's own objects (grid, light helpers, selection
       // outlines, gizmo): the set exports and the gallery picture leave out. Hidden for each
@@ -61,32 +62,64 @@ export function useViewportRenderer(
       restoreEditorOnlyObjects?.();
       if (onAfterRender) onAfterRender();
     };
-    animate();
+    // Nothing can be drawn until the renderer has started (it asks the browser for a GPU device,
+    // which takes a moment). The canvas is already in the page, so the hooks that listen on it
+    // don't wait.
+    whenRendererReady(renderer).then(
+      () => {
+        if (!disposed) animate();
+      },
+      (error) => console.error("[Libre3D] The renderer could not start:", error),
+    );
 
     return () => {
+      disposed = true;
       window.cancelAnimationFrame(animationFrameId);
-      unexposeRenderer();
-      renderer.dispose();
-      renderer.forceContextLoss();
-      renderer.domElement.remove();
-      stats.dom.remove();
+      clearLiveRenderer();
+      disposeSceneRenderer(renderer);
     };
     // Only scene/container matter for renderer lifecycle; camera is via ref.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [containerRef, scene]);
 
-  // Handle Stats visibility
+  // The FPS panel is built when the HUD setting asks for it and removed when it stops asking.
+  // Updating it draws on its own canvases every frame, which a hidden panel paid for too.
   useEffect(() => {
-    return useEditorStore.subscribe(
-      (state) => state.hudOverlay,
-      (hudOverlay) => {
-        if (statsRef.current) {
-          statsRef.current.dom.style.display = hudOverlay === "Stats" ? "block" : "none";
+    const removeStats = () => {
+      statsRef.current?.dom.remove();
+      statsRef.current = null;
+    };
+    const unsubscribe = useEditorStore.subscribe(
+      (state) => state.hudOverlay === "Stats",
+      (showStats) => {
+        if (!showStats) {
+          removeStats();
+          return;
         }
+        const canvas = rendererRef.current?.domElement;
+        if (statsRef.current || !canvas) return;
+        const stats = new Stats();
+        // Bottom right of the part of the viewport that shows. The viewport runs under both
+        // sidebars, and the panel's old place (its top left corner) is behind the left one, whose
+        // width the user can change; the right one's is fixed, as for the navigation gizmo.
+        stats.dom.style.position = "absolute";
+        stats.dom.style.top = "auto";
+        stats.dom.style.left = "auto";
+        stats.dom.style.bottom = "16px";
+        stats.dom.style.right = `${RIGHT_SIDEBAR_CLEARANCE}px`;
+        // In the editor's viewport area, not in the canvas's own container: a fixed-size frame
+        // sizes and scales that container, and the panel must stay where it is on the screen.
+        (canvas.closest(".viewport-container") ?? canvas.parentElement)?.appendChild(stats.dom);
+        statsRef.current = stats;
       },
       { fireImmediately: true }
     );
-  }, []);
+    return () => {
+      unsubscribe();
+      removeStats();
+    };
+    // After the effect above, which makes the renderer's canvas for the same container and scene.
+  }, [containerRef, scene]);
 
   return rendererRef;
 }

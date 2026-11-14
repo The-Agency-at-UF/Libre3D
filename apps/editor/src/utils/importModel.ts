@@ -5,47 +5,11 @@ import { createId } from "./createId";
 import { walkGltfScene, nodePathKey, collectSkinnedBones } from "./gltfHierarchy";
 import { pruneImportNodes, type PrunableNode } from "./pruneImportHierarchy";
 import { createConfiguredGltfLoader } from "./createGltfLoader";
+import { getLiveRenderer } from "../viewport/liveViewport";
+import { cacheParsedModel } from "./parsedModelCache";
 import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
-import type { ImportNodeSpec } from "../store/useEditorStore";
+import type { ImportNodeSpec } from "../scene/types";
 import type { GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
-
-// Hands the freshly parsed glTF off to the very first hydrate of the same
-// asset (ObjectManager.hydrateImportedModel), which would otherwise re-fetch
-// the identical buffer from storage and parse it a second time. Entries are
-// one-shot: takeParsedModel deletes on read, so a reload — where nothing was
-// parsed this session — falls through to the buffer as before.
-const parsedModelCache = new Map<string, GLTF>();
-const parsedModelTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-// Hydration follows a fresh import within the same tick, so anything still
-// cached after this long was never claimed (an import that failed between the
-// parse and the store update). Drop it rather than pin a whole parsed scene —
-// geometry, textures and all — in memory for the life of the page.
-const PARSED_MODEL_TTL_MS = 30_000;
-
-function cacheParsedModel(assetId: string, gltf: GLTF): void {
-  parsedModelCache.set(assetId, gltf);
-  parsedModelTimers.set(
-    assetId,
-    setTimeout(() => {
-      parsedModelCache.delete(assetId);
-      parsedModelTimers.delete(assetId);
-    }, PARSED_MODEL_TTL_MS),
-  );
-}
-
-// Get-and-delete. Returns undefined on a miss, which is the signal to parse
-// from the stored buffer instead.
-export function takeParsedModel(assetId: string): GLTF | undefined {
-  const gltf = parsedModelCache.get(assetId);
-  parsedModelCache.delete(assetId);
-  const timer = parsedModelTimers.get(assetId);
-  if (timer !== undefined) {
-    clearTimeout(timer);
-    parsedModelTimers.delete(assetId);
-  }
-  return gltf;
-}
 
 // glTF declares its unit as the metre, but nothing enforces it and exporters
 // routinely bake a unit conversion into the file instead: a Sketchfab download of
@@ -118,7 +82,7 @@ export async function prepareModelImport(file: File): Promise<{ assetId: string;
 // one node, keyed by its nodePath (child-index path from gltf.scene).
 // The parsed result is also cached under assetId for the imminent hydrate.
 async function extractModelHierarchy(buffer: ArrayBuffer, assetId: string): Promise<ImportNodeSpec[]> {
-  const loader = await createConfiguredGltfLoader();
+  const loader = await createConfiguredGltfLoader(getLiveRenderer());
 
   const gltf = await new Promise<GLTF>((resolve, reject) => {
     loader.parse(buffer, "", resolve, reject);
@@ -190,7 +154,7 @@ async function extractModelHierarchy(buffer: ArrayBuffer, assetId: string): Prom
 
 // Collapses pass-through wrappers and drops dead leaves from a freshly
 // extracted node list via the shared pruneImportNodes algorithm -- reused
-// as-is by ObjectManager's backfill pass for pre-existing imports, so both
+// as-is by the viewport's backfill pass (importedModels.ts) for pre-existing imports, so both
 // call sites share one implementation of the actual graph/matrix logic.
 function pruneExtractedNodes(
   nodes: ImportNodeSpec[],

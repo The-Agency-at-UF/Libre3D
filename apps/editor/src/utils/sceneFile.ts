@@ -164,5 +164,6 @@ export const readSceneFile = async (data: ArrayBuffer): Promise<ReadSceneFile> =
   };
 };
 
-/** The imported assets a scene's entities use that are content-addressed (the ones a file can carry). */
-export const sceneFileAssetRefs = (entities: unknown) => collectAssetRefs(entities).filter((ref) => isAssetHash(ref.id));
+/** The imported assets a scene's entities and material assets use that are content-addressed (the ones a file can carry). */
+export const sceneFileAssetRefs = (entities: unknown, materials?: unknown) => collectAssetRefs(entities, materials).filter((ref) => isAssetHash(ref.id));
+

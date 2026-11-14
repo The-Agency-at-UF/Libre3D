@@ -1,14 +1,34 @@
-import { useEffect, useRef, useState, useMemo } from "react";
+/**
+ * PURPOSE: The editor's 3D viewport. Builds the scene, camera and object managers once, keeps them
+ * in step with the store (scene settings, the active camera, the entities, and what the transform
+ * gizmo holds), and leaves the rest to the viewport hooks:
+ * - useViewportRenderer: the WebGL renderer and its frame loop
+ * - useViewportControls: the orbit controls and the transform gizmo
+ * - useViewportGizmo: the navigation gizmo in the top-right corner
+ * - useViewportRaycaster: click and box selection
+ * - useViewportPlay: Play's events, and the preview of one transition
+ * - useViewportPenTool: drawing shapes and paths, and editing their points
+ * - useViewportDepthGizmo: a Depth layer's handles
+ * - useMultiSelectProxy: the stand-in the gizmo drags when several objects are selected
+ * - useFrameAutoScale: the scale a fixed-size frame is shown at (its math is viewport/frameFit.ts)
+ * - useCenterOnSelection: the "center on selected" and "orient to selected" events
+ */
+
+import { useEffect, useRef, useMemo } from "react";
 import * as THREE from "three";
 import type { ViewportGizmo } from "three-viewport-gizmo";
-import { selectViewedObjectState, useEditorStore } from "../store/useEditorStore";
-import { filterMoveRoots } from "../store/entityIndex";
-import { getViewedState, resolveState, unwrapRotation, type StateValues } from "../animation/objectStates";
+import { selectDrawnEntities, useEditorStore } from "../store/useEditorStore";
+
+import { getEntityIndex } from "../scene/entityIndex";
+import { fadingObjects, getViewedState, resolveState } from "../animation/objectStates";
 import { SceneManager } from "../viewport/SceneManager";
+import { setWireframe } from "../viewport/entityMaterials";
+import { whenRendererReady } from "../viewport/rendererSettings";
 import { createRoomEnvironment } from "../viewport/sceneEnvironment";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
 import { editorSceneSource } from "../viewport/editorSceneSource";
+import { getLiveRenderer, setLiveScene } from "../viewport/liveViewport";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
 import { useViewportControls } from "../viewport/hooks/useViewportControls";
 import { useViewportRaycaster } from "../viewport/hooks/useViewportRaycaster";
@@ -16,6 +36,9 @@ import { useViewportGizmo } from "../viewport/hooks/useViewportGizmo";
 import { useViewportPlay } from "../viewport/hooks/useViewportPlay";
 import { useViewportPenTool } from "../viewport/hooks/useViewportPenTool";
 import { useViewportDepthGizmo } from "../viewport/hooks/useViewportDepthGizmo";
+import { useMultiSelectProxy } from "../viewport/hooks/useMultiSelectProxy";
+import { useFrameAutoScale } from "../viewport/hooks/useFrameAutoScale";
+import { useCenterOnSelection } from "../viewport/hooks/useCenterOnSelection";
 
 export function ViewportCanvas() {
   const wrapperRef   = useRef<HTMLDivElement | null>(null);
@@ -33,12 +56,14 @@ export function ViewportCanvas() {
   const isEditingPoint  = useEditorStore((state) => state.penTool?.mode === "edit" && state.penTool.selectedPoints.length > 0);
   const isEditingDepth  = useEditorStore((state) => state.depthEdit !== null);
   const sceneSettings   = useEditorStore((state) => state.sceneSettings);
-  const entities        = useEditorStore((state) => state.entities);
+  // As they're drawn: an object that uses a material asset comes with the asset's layers.
+  const entities        = useEditorStore(selectDrawnEntities);
+
   const selectedEntityIds = useEditorStore((state) => state.selectedEntityIds);
   const viewedStates    = useEditorStore((state) => state.viewedStates);
   const objectStates    = useEditorStore((state) => state.animation.states);
 
-  const [autoScaleFactor, setAutoScaleFactor] = useState(1);
+  const autoScaleFactor = useFrameAutoScale(wrapperRef, frame, isPreviewMode);
 
   // Initialize Managers synchronously so scene and camera are never undefined
   const managers = useMemo(() => {
@@ -48,7 +73,7 @@ export function ViewportCanvas() {
     const sceneManager  = new SceneManager(storeState.sceneSettings);
     // Use aspect = 1 initially; ResizeObserver will correct it immediately after mount.
     const cameraManager = new CameraManager(initialProfile, storeState.projectionMode, 1);
-    const objectManager = new ObjectManager(sceneManager.scene, new Map(), editorSceneSource);
+    const objectManager = new ObjectManager(sceneManager.scene, new Map(), editorSceneSource, { getRenderer: getLiveRenderer });
 
     return { sceneManager, cameraManager, objectManager };
   }, []);
@@ -56,8 +81,7 @@ export function ViewportCanvas() {
   const { sceneManager, cameraManager, objectManager } = managers;
   const scene = sceneManager.scene;
 
-  // Dev-only console handle for manual smoke tests (no test suite — the THREE
-  // graph is inspected from the devtools console, see main.tsx). Set in an
+  // Dev-only console handle for manual and automated smoke tests. Set in an
   // effect so it always points at the committed managers, not a render pass
   // StrictMode discarded.
   useEffect(() => {
@@ -66,32 +90,13 @@ export function ViewportCanvas() {
     }
   }, [sceneManager, objectManager]);
 
-  // -- Multi-select Proxy --
-  const selectionProxyRef = useRef(new THREE.Group());
-  const initialOffsetsRef = useRef<Map<string, THREE.Matrix4>>(new Map());
-
-  useEffect(() => {
-    const proxy = selectionProxyRef.current;
-    proxy.userData.editorOnly = true; // never exported — see hideEditorOnlyObjects
-    scene.add(proxy);
-    return () => { scene.remove(proxy); };
-  }, [scene]);
-
   // ── Single shared camera ref ─────────────────────────────────────────────
   // All three viewport hooks read from this ref so they always use the live
   // active camera, even after perspective ↔ orthographic switches.
   const cameraRef = useRef<THREE.Camera>(cameraManager.activeCamera);
 
-  useEffect(() => {
-    (window as any).__libre3dScene = sceneManager.scene;
-    return () => {
-      if ((window as any).__libre3dScene === sceneManager.scene) {
-        delete (window as any).__libre3dScene;
-      }
-    };
-  }, [sceneManager]);
-
-
+  // Export and the Depth layer's reach read the live scene from outside the viewport (liveViewport.ts).
+  useEffect(() => setLiveScene(sceneManager.scene), [sceneManager]);
 
   // -- Setup Hooks --
   // Declared before useViewportRenderer (and populated later, by
@@ -127,11 +132,21 @@ export function ViewportCanvas() {
   useEffect(() => {
     const renderer = rendererRef.current;
     if (!renderer) return;
-    const environment = createRoomEnvironment(renderer);
-    sceneManager.setEnvironmentMap(environment.texture);
+    let environment: THREE.RenderTarget | null = null;
+    let unmounted = false;
+    // Once the renderer has started (useViewportRenderer starts it; this only waits for it).
+    whenRendererReady(renderer).then(
+      () => {
+        if (unmounted) return;
+        environment = createRoomEnvironment(renderer);
+        sceneManager.setEnvironmentMap(environment.texture);
+      },
+      () => undefined, // useViewportRenderer reports a renderer that couldn't start
+    );
     return () => {
+      unmounted = true;
       sceneManager.setEnvironmentMap(null);
-      environment.dispose();
+      environment?.dispose();
     };
   }, [sceneManager, rendererRef]);
 
@@ -159,105 +174,9 @@ export function ViewportCanvas() {
 
   const depthAnchorRef = useViewportDepthGizmo(depthFrameRef, cameraRef, rendererRef, scene, objectManager, transformControlsRef);
 
-  // -- Proxy Setup --
-  useEffect(() => {
-    const proxy = selectionProxyRef.current;
-    scene.add(proxy);
-    return () => {
-      scene.remove(proxy);
-    };
-  }, [scene]);
+  const selectionProxyRef = useMultiSelectProxy(scene, objectManager, transformControlsRef);
 
-  // -- Multi-select Drag Handlers --
-  // Only the selection's move roots are driven by the proxy. A selected
-  // descendant of another selected entity already follows its parent through
-  // the scene graph; writing it too would solve its local transform against the
-  // parent's pre-update matrix and then move it again when the parent syncs —
-  // an overshoot that compounds per nesting level (visible as skinned meshes
-  // smearing when box-select grabs a whole bone chain).
-  useEffect(() => {
-    const tc = transformControlsRef.current;
-    if (!tc) return;
-
-    const getDragRootIds = () => {
-      const { entities, selectedEntityIds } = useEditorStore.getState();
-      return filterMoveRoots(entities, selectedEntityIds);
-    };
-
-    const onDragChange = (event: any) => {
-      const isDragging = event.value;
-      const proxy = selectionProxyRef.current;
-      if (isDragging && tc.object === proxy) {
-        initialOffsetsRef.current.clear();
-        proxy.updateMatrixWorld(true);
-        const proxyInverse = proxy.matrixWorld.clone().invert();
-        getDragRootIds().forEach(id => {
-          const obj = objectManager.getObject(id);
-          if (obj) {
-            obj.updateMatrixWorld(true);
-            initialOffsetsRef.current.set(id, proxyInverse.clone().multiply(obj.matrixWorld));
-          }
-        });
-      }
-    };
-
-    const onObjectChange = () => {
-      const target = tc.object;
-      const proxy = selectionProxyRef.current;
-      if (target === proxy) {
-        const updates: Record<string, StateValues> = {};
-        proxy.updateMatrixWorld(true);
-        const proxyMat = proxy.matrixWorld;
-        const store = useEditorStore.getState();
-        const { entities } = store;
-        getDragRootIds().forEach(id => {
-          const localMat = initialOffsetsRef.current.get(id);
-          const obj = objectManager.getObject(id);
-          const entity = entities.find(e => e.id === id);
-          if (localMat && obj && entity) {
-            const newWorldMat = proxyMat.clone().multiply(localMat);
-            // entity.position/rotation/scale are LOCAL to the object's parent —
-            // solve the local matrix against the live parent's world matrix
-            // before storing, otherwise parented entities (imported child nodes,
-            // grouped children) get world values written into local fields and
-            // jump on the next sync.
-            const parent = obj.parent;
-            if (parent) {
-              parent.updateMatrixWorld(true);
-              newWorldMat.premultiply(parent.matrixWorld.clone().invert());
-            }
-            const pos = new THREE.Vector3();
-            const quat = new THREE.Quaternion();
-            const scale = new THREE.Vector3();
-            newWorldMat.decompose(pos, quat, scale);
-            const rot = new THREE.Euler().setFromQuaternion(quat);
-            // Where the object was shown: Base, or the state it's shown in (which the edit goes to).
-            const shown = resolveState(entity, selectViewedObjectState(store, id));
-            // Wrapped to ±180° by the quaternion; keep the turn nearest the stored one (see unwrapRotation).
-            const next = { position: pos.toArray(), rotation: unwrapRotation([rot.x, rot.y, rot.z], shown.rotation), scale: scale.toArray() };
-            // Only what this drag changed (decompose leaves float noise in the rest), so a state
-            // doesn't start setting values it left to Base.
-            updates[id] = Object.fromEntries(
-              (["position", "rotation", "scale"] as const)
-                .filter((key) => next[key].some((value, axis) => Math.abs(value - shown[key][axis]) > 1e-6))
-                .map((key) => [key, next[key]]),
-            );
-          }
-        });
-        store.updateShownTransforms(updates);
-        // As for one object (useViewportControls): the drag's first write recorded its undo step,
-        // so the rest of the drag joins it. Tracking resumes when the drag ends.
-        if (tc.dragging) useEditorStore.temporal.getState().pause();
-      }
-    };
-
-    tc.addEventListener("dragging-changed", onDragChange);
-    tc.addEventListener("objectChange", onObjectChange);
-    return () => {
-      tc.removeEventListener("dragging-changed", onDragChange);
-      tc.removeEventListener("objectChange", onObjectChange);
-    };
-  }, [transformControlsRef, objectManager]);
+  useCenterOnSelection(orbitControlsRef, objectManager, cameraRef);
 
   // -- Sync Scene Settings --
   useEffect(() => {
@@ -269,16 +188,15 @@ export function ViewportCanvas() {
     sceneManager.updateGridVisibility(sceneSettings.showGrid !== false);
 
     // Wireframe sync
+    const applyWireframe = (mesh: THREE.Mesh) => {
+      if ("wireframe" in mesh.material) setWireframe(mesh.material as THREE.MeshStandardMaterial, sceneSettings.wireframe);
+    };
     objectManager?.getMeshes().forEach((obj) => {
       if (obj instanceof THREE.Mesh) {
-        if ("wireframe" in obj.material) {
-          (obj.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
-        }
+        applyWireframe(obj);
       } else {
         obj.traverse((child) => {
-          if (child instanceof THREE.Mesh && "wireframe" in child.material) {
-            (child.material as THREE.MeshStandardMaterial).wireframe = sceneSettings.wireframe;
-          }
+          if (child instanceof THREE.Mesh) applyWireframe(child);
         });
       }
     });
@@ -317,7 +235,14 @@ export function ViewportCanvas() {
     const transformTarget = transformControlsRef.current?.object ?? null;
     const isDragging      = !!transformControlsRef.current?.dragging;
 
+    // Before the sync, which draws the objects a state can fade as see-through ones.
+    objectManager.setFadingObjects(fadingObjects(objectStates));
     objectManager.syncMeshes(entities, transformTarget, isDragging);
+
+    // This effect runs on every edit, and the loops below visit every object: an entity is looked up
+    // in the index and the selection in a set, not by searching the arrays once per object.
+    const { byId } = getEntityIndex(entities);
+    const selectedIdSet = new Set(selectedEntityIds);
 
     // Objects shown in one of their states (syncMeshes just put everything in Base). Not the one the
     // gizmo is dragging: the drag already put it there, and writes into the state. Play shows every
@@ -325,7 +250,7 @@ export function ViewportCanvas() {
     if (!isPreviewMode) {
       Object.keys(viewedStates).forEach((entityId) => {
         const objectState = getViewedState(viewedStates, objectStates, entityId);
-        const entity = objectState && entities.find((e) => e.id === entityId);
+        const entity = objectState && byId.get(entityId);
         const isDraggedObject = isDragging && transformTarget === objectManager.getObject(entityId);
         if (entity && !isDraggedObject) objectManager.applyPose(entityId, resolveState(entity, objectState));
       });
@@ -393,10 +318,11 @@ export function ViewportCanvas() {
 
     // Helper visibility
     objectManager.getMeshes().forEach((obj, id) => {
-      const entity     = entities.find(e => e.id === id);
-      const isSelected = selectedEntityIds.includes(id);
+      const entity     = byId.get(id);
+      const isSelected = selectedIdSet.has(id);
       if (obj.userData.selectionOutline) {
-        (obj.userData.selectionOutline as THREE.LineSegments).visible = isSelected && (entity?.visible ?? true);
+        // Hidden while a Depth layer is edited (as Spline does), so the box doesn't hide the gradient.
+        (obj.userData.selectionOutline as THREE.LineSegments).visible = isSelected && !isEditingDepth && (entity?.visible ?? true);
       }
       if (obj.userData.helper) {
         const helper = obj.userData.helper as THREE.DirectionalLightHelper;
@@ -441,106 +367,6 @@ export function ViewportCanvas() {
     resizeObserver.observe(container);
     return () => resizeObserver.disconnect();
   }, [cameraManager, rendererRef, gizmoRef]);
-
-  // -- Auto Scale Logic (Fixed Frame Mode) --
-  useEffect(() => {
-    const wrapper      = wrapperRef.current;
-    const viewportHost = wrapper?.parentElement;
-    if (!wrapper || !viewportHost) {
-      setAutoScaleFactor(1);
-      return;
-    }
-
-    const updateScale = () => {
-      if (frame.mode !== "fixed") {
-        setAutoScaleFactor(1);
-        return;
-      }
-      const viewportRect   = viewportHost.getBoundingClientRect();
-      const leftSidebar    = document.querySelector<HTMLElement>(".left-sidebar");
-      const rightSidebar   = document.querySelector<HTMLElement>(".right-sidebar");
-      const floatingToolbar = document.querySelector<HTMLElement>(".floating-toolbar");
-
-      // Play hides the sidebars and the toolbar, so the frame gets the whole viewport.
-      const leftInset  = isPreviewMode ? 0 : leftSidebar    ? Math.max(0, leftSidebar.getBoundingClientRect().right    - viewportRect.left)  : 280;
-      const rightInset = isPreviewMode ? 0 : rightSidebar   ? Math.max(0, viewportRect.right - rightSidebar.getBoundingClientRect().left)    : 320;
-      const topInset   = isPreviewMode ? 0 : floatingToolbar ? Math.max(0, floatingToolbar.getBoundingClientRect().bottom - viewportRect.top) : 0;
-
-      const availableWidth  = Math.max(1, viewportRect.width  - leftInset - rightInset);
-      const availableHeight = Math.max(1, viewportRect.height - topInset);
-      const nextScale = Math.min(1, availableWidth / frame.width, availableHeight / frame.height);
-      setAutoScaleFactor(Number.isFinite(nextScale) ? Math.max(nextScale, 0.1) : 1);
-    };
-
-    updateScale();
-    const observer = new ResizeObserver(updateScale);
-    observer.observe(viewportHost);
-    return () => observer.disconnect();
-  }, [frame.mode, frame.width, frame.height, isPreviewMode]);
-
-
-  // -- Viewport centering events --
-  useEffect(() => {
-    const handleCenterOnSelected = () => {
-      if (!orbitControlsRef.current || !objectManager) return;
-      const selectedIds = useEditorStore.getState().selectedEntityIds;
-      if (selectedIds.length === 0) return;
-
-      const box = new THREE.Box3();
-      selectedIds.forEach(id => {
-        const mesh = objectManager.getObject(id);
-        if (mesh) {
-           const targetPos = new THREE.Vector3();
-           mesh.getWorldPosition(targetPos);
-           box.expandByPoint(targetPos);
-        }
-      });
-      const center = new THREE.Vector3();
-      box.getCenter(center);
-      
-      const camera    = cameraRef.current;
-      const offset = new THREE.Vector3().subVectors(camera.position, orbitControlsRef.current.target);
-      orbitControlsRef.current.target.copy(center);
-      camera.position.copy(center).add(offset);
-      orbitControlsRef.current.update();
-    };
-
-    const handleOrientateToSelected = () => {
-      if (!orbitControlsRef.current || !objectManager) return;
-      const selectedIds = useEditorStore.getState().selectedEntityIds;
-      if (selectedIds.length === 0) return;
-
-      const box = new THREE.Box3();
-      selectedIds.forEach(id => {
-        const mesh = objectManager.getObject(id);
-        if (mesh) {
-           const targetPos = new THREE.Vector3();
-           mesh.getWorldPosition(targetPos);
-           box.expandByPoint(targetPos);
-        }
-      });
-      const center = new THREE.Vector3();
-      box.getCenter(center);
-
-      const camera        = cameraRef.current;
-      orbitControlsRef.current.target.copy(center);
-      const currentZoom   = useEditorStore.getState().viewportZoom || 100;
-      const defaultDistance = 11.180339887498949;
-      camera.position.set(
-        center.x,
-        center.y,
-        center.z + defaultDistance * (100 / currentZoom)
-      );
-      orbitControlsRef.current.update();
-    };
-
-    window.addEventListener("libre3d-center-on-selected",    handleCenterOnSelected);
-    window.addEventListener("libre3d-orientate-to-selected", handleOrientateToSelected);
-    return () => {
-      window.removeEventListener("libre3d-center-on-selected",    handleCenterOnSelected);
-      window.removeEventListener("libre3d-orientate-to-selected", handleOrientateToSelected);
-    };
-  }, [orbitControlsRef, objectManager, cameraRef]);
 
   // Files dropped on the editor are imported by DropOverlay (EditorLayout), not here.
 

@@ -7,6 +7,8 @@
 
 :root {
   --bg-main: #1e1e24;
+  /* Behind see-through colours (swatches, the opacity slider, ramps): a grey checkerboard. */
+  --checker: repeating-conic-gradient(#8a8a8a 0 25%, #c4c4c4 0 50%) 0 0 / 8px 8px;
   --bg-panel: rgba(30, 30, 35, 0.72);
   --bg-surface: rgba(45, 45, 50, 0.6);
   --bg-input: rgba(120, 120, 128, 0.22);

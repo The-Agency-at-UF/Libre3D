@@ -29,6 +29,7 @@ describe("verifyAuth", () => {
     await expect(verifyAuth({ authorization: "Bearer good-token" }, env)).resolves.toEqual({
       authorized: true,
       userId: "user-sub-1",
+      groups: [],
     });
     expect(createVerifierMock).toHaveBeenCalledWith({
       userPoolId: env.VITE_COGNITO_USER_POOL_ID,

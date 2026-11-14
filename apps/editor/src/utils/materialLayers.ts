@@ -1,19 +1,20 @@
 import * as THREE from "three";
 import { createId } from "./createId";
+import { createImageLayer } from "../scene/entityFactories";
+import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "../scene/layers";
 import { MAX_ASSET_BYTES, hashAsset } from "./sceneAssets";
-import { saveTextureAsset } from "./textureAssetStore";
 import type {
   ColorLayer,
   ImageLayer,
-  ImageSlot,
   LightingLayer,
   LightingModel,
   MaterialLayer,
-} from "../store/useEditorStore";
+  TextureRef,
+} from "../scene/types";
 
 // Turns a parsed glTF THREE.Material into the editable layer stack this codebase
-// already uses for primitives (Color + Lighting, plus an Image layer per texture
-// map). It's the reverse of ObjectManager.materialClassForModel: read a material,
+// already uses for primitives (Lighting + Color, plus an Image layer per texture
+// map), and the object's opacity. It's the reverse of materialClassForLayer (viewport/entityMaterials.ts): read a material,
 // emit layers; that function reads layers, builds a material.
 //
 // TEXTURE EXTRACTION — approach chosen: (A) canvas re-encode.
@@ -32,16 +33,21 @@ import type {
 
 const createLayerId = (): string => createId("layer");
 
+// Whether a material is (or stands for) one of three's built-in classes, by its flag: node
+// materials (three/webgpu) carry the flags of the built-in ones they stand for, `instanceof` doesn't
+// see them.
+const is = (material: THREE.Material, flag: string): boolean => (material as unknown as Record<string, unknown>)[flag] === true;
+
 // Maps a parsed material's class to our LightingModel, mirroring
-// ObjectManager.materialClassForModel in reverse. MeshPhysicalMaterial extends
-// MeshStandardMaterial and both map to "physical" (clearcoat is read into the
+// materialClassForLayer (viewport/entityMaterials.ts) in reverse. Physical extends
+// standard and both map to "physical" (clearcoat is read into the
 // lighting layer; other physical-only features like sheen aren't surfaced yet).
-export function lightingModelForMaterial(material: THREE.Material): LightingModel {
-  if (material instanceof THREE.MeshStandardMaterial) return "physical"; // incl. MeshPhysicalMaterial
-  if (material instanceof THREE.MeshPhongMaterial) return "phong";
-  if (material instanceof THREE.MeshToonMaterial) return "toon";
-  if (material instanceof THREE.MeshLambertMaterial) return "lambert";
-  return "none"; // MeshBasicMaterial (KHR_materials_unlit) and anything unrecognized
+function lightingModelForMaterial(material: THREE.Material): LightingModel {
+  if (is(material, "isMeshStandardMaterial")) return "physical"; // incl. physical
+  if (is(material, "isMeshPhongMaterial")) return "phong";
+  if (is(material, "isMeshToonMaterial")) return "toon";
+  if (is(material, "isMeshLambertMaterial")) return "lambert";
+  return "none"; // basic (KHR_materials_unlit) and anything unrecognized
 }
 
 function colorLayerFromMaterial(material: THREE.Material): ColorLayer {
@@ -49,22 +55,26 @@ function colorLayerFromMaterial(material: THREE.Material): ColorLayer {
     ? (material as THREE.MeshStandardMaterial).color.getHexString()
     : "ffffff";
 
-  // GLTFLoader already resolves alphaMode into these two THREE properties
-  // correctly at parse time (transparent=true for BLEND, alphaTest>0 for
-  // MASK) -- reconstruct the effective alphaMode from them rather than
-  // needing the raw glTF JSON here.
-  const alphaMode: NonNullable<ColorLayer["alphaMode"]> = material.transparent
-    ? "BLEND"
-    : material.alphaTest > 0
-      ? "MASK"
-      : "OPAQUE";
-
   return {
     id: createLayerId(),
     type: "color",
     enabled: true,
-    opacity: typeof material.opacity === "number" ? material.opacity : 1,
+    opacity: 1,
+    blendMode: "normal",
     color: `#${color}`,
+  };
+}
+
+// The surface, kept on the Lighting layer. GLTFLoader already resolves alphaMode into these two
+// THREE properties at parse time (transparent=true for BLEND, alphaTest>0 for MASK), so the effective
+// alphaMode is read back from them rather than from the raw glTF JSON.
+function surfaceFromMaterial(material: THREE.Material): Pick<LightingLayer, "alphaMode" | "alphaCutoff" | "doubleSided"> {
+  const alphaMode: NonNullable<LightingLayer["alphaMode"]> = material.transparent
+    ? "BLEND"
+    : material.alphaTest > 0
+      ? "MASK"
+      : "OPAQUE";
+  return {
     alphaMode,
     ...(alphaMode === "MASK" ? { alphaCutoff: material.alphaTest } : {}),
     doubleSided: material.side === THREE.DoubleSide,
@@ -83,17 +93,19 @@ function lightingLayerFromMaterial(material: THREE.Material, model: LightingMode
     type: "lighting",
     enabled: true,
     opacity: 1,
+    blendMode: "normal",
     model,
-    roughness: typeof std.roughness === "number" ? std.roughness : 0.45,
-    metalness: typeof std.metalness === "number" ? std.metalness : 0.08,
-    clearcoat: material instanceof THREE.MeshPhysicalMaterial ? material.clearcoat : 0,
-    clearcoatRoughness: material instanceof THREE.MeshPhysicalMaterial ? material.clearcoatRoughness : 0,
+    roughness: typeof std.roughness === "number" ? std.roughness : DEFAULT_ROUGHNESS,
+    metalness: typeof std.metalness === "number" ? std.metalness : DEFAULT_METALNESS,
+    clearcoat: is(material, "isMeshPhysicalMaterial") ? (material as THREE.MeshPhysicalMaterial).clearcoat : 0,
+    clearcoatRoughness: is(material, "isMeshPhysicalMaterial") ? (material as THREE.MeshPhysicalMaterial).clearcoatRoughness : 0,
     shininess: typeof phong.shininess === "number" ? phong.shininess : 30,
     emissive: `#${emissive}`,
     emissiveIntensity:
       typeof (material as THREE.MeshStandardMaterial).emissiveIntensity === "number"
         ? (material as THREE.MeshStandardMaterial).emissiveIntensity
         : 1,
+    ...surfaceFromMaterial(material),
   };
 }
 
@@ -129,14 +141,21 @@ async function extractTextureBlob(texture: THREE.Texture): Promise<Blob | null> 
 // A cache spanning one import's derivation pass, keyed by underlying image
 // identity. glTF materials routinely reuse the same physical image across slots
 // and meshes (a shared packed metallic-roughness map is the classic case) — this
-// dedupes so each unique image is extracted and saved to OPFS exactly once, with
+// dedupes so each unique image is extracted and saved exactly once, with
 // one shared textureAssetId. A cached `null` records "extraction already failed"
 // so a failing image isn't retried per-slot. The ID itself is the PNG's content
 // hash (sceneAssets.ts), so the same image across imports is also stored once.
 export type TextureDedupCache = Map<unknown, string | null>;
 export const createTextureDedupCache = (): TextureDedupCache => new Map();
 
-async function resolveTextureAssetId(texture: THREE.Texture, cache: TextureDedupCache): Promise<string | null> {
+/**
+ * Where an extracted texture is kept, under its content hash: the SceneSource's `saveTexture`
+ * (viewport/sceneSource.ts). This module never touches storage itself, so the share-link viewer,
+ * which runs it too, writes nothing to a visitor's browser.
+ */
+export type SaveTexture = (assetId: string, blob: Blob) => Promise<void>;
+
+async function resolveTextureAssetId(texture: THREE.Texture, cache: TextureDedupCache, saveTexture: SaveTexture): Promise<string | null> {
   const key: unknown = texture.image ?? texture;
   if (cache.has(key)) return cache.get(key) ?? null;
 
@@ -148,49 +167,72 @@ async function resolveTextureAssetId(texture: THREE.Texture, cache: TextureDedup
     return null;
   }
   const id = await hashAsset(blob);
-  await saveTextureAsset(id, blob);
+  await saveTexture(id, blob);
   cache.set(key, id);
   return id;
 }
 
-async function imageLayersFromMaterial(material: THREE.Material, cache: TextureDedupCache): Promise<ImageLayer[]> {
+// The material's pictures: its colour map as an Image layer, the others as the Lighting layer's maps
+// (glTF's packed metallic-roughness picture fills both roughness and metalness, as three does).
+async function picturesFromMaterial(
+  material: THREE.Material,
+  cache: TextureDedupCache,
+  saveTexture: SaveTexture,
+): Promise<{ layers: ImageLayer[]; maps: NonNullable<LightingLayer["maps"]> }> {
   const std = material as THREE.MeshStandardMaterial;
-  const layers: ImageLayer[] = [];
-
-  const add = async (texture: THREE.Texture | null | undefined, slot: ImageSlot): Promise<void> => {
-    if (!texture) return;
-    const textureAssetId = await resolveTextureAssetId(texture, cache);
-    if (!textureAssetId) return;
-    layers.push({
-      id: createLayerId(),
-      type: "image",
-      enabled: true,
-      opacity: 1,
-      textureAssetId,
-      slot,
-      wrapS: texture.wrapS,
-      wrapT: texture.wrapT,
-    });
+  const refFor = async (texture: THREE.Texture | null | undefined): Promise<TextureRef | null> => {
+    if (!texture) return null;
+    const textureAssetId = await resolveTextureAssetId(texture, cache, saveTexture);
+    return textureAssetId ? { textureAssetId, wrapS: texture.wrapS, wrapT: texture.wrapT } : null;
   };
 
-  await add(std.map, "color");
-  await add(std.normalMap, "normal");
-  // glTF packs metallic + roughness into a single texture Three assigns to both
-  // roughnessMap and metalnessMap — emit one "metallicRoughness" layer, not two.
-  await add(std.roughnessMap ?? std.metalnessMap, "metallicRoughness");
-  await add((material as THREE.MeshStandardMaterial).emissiveMap, "emissive");
-  await add(std.aoMap, "ao");
+  const layers: ImageLayer[] = [];
+  const color = await refFor(std.map);
+  // glTF's colour map, at the mesh's UVs as it was drawn.
+  if (color) layers.push(createImageLayer({ ...color, id: createLayerId() }));
 
-  return layers;
+  const maps: NonNullable<LightingLayer["maps"]> = {};
+  const normal = await refFor(std.normalMap);
+  if (normal) maps.normal = normal;
+  const metallicRoughness = await refFor(std.roughnessMap ?? std.metalnessMap);
+  if (metallicRoughness) {
+    maps.roughness = metallicRoughness;
+    maps.metalness = { ...metallicRoughness };
+  }
+  const emissive = await refFor(std.emissiveMap);
+  if (emissive) maps.emissive = emissive;
+  const ao = await refFor(std.aoMap);
+  if (ao) maps.ao = ao;
+  return { layers, maps };
 }
 
-// Builds the full editable layer stack (Color + Lighting + Image layers) for one
-// imported mesh's material. Pass a shared cache across every mesh in the same
-// import so reused images are extracted once.
-export async function deriveMaterialLayers(material: THREE.Material, cache: TextureDedupCache): Promise<MaterialLayer[]> {
+/** An imported mesh's editable material: its layer stack, top first, and the object's opacity. */
+export interface DerivedMaterial {
+  layers: MaterialLayer[];
+  opacity: number;
+}
+
+// Builds the full editable layer stack (Lighting, then the colour: a Color layer, or the colour map
+// as an Image layer with the base colour multiplied over it, as glTF draws them) for one imported
+// mesh's material, and the object's opacity from the material's. Pass a shared cache across every
+// mesh in the same import so reused images are extracted once. Each image goes to `saveTexture`
+// under its hash.
+export async function deriveMaterialLayers(material: THREE.Material, cache: TextureDedupCache, saveTexture: SaveTexture): Promise<DerivedMaterial> {
   const model = lightingModelForMaterial(material);
-  const imageLayers = await imageLayersFromMaterial(material, cache);
-  return [colorLayerFromMaterial(material), lightingLayerFromMaterial(material, model), ...imageLayers];
+  const pictures = await picturesFromMaterial(material, cache, saveTexture);
+  const lighting = lightingLayerFromMaterial(material, model);
+  if (Object.keys(pictures.maps).length > 0) lighting.maps = pictures.maps;
+  const color = colorLayerFromMaterial(material);
+  const colour: MaterialLayer[] =
+    pictures.layers.length === 0
+      ? [color]
+      : color.color.toLowerCase() === "#ffffff"
+        ? pictures.layers
+        : [{ ...color, blendMode: "multiply" }, ...pictures.layers];
+  return {
+    layers: [lighting, ...colour],
+    opacity: typeof material.opacity === "number" ? material.opacity : 1,
+  };
 }
 
 // Whether stored image bytes are a JPEG, by their first bytes (FF D8 FF): a
@@ -200,26 +242,38 @@ export async function isJpeg(blob: Blob): Promise<boolean> {
   return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
 }
 
-// Rebuilds a THREE.Texture from a stored blob for an ImageLayer, restoring the
-// wrap/colorSpace/flip conventions glTF textures use so the reloaded map renders
-// identically to the parsed original.
-export async function buildTextureFromLayer(blob: Blob, layer: ImageLayer): Promise<THREE.Texture> {
-  const bitmap = await createImageBitmap(blob);
+/** How a stored picture is made into a texture: its wrapping, whether it's turned up (see below), and whether it holds colours. */
+export interface TextureOptions {
+  wrapS: number;
+  wrapT: number;
+  flipY?: boolean;
+  srgb: boolean;
+  // Drawn with sharp pixels when magnified (an Image layer's Sharpness: Pixelated).
+  nearest?: boolean;
+}
+
+// Rebuilds a THREE.Texture from a stored blob (an Image layer's picture, a Lighting map's), restoring
+// the wrap/colorSpace/flip conventions glTF textures use so the reloaded map renders identically to
+// the parsed original. A colour picture (`srgb`) is in sRGB; data (normals, roughness, …) isn't.
+export async function buildTexture(blob: Blob, options: TextureOptions): Promise<THREE.Texture> {
+  const bitmap = await createImageBitmap(blob, options.flipY ? { imageOrientation: "flipY" } : undefined);
   const texture = new THREE.Texture(bitmap);
   // wrapS/wrapT are persisted as plain numbers (THREE wrap constants); the union
   // type is narrower than number, so assert back to it here.
-  texture.wrapS = layer.wrapS as THREE.Wrapping;
-  texture.wrapT = layer.wrapT as THREE.Wrapping;
+  texture.wrapS = options.wrapS as THREE.Wrapping;
+  texture.wrapT = options.wrapT as THREE.Wrapping;
   // glTF stores textures unflipped and Three uploads them with flipY = false; the
-  // canvas re-encode preserved that top-left origin, so reload the same way.
+  // canvas re-encode preserved that top-left origin, so reload the same way. A picture uploaded in
+  // the editor is turned when it's decoded (an ImageBitmap can't be flipped on upload), so three's
+  // primitives, whose UVs go up, show it the way up it was made.
   texture.flipY = false;
-  texture.colorSpace =
-    layer.slot === "color" || layer.slot === "emissive" ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  texture.colorSpace = options.srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  if (options.nearest) texture.magFilter = THREE.NearestFilter;
   // GLTFExporter writes every texture as a PNG unless told otherwise; a JPEG (an
   // imported photo, utils/importImage.ts) stays one in exports and published
   // scenes, which keeps them several times smaller.
   if (await isJpeg(blob)) texture.userData.mimeType = "image/jpeg";
-  // Marks this texture as owned by ObjectManager's session cache so the group
+  // Marks this texture as owned by EntityMaterials' session cache so the group
   // disposal pass doesn't free it out from under other meshes sharing the id.
   texture.userData.libre3dManaged = true;
   texture.needsUpdate = true;

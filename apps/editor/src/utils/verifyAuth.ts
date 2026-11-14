@@ -2,7 +2,8 @@
  * PURPOSE: Server-side check that a request comes from a signed-in Libre3D user.
  *
  * INPUT: The incoming request headers (`Authorization: Bearer <access token>`) and the server env.
- * OUTPUT: The caller's user ID (the token's `sub`), or the status and message to reject with.
+ * OUTPUT: The caller's user ID (the token's `sub`) and Cognito groups (`cognito:groups`: what a route
+ * for some users only checks, such as the material library's), or the status and message to reject with.
  *
  * Cognito signs every token with a private key and publishes the matching public keys, so checking
  * a token needs no AWS credentials and no call to Cognito per request: the verifier downloads the
@@ -20,7 +21,7 @@ import { CognitoJwtVerifier } from "aws-jwt-verify";
 type VerifyAuthEnv = Record<string, string | undefined>;
 
 export type VerifyAuthResult =
-  | { authorized: true; userId: string }
+  | { authorized: true; userId: string; groups: string[] }
   | { authorized: false; status: number; error: string };
 
 type AccessTokenVerifier = ReturnType<typeof createAccessTokenVerifier>;
@@ -69,7 +70,8 @@ export const verifyAuth = async (headers: IncomingHttpHeaders, env: VerifyAuthEn
 
   try {
     const payload = await getVerifier(userPoolId, clientId).verify(token);
-    return { authorized: true, userId: payload.sub };
+    const groups = payload["cognito:groups"];
+    return { authorized: true, userId: payload.sub, groups: Array.isArray(groups) ? groups.filter((group): group is string => typeof group === "string") : [] };
   } catch (error) {
     // Expired, tampered with, from another pool or client, or an ID token sent as an access token.
     console.warn("Rejected an access token:", error instanceof Error ? error.message : error);

@@ -24,7 +24,7 @@
  */
 
 import * as THREE from "three";
-import type { CameraProfile, PlayCameraMode, PlayCameraSettings } from "../store/useEditorStore";
+import type { CameraProfile, PlayCameraMode, PlayCameraSettings } from "../scene/types";
 
 /** The modes in the order the Play Camera panel lists them. */
 export const PLAY_CAMERA_MODES: { value: PlayCameraMode; label: string }[] = [

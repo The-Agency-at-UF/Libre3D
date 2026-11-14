@@ -1,15 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Entity, MaterialLayer } from "../store/useEditorStore";
+import { DEFAULT_CAMERA_PROFILE, initialSceneDefaults } from "../scene/defaults";
+import type { Entity, MaterialLayer } from "../scene/types";
 import { stubBrowserGlobals } from "../testing/browserStubs";
 import { createPublishedSceneSource } from "./publishedSceneSource";
-import { VIEWER_DEFAULTS, viewerCamera, viewerSceneSettings } from "./SceneViewer";
-
-// The editor's defaults, from its store, which reads browser storage as it loads.
-const loadEditorDefaults = async () => {
-  vi.resetModules();
-  const { initialSceneDefaults, DEFAULT_CAMERA_PROFILE } = await import("../store/useEditorStore");
-  return { initialSceneDefaults, DEFAULT_CAMERA_PROFILE };
-};
+import { SceneManager } from "./SceneManager";
+import { viewerCamera, viewerSceneSettings } from "./SceneViewer";
 
 const entity = (id: string): Entity => ({
   id,
@@ -30,25 +25,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+// The defaults are scene/defaults.ts's, the ones the editor's store starts a scene with.
 describe("the viewer's defaults", () => {
-  // The viewer doesn't load the store that defines the editor's defaults, so it keeps its own copy.
-  it("are the editor's, for what a published scene uses", async () => {
-    const { initialSceneDefaults, DEFAULT_CAMERA_PROFILE } = await loadEditorDefaults();
-    expect(VIEWER_DEFAULTS).toEqual({
-      bgColor: initialSceneDefaults.bgColor,
-      fogEnabled: initialSceneDefaults.fogEnabled,
-      lightIntensity: initialSceneDefaults.lights.intensity,
-      environment: initialSceneDefaults.environment,
-      camera: {
-        position: DEFAULT_CAMERA_PROFILE.position,
-        target: DEFAULT_CAMERA_PROFILE.target,
-        fov: DEFAULT_CAMERA_PROFILE.fov,
-        near: DEFAULT_CAMERA_PROFILE.near,
-        far: DEFAULT_CAMERA_PROFILE.far,
-      },
-    });
-  });
-
   it("fill what a scene doesn't hold, under the settings it does, without the editor's grid", () => {
     expect(viewerSceneSettings({ bgColor: "#c7dfff", environment: { intensity: 2 } })).toMatchObject({
       bgColor: "#c7dfff",
@@ -57,18 +35,41 @@ describe("the viewer's defaults", () => {
       environment: { enabled: true, intensity: 2 },
       lights: { intensity: 0.75 },
     });
-    expect(viewerSceneSettings(undefined)).toMatchObject({ bgColor: "#0b1020", showGrid: false });
+    expect(viewerSceneSettings(undefined)).toMatchObject({
+      bgColor: initialSceneDefaults.bgColor,
+      fogEnabled: initialSceneDefaults.fogEnabled,
+      showGrid: false,
+      environment: initialSceneDefaults.environment,
+      lights: { intensity: initialSceneDefaults.lights.intensity },
+    });
   });
 
-  it("start from the scene's active camera with its Play setting, or the default camera", async () => {
-    const { DEFAULT_CAMERA_PROFILE } = await loadEditorDefaults();
+  it("start from the scene's active camera with its Play setting, or the default camera", () => {
     const active = { ...DEFAULT_CAMERA_PROFILE, id: "closeup", name: "Close", position: [1, 2, 3] as [number, number, number], play: { mode: "softOrbit" as const } };
 
     expect(viewerCamera({ entities: [], cameraProfiles: { personal: DEFAULT_CAMERA_PROFILE, closeup: active }, activeProfileId: "closeup" })).toMatchObject({
       position: [1, 2, 3],
       play: { mode: "softOrbit" },
     });
-    expect(viewerCamera({ entities: [] })).toMatchObject(VIEWER_DEFAULTS.camera);
+    const { position, target, fov, near, far } = DEFAULT_CAMERA_PROFILE;
+    expect(viewerCamera({ entities: [] })).toEqual({ position, target, fov, near, far });
+  });
+});
+
+describe("the viewer's scene", () => {
+  it("is built without the editor's grid, which the editor's scene has", () => {
+    const settings = viewerSceneSettings(undefined);
+    const editorOnly = (manager: SceneManager) => manager.scene.children.filter((child) => child.userData.editorOnly);
+
+    const viewer = new SceneManager(settings, { editorHelpers: false });
+    const editor = new SceneManager(settings);
+
+    expect(viewer.grid).toBeNull();
+    expect(editorOnly(viewer)).toEqual([]);
+    expect(editorOnly(editor)).toEqual([editor.grid]);
+    viewer.updateGridVisibility(true); // nothing to show, and nothing thrown
+    viewer.dispose();
+    editor.dispose();
   });
 });
 
@@ -88,12 +89,36 @@ describe("a published scene's source", () => {
 
   it("keeps what's derived for imported meshes in memory, never draws wireframe, and saves nothing", () => {
     const source = createPublishedSceneSource([entity("cube-1"), entity("cube-2")], {});
-    const layers: MaterialLayer[] = [{ id: "c", type: "color", enabled: true, opacity: 1, color: "#123456" }];
+    const layers: MaterialLayer[] = [{ id: "c", type: "color", enabled: true, opacity: 1, blendMode: "normal", color: "#123456" }];
 
-    source.setMaterialLayers("cube-2", layers);
-    source.applyHierarchyPrune(new Set(["cube-1"]), new Map());
+    source.setMaterialLayers("cube-2", layers, 1);
 
     expect(source.getEntities().map((each) => each.materialLayers)).toEqual([undefined, layers]);
     expect(source.isWireframe()).toBe(false);
+  });
+
+  it("hands out objects that use a material asset with the asset's layers, from the document's assets", () => {
+    const own: MaterialLayer[] = [{ id: "own", type: "color", enabled: true, opacity: 1, blendMode: "normal", color: "#111111" }];
+    const shared: MaterialLayer[] = [{ id: "shared", type: "color", enabled: true, opacity: 1, blendMode: "normal", color: "#ff0000" }];
+    const entities = [{ ...entity("cube-1"), materialLayers: own, materialAssetId: "m" }, { ...entity("cube-2"), materialLayers: own }, { ...entity("cube-3"), materialLayers: own, materialAssetId: "gone" }];
+
+    const source = createPublishedSceneSource(entities, {}, { m: { id: "m", name: "Red", layers: shared } });
+
+    expect(source.getEntities().map((each) => each.materialLayers)).toEqual([shared, own, own]);
+    // Without the assets (an older caller), every object keeps its own layers.
+    expect(createPublishedSceneSource(entities, {}).getEntities()).toBe(entities);
+  });
+
+  it("keeps a texture derived from an imported model in memory, and loads it back without a download", async () => {
+
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const source = createPublishedSceneSource([entity("cube-1")], {});
+    const texture = new Blob([new Uint8Array([1, 2, 3])]);
+
+    await source.saveTexture("derived", texture);
+
+    expect(await source.loadTexture("derived")).toBe(texture);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

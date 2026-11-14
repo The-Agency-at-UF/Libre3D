@@ -1,6 +1,7 @@
 import * as THREE from "three";
-import { type EditorState } from "../store/useEditorStore";
+import type { SceneSettingsConfig } from "../scene/types";
 import { getSafeColor } from "../utils/sceneColor";
+import { AMBIENT_FILL_KEY, canvasColor } from "./canvasOutput";
 import { InfiniteGrid } from "./InfiniteGrid";
 
 export class SceneManager {
@@ -11,12 +12,14 @@ export class SceneManager {
   // scene settings want it shown.
   private environmentMap: THREE.Texture | null = null;
   private environmentEnabled: boolean;
-  public grid: InfiniteGrid;
+  // The editor's grid. Null when the scene is built without the editor's helpers (the share-link viewer).
+  public grid: InfiniteGrid | null = null;
 
-  constructor(initialSettings: EditorState["sceneSettings"]) {
+  /** `editorHelpers: false` builds the scene without the editor's grid, for the share-link viewer. */
+  constructor(initialSettings: SceneSettingsConfig, { editorHelpers = true }: { editorHelpers?: boolean } = {}) {
     this.scene = new THREE.Scene();
 
-    const initialBgColor = new THREE.Color(getSafeColor(initialSettings.bgColor));
+    const initialBgColor = canvasColor(new THREE.Color(getSafeColor(initialSettings.bgColor)));
     this.scene.background = initialBgColor;
 
     if (initialSettings.fogEnabled) {
@@ -31,13 +34,16 @@ export class SceneManager {
     this.applyLighting();
 
     // Shader-drawn infinite XZ grid (X axis red, Z axis blue) — see InfiniteGrid.
-    this.grid = new InfiniteGrid();
-    this.grid.visible = initialSettings.showGrid !== false;
-    this.scene.add(this.grid);
+    if (editorHelpers) {
+      this.grid = new InfiniteGrid();
+      this.grid.visible = initialSettings.showGrid !== false;
+      this.scene.add(this.grid);
+    }
   }
 
   public updateBackground(color: string) {
-    const nextColor = new THREE.Color(getSafeColor(color));
+    // As the canvas takes it: three writes the background there without converting it.
+    const nextColor = canvasColor(new THREE.Color(getSafeColor(color)));
     if (this.scene.background instanceof THREE.Color) {
       if (!this.scene.background.equals(nextColor)) {
         this.scene.background.set(nextColor);
@@ -67,8 +73,26 @@ export class SceneManager {
 
   public updateEnvironment(enabled: boolean, intensity: number) {
     this.environmentEnabled = enabled;
-    this.scene.environmentIntensity = intensity;
+    if (this.scene.environmentIntensity !== intensity) {
+      this.scene.environmentIntensity = intensity;
+      this.refreshEnvironmentIntensity(intensity);
+    }
     this.applyLighting();
+  }
+
+  // Three hands a material the scene's environment intensity in a uniform it only refreshes for an
+  // object whose material or matrix changed (NodeMaterialObserver), not when the scene's value
+  // does: in the editor, which draws the same objects frame after frame, only the first object
+  // drawn each frame took a new intensity. The observer does compare `envMapIntensity`, so every
+  // material without an environment map of its own (which then ignores that value) is given it.
+  private refreshEnvironmentIntensity(intensity: number) {
+    this.scene.traverse((object) => {
+      const material = (object as THREE.Mesh).material;
+      for (const each of Array.isArray(material) ? material : material ? [material] : []) {
+        const lit = each as THREE.MeshStandardMaterial;
+        if ("envMapIntensity" in lit && !lit.envMap) lit.envMapIntensity = intensity;
+      }
+    });
   }
 
   /** The environment the renderer made (sceneEnvironment.ts), or null when it's gone. */
@@ -79,19 +103,25 @@ export class SceneManager {
 
   // The environment replaces the ambient light: it already fills the shadows (unevenly, as a room
   // does), and both together wash out dark materials. Only Physical materials take environment
-  // light, so Lambert, Phong and Toon are lit by the directional lights alone while it's on.
+  // light: Lambert, Phong and Toon don't, so they get the ambient light's fill on their own then.
   private applyLighting() {
     this.scene.environment = this.environmentEnabled ? this.environmentMap : null;
-    this.ambientLight.intensity = this.scene.environment ? 0 : this.lightIntensity * 1.5;
+    const ambient = this.lightIntensity * 1.5;
+    this.ambientLight.intensity = this.scene.environment ? 0 : ambient;
+    // Lambert, Phong and Toon don't take environment light: with the ambient light off they'd lose
+    // their fill and go darker, so they get it on their own (canvasOutput.ts).
+    this.scene.userData[AMBIENT_FILL_KEY] = this.scene.environment ? ambient : 0;
   }
 
   public updateGridVisibility(visible: boolean) {
-    this.grid.visible = visible;
+    if (this.grid) this.grid.visible = visible;
   }
 
   public dispose() {
     this.scene.remove(this.ambientLight);
-    this.scene.remove(this.grid);
-    this.grid.dispose();
+    if (this.grid) {
+      this.scene.remove(this.grid);
+      this.grid.dispose();
+    }
   }
 }

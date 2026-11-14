@@ -1,5 +1,6 @@
 import { useEditorStore } from "../../store/useEditorStore";
 import { PanelSection } from "../ui/PanelSection";
+import { Switch } from "../ui/Switch";
 import { CameraDropdown } from "./CameraDropdown";
 
 export function ViewportSettingsPanel() {
@@ -8,6 +9,10 @@ export function ViewportSettingsPanel() {
   const addCameraProfile = useEditorStore((state) => state.addCameraProfile);
   const deleteCameraProfile = useEditorStore((state) => state.deleteCameraProfile);
   const cameraProfiles = useEditorStore((state) => state.cameraProfiles);
+  // The frame-rate panel in the viewport's corner (useViewportRenderer builds it while this is on).
+  // A preference of this browser, not part of the scene, so it works in a view-only tab too.
+  const showFpsPanel = useEditorStore((state) => state.hudOverlay === "Stats");
+  const setEditorState = useEditorStore((state) => state.setEditorState);
 
   const cameraProfileEntries = [
     cameraProfiles.personal,
@@ -50,6 +55,7 @@ export function ViewportSettingsPanel() {
           onDelete={deleteCameraProfile}
         />
       </div>
+      <Switch label="FPS Panel" checked={showFpsPanel} onChange={(on) => setEditorState({ hudOverlay: on ? "Stats" : "None" })} />
     </PanelSection>
   );
 }

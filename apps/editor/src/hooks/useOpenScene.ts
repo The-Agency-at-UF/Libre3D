@@ -142,7 +142,7 @@ export function useOpenScene(sceneId: string): OpenSceneState {
       }
 
       // The viewport builds the scene from this browser's storage: fetch what it lacks first.
-      const refs = collectAssetRefs(toShow.content?.entities);
+      const refs = collectAssetRefs(toShow.content?.entities, toShow.content?.materials);
       const files = refs.filter((ref) => isAssetHash(ref.id)).length;
       const download = () =>
         downloadSceneAssets(sceneId, refs, (progress) => {

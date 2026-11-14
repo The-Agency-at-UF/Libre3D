@@ -122,7 +122,7 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, or group). A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), lit like the other primitives, with its Color layer shown from both sides (`doubleSided: true`). A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
+Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, or group). A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), unlit (Lighting `none`) and shown from both sides (`doubleSided: true` on its Lighting layer), like the other flat objects; the 3D primitives start with Phong lighting over a white Color layer. A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
 - **Signature**: `(type: "cube" | "sphere" | "torus" | "plane" | "path" | "directionalLight" | "group") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
@@ -147,7 +147,7 @@ Adds the shapes and paths of an imported SVG (made by `svgShapesToItems` in `pat
 - **Auto-selects**: The item or the group becomes selected
 
 #### `addImagePlane(name: string, textureAssetId: string, aspect: number, transparent: boolean) → string`
-Adds an imported picture (`importImageFile` in `utils/importImage.ts`) as an `"image"` entity named `name` at the origin: a flat plane `aspect` (width / height) wide, its longer side 2 units (`utils/imagePlane.ts`), stored as `imageAspect`. Its layers are a white Color layer shown from both sides (`alphaMode: "BLEND"` when `transparent`, the picture having see-through pixels), an unlit Lighting layer (`model: "none"`), and a Base Color Image layer pointing at `textureAssetId` (the file's SHA-256 in the texture store), clamped at the edges. One undo step; refused in view only; puts the pen down.
+Adds an imported picture (`importImageFile` in `utils/importImage.ts`) as an `"image"` entity named `name` at the origin: a flat plane `aspect` (width / height) wide, its longer side 2 units (`utils/imagePlane.ts`), stored as `imageAspect`. Its layers are an unlit Lighting layer (`model: "none"`) shown from both sides (`alphaMode: "BLEND"` when `transparent`, the picture having see-through pixels), a white Color layer, and a Base Color Image layer pointing at `textureAssetId` (the file's SHA-256 in the texture store), clamped at the edges. One undo step; refused in view only; puts the pen down.
 - **Returns**: New entity ID
 - **Auto-selects**: The new plane becomes selected
 
@@ -271,9 +271,6 @@ Dissolve a group, promoting children to its parent level.
 - **States**: The group's own states go with it
 - **Safety**: Only works on groups; silently fails on primitives
 
-#### `applyHierarchyPrune(removedIds: Set<string>, updates: Map<string, {...}>) → void`
-Internal action used during GLB import cleanup. Removes orphaned nodes and applies transform updates. (Rarely called directly.)
-
 ---
 
 ## Viewport & Transform
@@ -369,101 +366,217 @@ updatePostProcessing({
 
 ## Material Layers
 
-Each entity can have multiple material layers (color, lighting, textures) stacked on top of each other.
+An object's material is a stack of layers, **top first** (`materialLayers[0]` is the top, as the Materials panel lists it), plus the object's own `opacity`. The stack's rules live in `scene/layerStack.ts`:
+
+- **Drawn bottom to top.** Each layer goes over what's under it with its `blendMode` (`"normal" | "multiply" | "screen" | "overlay"`, the W3C compositing formulas on sRGB values) and its `opacity` (0–1, how strongly it shows). Its `enabled` is the row's eye. Every layer is drawn per pixel (`viewport/layerSources.ts`); a stack of Color layers under Lighting is just the material's colour.
+- **Lighting** shades the layers under it; the layers over it are drawn on the shaded colour as they are (a Fresnel there glows, as in Spline). Its opacity is how much shading shows (0 looks unlit, as with its eye off); its blend mode stays `"normal"`. It can't be removed, so it also holds the surface settings (`alphaMode`, `alphaCutoff`, `doubleSided`) and the maps.
+- **Colour layers** are Color, Image, Depth, Gradient, Noise, Fresnel, Normal, Matcap, Rainbow and Glass; a row's type dropdown switches among them and Displace, and any layer moves anywhere in the stack. An object keeps one that paints: a layer that paints can be removed, or switched to Displace, only while another one stays.
+- **Displace** paints nothing: it moves the surface (`planStack`'s `displace`). Its row's number is its intensity and it has no blend mode or Mask mode. Only primitives offer it (`DISPLACEABLE_ENTITY_TYPES`: cube, sphere, torus, plane), and they're built finer while they have one.
+- **Glass** paints what's behind the object (`planStack`'s `glass`), so the object is drawn after the solid ones. Under Lighting it still gets highlights, but what's behind isn't shaded again.
+- **Mask mode** (`mask: true`, on Image, Matcap, Rainbow, Depth, Gradient, Noise and Fresnel; Spline's Layer Masking): the layer paints nothing and shows the one painting layer right under it only where it's light (`maskTarget`). Over Lighting, another mask or nothing, it masks nothing.
+- **Image layers** (an image plane's picture, an imported model's colour map, or one picked in the drawer) are colour layers like the others since PR 4b.
+- New 3D objects start with Lighting (Phong) over a white Color layer; flat ones (`FLAT_ENTITY_TYPES`: plane, shape, image) start unlit and shown from both sides (`createFlatMaterialLayers`).
+
+Every action below edits one object (or, in a batch, several), records one undo step, and records none when the rules refuse it. Refused in view only.
+
+The first argument of each layer action names **whose stack it edits** (`ownerId`): an object's, or a material asset's. An object that uses an asset has its asset's stack edited, so every object using it changes; a batch that names several users of one asset changes the asset once.
 
 ### Adding Layers
 
 #### `addMaterialLayer(entityId: string, layerType: MaterialLayerType, depthFar?: number) → void`
-Add a color, lighting, image, or depth layer to an entity (at most one of each; a second does nothing). Only a depth layer can be removed again.
-- **Types**: "color" | "lighting" | "image" | "depth"
-- **Defaults**: New layers created with sensible defaults. A depth layer is radial from the object's origin, near 0; its far is `depthFar` when given (above 0), else 2. The Materials panel passes the object's reach (`depthReach` in `utils/depthColors.ts`, its mesh's farthest vertex from its origin), so the ramp ends on the object rather than past it.
+Adds a colour layer just under Lighting (a new Color layer starts in the colour of the top Color layer), a Fresnel layer over Lighting (where it glows), or a Lighting layer on top when the object has none. Each starts with Spline's defaults (`createPaintLayer`). An Image layer and a second Lighting layer are refused.
+- **Depth**: radial from the object's origin in its own space, near 0; its far is `depthFar` when given (above 0), else 2. The Materials panel passes the object's reach (`depthReach` in `utils/depthColors.ts`, its mesh's farthest vertex from its origin), so the ramp ends on the object rather than past it.
 
 ### Removing Layers
 
 #### `removeMaterialLayer(entityId: string, layerId: string) → void`
-Remove a layer from an entity.
+Removes a layer the rules allow removing (`canRemoveLayer`): never Lighting or an Image layer; a painting layer while another stays; a mask always.
+
+### Changing a Layer's Type or Place
+
+#### `switchMaterialLayerType(entityId: string, layerId: string, type: PaintLayerType, depthFar?: number) → void`
+Turns a colour layer into another colour type (the row's type dropdown), keeping its ID, eye, opacity, blend mode and Mode (Color has no Mask mode, so it drops it); the rest is the new type's defaults (a Color layer takes the colour of the next Color layer in the stack). Refused for Lighting and Image layers.
+
+#### `moveMaterialLayer(entityId: string, layerId: string, toIndex: number) → void`
+Moves a layer to `toIndex` (0 = top), anywhere above the Image layers (`movableRange`): over or under Lighting, and Lighting itself. Image layers don't move.
 
 ### Updating Layers
 
 #### `updateMaterialLayer(entityId: string, layerId: string, updates: Partial<MaterialLayer>) → void`
 Update a single layer's properties.
-- **Partial updates**: Only changed fields are merged
+- **Partial updates**: Only changed fields are merged (a field that is an object, like `maps` or `colors`, is replaced whole).
 
 #### `updateMultipleEntityMaterialLayers(updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) → void`
 Batch update layers across multiple entities.
 
+#### `setEntityOpacity(opacities: Record<string, number>) → void`
+Sets how see-through objects are in Base (entity ID → 0–1, clamped), one undo step for all. At 1 the field is left off the entity. The Materials panel uses `updateShownLooks`, which sends an object shown in a state to that state instead.
+
 ### Replacing All Layers
 
-#### `setEntityMaterialLayers(entityId: string, layers: MaterialLayer[]) → void`
-Replace an entity's entire layer stack.
-- **Full replacement**: Old layers are discarded
-- **Validation**: System enforces at least one color and one lighting layer
+#### `setEntityMaterialLayers(entityId: string, layers: MaterialLayer[], opacity?: number) → void`
+Replaces an entity's whole layer stack (copied), and sets its opacity when `opacity` isn't 1. Used for the layers derived from an imported mesh's own material (`deriveMaterialLayers`, through the `SceneSource`).
 
-**Layer interfaces**:
+### Material Assets
+
+#### `materials: Record<string, MaterialAsset>`
+Reusable materials by ID (`{ id, name, layers }`, layers top first), saved with the scene as the document's `materials` section and undoable. An entity that uses one names it in `materialAssetId` and is drawn with its layers (`layersOf` in `scene/materialAssets.ts`); its own `materialLayers` is then an empty list. A missing asset falls back to the object's own list (a plain default material) and never throws. `selectDrawnEntities` gives the entities with each user's layers filled in, which is what the viewport syncs.
+
+Every action below is one `set` and one undo step, and changes nothing in view only.
+
+#### `createMaterialAsset(fromEntityId?: string) → string`
+Makes an asset and returns its ID, named Material, Material 2, … in turn. With no object, Lighting over a white Color layer. With an object, a copy of its layers (new layer IDs), and the object then uses it. Groups, lights and imported models' meshes make nothing. The object's opacity becomes the asset's. An asset is one look in every state, so the colours and opacities the object's states set are dropped in the same undo step.
+
+#### `addMaterialAsset(source: { name, layers, opacity? }) → string`
+Adds a copy of a material from outside the scene (the Libre3D library) as an asset, its layers under new IDs, and returns its ID ("" in view only).
+
+#### `setMaterialAssetOpacity(assetId: string, opacity: number) → void`
+Sets how see-through every object using the asset is (0-1, clamped; 1 is stored as none). An object on an asset is drawn with the asset's opacity, not its own.
+
+#### `renameMaterialAsset(assetId: string, name: string) → void`
+Ignores an empty or unchanged name.
+
+#### `removeMaterialAsset(assetId: string) → void`
+Deletes the asset and detaches every object using it in the same step, so each keeps its look as layers of its own; one undo restores the asset and the links.
+
+#### `applyMaterialAsset(assetId: string, entityIds: string[]) → void`
+Makes the objects use the asset. Their own layers are **discarded** (detaching copies the asset's back). Groups, lights and imported models' meshes are skipped (`canUseMaterialAsset`). `entity.opacity` stays per object. An asset is one colour in every state, so the colours the object's states set are dropped in the same undo step (their opacity stays).
+
+#### `detachMaterialAsset(entityIds: string[]) → void`
+Gives each object a copy of its asset's layers under new layer IDs (sharing nothing with the asset) and clears `materialAssetId`.
+
+Duplicating an object keeps its `materialAssetId`; deleting every user keeps the asset.
+
+**Layer interfaces** (every layer also has `id`, `enabled`, `opacity`, `blendMode`, and the maskable ones `mask?`). Colours are `"#rrggbb"`, sRGB as picked; a `PaintColor` is `{ color, alpha? }` (alpha missing = 1) and a ramp stop a `PaintColor` with a `position` (0–1).
 
 **ColorLayer**:
 ```typescript
 {
-  id: string;
   type: "color";
-  enabled: boolean;
-  opacity: number; // 0-1
-  color: string; // hex color
-  alphaMode?: "OPAQUE" | "MASK" | "BLEND"; // from imported material
-  alphaCutoff?: number; // for MASK mode
-  doubleSided?: boolean; // from imported material
+  color: string;
 }
 ```
 
 **LightingLayer**:
 ```typescript
 {
-  id: string;
   type: "lighting";
-  enabled: boolean;
-  opacity: number; // 0-1
   model: "none" | "lambert" | "phong" | "physical" | "toon";
-  roughness: number; // 0-1, for physical
-  metalness: number; // 0-1, for physical
-  clearcoat?: number; // 0-1, for physical: above 0 builds a MeshPhysicalMaterial (KHR_materials_clearcoat in a GLB)
+  roughness: number; // 0-1, physical
+  metalness: number; // 0-1, physical
+  reflectivity?: number; // 0-1, physical (three's specularIntensity)
+  clearcoat?: number; // 0-1, physical
   clearcoatRoughness?: number; // 0-1
-  shininess: number; // for phong
-  emissive: string; // hex color
+  sheen?: number; // 0-1, physical
+  iridescence?: number; // 0-1, physical
+  ior?: number; // 1-2.333, physical
+  // Off their defaults (0, or 1.5 for ior, 1 for reflectivity), the physical values build a MeshPhysicalMaterial.
+  shininess: number; // phong
+  specular?: string; // phong's highlight colour (#111111 when missing)
+  emissive: string;
   emissiveIntensity: number;
+  maps?: Partial<Record<"roughness" | "metalness" | "normal" | "ao" | "emissive" | "bump", TextureRef>>;
+  bumpScale?: number; // the bump map's strength (1 when missing)
+  alphaMode?: "OPAQUE" | "MASK" | "BLEND"; // the surface
+  alphaCutoff?: number; // for MASK mode
+  doubleSided?: boolean;
 }
+// TextureRef: { textureAssetId: string; name?: string; wrapS: number; wrapT: number; flipY?: boolean }
+// (a picture in the texture store; flipY for one uploaded in the editor)
 ```
 
-**ImageLayer** (texture):
+**ImageLayer** (a picture, Spline's Texture layer):
 ```typescript
 {
-  id: string;
   type: "image";
-  enabled: boolean;
-  opacity: number; // 0-1
-  textureAssetId: string; // SHA-256 of the stored PNG (local storage and S3)
-  slot: "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
-  wrapS: number; // THREE.js wrap constant
-  wrapT: number; // THREE.js wrap constant
+  textureAssetId: string; // SHA-256 of the stored picture (local storage and S3); "" paints nothing
+  name?: string;
+  wrapS: number; // THREE.js wrap constant: 1000 Repeat, 1001 Clamp, 1002 Mirror
+  wrapT: number;
+  flipY?: boolean; // true for a picture uploaded or picked in the editor
+  projection: "uv" | "planar" | "spherical" | "cylindrical" | "triplanar";
+  axis: "x" | "y" | "z"; // for planar and cylindrical
+  sharpness: "smooth" | "pixelated";
+  crop: boolean; // keep the picture's shape instead of stretching it
+  scale: [number, number]; // repeats
+  offset: [number, number];
+  rotation: number; // degrees
 }
 ```
+Before PR 4b an Image layer only filled the colour map (with a `slot`): on load it gets its placing, and a white Color layer over it goes (a tinted one turns Multiply). Its other slots became Lighting's maps (PR 4).
 
-**DepthLayer** (colour by distance, like Spline's Depth layer with a Vector origin in Local space):
+**NormalLayer** (colours by the way the surface faces, in the scene's space): `{ type: "normal"; axes: [boolean, boolean, boolean] }` (X, Y, Z as red, green, blue).
+
+**MatcapLayer** (a lit-sphere picture looked up by the camera-space normal): `{ type: "matcap"; preset: string; textureAssetId?: string; name?: string; rotation: number }`. `preset` is one of Libre3D's own (`viewport/matcaps.ts`); `textureAssetId`, when set, is a picture of one's own instead.
+
+**RainbowLayer** (a soap-bubble shimmer): `{ type: "rainbow"; frequency: number; movement: number; color: [r, g, b]; noise: number; noiseScale: number; offset: [x, y, z] }` (defaults 30, 0, 0s, 0, 1, 0s, as Spline's).
+
+**GlassLayer** (what's behind the object, bent and blurred, as Spline's Glass / Transmission): `{ type: "glass"; blur: number; thickness: number; ior: number; absorption: string; absorbDistance: number }` (defaults 5, 10, 1.5, `#ffffff`, 0: Spline's, with half its Blur). Blur is 0–10 (Spline's roughness × 10); thickness and absorbDistance are in hundredths of the object's own units, as Spline's sizes are a hundred times Libre3D's; absorbDistance 0 = no tint.
+
+**DisplaceLayer** (moves the surface along its normals): `{ type: "displace"; displaceType: NoiseType | "image"; scale; movement; offset: [x, y, z]; intensity; voronoiStyle; smoothness; seed; lowCut; highCut; quality: "low" | "medium" | "high"; textureAssetId?; name? }` (defaults simplex, 10, 1, 0s, 8, as Spline's; quality medium). The noise fields are the Noise layer's; `"image"` takes a picture's lightness at the UV. Intensity is in hundredths of the object's own units.
+
+**DepthLayer** (colour by distance, as Spline's Depth layer):
 ```typescript
 {
-  id: string;
   type: "depth";
-  enabled: boolean;
-  opacity: number; // 0-1, over the Color layer's colour
-  gradientType: "radial" | "linear"; // distance from origin, or along direction
-  origin: [number, number, number]; // in the object's own space
+  gradientType: "radial" | "linear"; // distance from the origin, or along direction
+  originType?: "vector" | "camera"; // missing = vector
+  space?: "local" | "world"; // missing = local; for a vector origin
+  origin: [number, number, number];
   direction: [number, number, number]; // for linear
   near: number; // distance at the ramp's start
   far: number; // distance at its end
-  stops: { color: string; position: number }[]; // 2-10, position 0-1
+  stops: RampStop[]; // 2-10
   smooth: boolean; // eased blends between stops
 }
 ```
-It's painted as vertex colours by `utils/depthColors.ts` (in ObjectManager and PathMesh), so exports and published scenes show it as `COLOR_0`. Copy layers with `cloneMaterialLayer`, which copies its arrays.
+
+**GradientLayer** (a ramp over the UVs, Spline's maths: `gradientPosition`):
+```typescript
+{
+  type: "gradient";
+  gradientType: "linear" | "radial" | "polar";
+  stops: RampStop[]; // 2-10
+  smooth: boolean;
+  angle: number; // degrees
+  offset: [number, number];
+  morph: [number, number];
+}
+```
+
+**NoiseLayer** (warped 3D noise in object space between four colours):
+```typescript
+{
+  type: "noise";
+  noiseType: "simplex" | "simplexFractal" | "perlin" | "fbm" | "voronoi";
+  size: [number, number, number]; // stretch per axis
+  scale: number;
+  movement: number; // 0 = still
+  colors: [PaintColor, PaintColor, PaintColor, PaintColor];
+  distortion: [number, number]; // how far each of the two warps pushes
+  factorA: [number, number]; // the warps' offsets (Spline's defaults 1.7, 9.2 and 8.3, 2.8)
+  factorB: [number, number];
+  voronoiStyle: "f1" | "f2" | "f2MinusF1" | "smoothBlend" | "edge";
+  smoothness: number; // voronoi
+  seed: number;
+  lowCut: number; // 0-1: the noise's value remapped from low to high
+  highCut: number;
+}
+```
+
+**FresnelLayer** (a glow where the surface turns from the camera):
+```typescript
+{
+  type: "fresnel";
+  color: string;
+  alpha?: number;
+  bias: number; // clamp(bias + scale * (1 - |N·V|)^intensity) * factor
+  scale: number;
+  intensity: number;
+  factor: number;
+}
+```
+Copy layers with `cloneMaterialLayer`, which copies their arrays and objects.
 
 ---
 
@@ -488,7 +601,7 @@ interface ObjectState {
 ```
 
 #### `addState(entityId: string) → string`
-Add "State" (then "State 2", …) to an object, starting as a snapshot of the pose on screen (the state it's shown in, or Base), and view it (like `addEntity` selects). Returns its ID.
+Add "State" (then "State 2", …) to an object, starting as a snapshot of the pose on screen (the state it's shown in, or Base), and view it (like `addEntity` selects). The snapshot is the transform and a path's trim, not the colour or opacity: a state sets those only once they're edited while it's shown. Returns its ID.
 
 #### `renameState(stateId: string, name: string) → void`
 Rename a state. A blank name is ignored.
@@ -501,6 +614,9 @@ Set values in a state; the ones not passed stay as they are. Vectors are copied 
 
 #### `updateShownTransforms(updates: Record<string, StateValues>) → void`
 Transform (and trim) edits by entity ID, as the Transform and Path panels and the gizmo (multi-select included) make them: each object's go to the state it's shown in, or to its own values in Base. One undo step for all of them. The gizmo passes only what its tool moved (a multi-select drag: only what changed), so a state never starts setting values it left to Base.
+
+#### `updateShownLooks(updates: Record<string, { color?: string; opacity?: number }>) → void`
+Colour and opacity edits by entity ID, as the Materials panel makes them (its Opacity field, and the top Color layer's picker): each object's go to the state it's shown in, or in Base to its own opacity and its top Color layer. An object that uses a material asset is the asset's colour in every state, so its colour always goes to the asset's top Color layer, shown in a state or not. One undo step for all of them. Opacity is clamped to 0–1; a colour is dropped for an object with no Color layer; objects without a material are skipped.
 
 #### `clearStateValue(stateId: string, key: keyof StateValues) → void`
 "Reset to Base": the state stops setting that value, so it follows the object's own again.
@@ -627,10 +743,9 @@ pos[1] += 5; // CORRUPTS STORE
 updateEntityTransform(id, { position: pos });
 ```
 
-Helper function in store:
+The helper, in `scene/vec3.ts`:
 ```typescript
-// Available for internal use
-cloneVector(v: [number, number, number]): [number, number, number]
+cloneVector(v: Vec3): Vec3 // Vec3 = [number, number, number]
 ```
 
 ### Deep Merge Pattern
@@ -651,7 +766,7 @@ updateSceneSettings({ bgColor: "#ff0000" });
 set({ sceneSettings: { bgColor: "#ff0000" } });
 ```
 
-**Deep merge pseudocode**:
+**Deep merge pseudocode** (`scene/deepMerge.ts`):
 ```typescript
 deepMerge(oldSettings, newSettings) {
   for each key in newSettings:
@@ -756,8 +871,9 @@ useEditorStore.subscribe(
 - entities, activeProfileId, cameraProfiles
 - sceneSettings, postProcessing, frame
 - animation (object states and events), viewedStates
+- materials (material assets)
 
-**Persisted (localStorage, `persist` v17)** — editor preferences:
+**Persisted (localStorage, `persist` v18)** — editor preferences:
 - activeTransformTool, projectionMode, transformSpace
 - hudOverlay, viewportZoom
 

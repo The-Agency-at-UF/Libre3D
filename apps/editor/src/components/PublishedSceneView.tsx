@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 
+import { exposeConsoleHandle } from "../utils/consoleHandle";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { createPublishedSceneSource } from "../viewport/publishedSceneSource";
 import { SceneViewer } from "../viewport/SceneViewer";
@@ -23,8 +24,13 @@ export default function PublishedSceneView({ content, assets }: PublishedSceneVi
     const container = containerRef.current;
     if (!container) return;
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    const viewer = new SceneViewer(container, content, createPublishedSceneSource(content.entities, assets), { reduceMotion });
-    return () => viewer.dispose();
+    const viewer = new SceneViewer(container, content, createPublishedSceneSource(content.entities, assets, content.materials), { reduceMotion });
+    // The share page's console handle, like the editor's. The page sets it, not the viewer.
+    const removeHandle = exposeConsoleHandle("__libre3dRenderer", viewer.renderer);
+    return () => {
+      removeHandle();
+      viewer.dispose();
+    };
   }, [content, assets]);
 
   return <div ref={containerRef} className="viewer-canvas" />;

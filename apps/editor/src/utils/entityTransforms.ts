@@ -1,6 +1,6 @@
 import * as THREE from "three";
-import type { Entity } from "../store/useEditorStore";
-import { getEntityIndex, getAncestorIds } from "../store/entityIndex";
+import type { Entity } from "../scene/types";
+import { getEntityIndex, getAncestorIds } from "../scene/entityIndex";
 
 // Pure-math world/local transform solving over the *stored* entity tree.
 // Reparenting must preserve an entity's world-space placement, and it must do

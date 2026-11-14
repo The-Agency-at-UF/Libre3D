@@ -1,10 +1,16 @@
+/**
+ * PURPOSE: The central Zustand store for the Libre3D editor. Holds the scene graph (entities),
+ * selection state, animation states and events, camera profiles, and editor preferences.
+ * Provides undo/redo history via zundo temporal middleware and persistence for local settings.
+ */
+
 import { ClampToEdgeWrapping, Euler, Vector3 } from "three";
 import { create, type StateCreator, type StoreMutatorIdentifier } from "zustand";
 import { persist, createJSONStorage, subscribeWithSelector } from "zustand/middleware";
 import { temporal } from "zundo";
 import { shallow } from "zustand/shallow";
-import { getDescendantIds, getChildren, filterMoveRoots, canReparentEntities } from "./entityIndex";
-import { createId } from "../utils/createId";
+import { getDescendantIds, getChildren, getEntityIndex, filterMoveRoots, canReparentEntities } from "../scene/entityIndex";
+import { colorLayerOf, withTopColor } from "../scene/layers";
 import type { SceneContent, StoredSceneContent } from "../utils/sceneDocument";
 import {
   getEntityWorldMatrix,
@@ -22,9 +28,12 @@ import {
   getViewedState,
   removeStatesOf,
   resolveState,
+  withoutLook,
+  withoutStateLooks,
   type ObjectState,
   type SceneAnimation,
   type StateValueKey,
+  type Look,
   type StateValues,
 } from "../animation/objectStates";
 import { reparentStates, type ParentChange } from "../animation/reparentStates";
@@ -37,138 +46,97 @@ import {
   type SceneEvent,
 } from "../animation/events";
 import type { TransitionAction } from "../animation/transitions";
-import { clonePath, createSamplePath, DEFAULT_STROKE, pathsCenter, type PathData, type PathStroke } from "../paths/pathGeometry";
+import { clonePath, DEFAULT_STROKE, pathsCenter, type PathData, type PathStroke } from "../paths/pathGeometry";
 import { shiftPoints } from "../paths/pathEditing";
 import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
 import { cloneShape, flattenShape, shapeContours, type ShapeData, type ShapeSolid } from "../paths/shapeGeometry";
 import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
-export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
+import { deepMerge } from "../scene/deepMerge";
+import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialFrameDefaults, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
+import {
+  cloneCameraProfile,
+  cloneEntity,
+  cloneMaterialLayer,
+  createCameraProfile,
+  createEntity,
+  createEntityId,
+  createFlatMaterialLayers,
+  createImageLayer,
+  createLightingLayer,
+  createPaintLayer,
+  createStartingEntities,
+  ENTITY_DEFAULTS,
+  initialEntities,
+  switchLayerType,
+  type PaintLayerType,
+} from "../scene/entityFactories";
+import { canRemoveLayer, canSwitchLayerType, isColorLayerType, moveLayer, newLayerIndex } from "../scene/layerStack";
+import { assetOf, assetOpacity, canUseMaterialAsset, copyLayers, createMaterialAssetLayers, layersOf, nextMaterialAssetName, opacityOf, resolveEntities } from "../scene/materialAssets";
+
+import type {
+  CameraProfile,
+  DeepPartial,
+  Entity,
+  EntityType,
+  FrameSettingsConfig,
+  ImageLayer,
+  ImportNodeSpec,
+  MaterialAsset,
+  MaterialLayer,
+  MaterialLayerType,
+  PostProcessingConfig,
+  SceneSettingsConfig,
+} from "../scene/types";
+import { cloneVector } from "../scene/vec3";
+
+// A scene's own types live in scene/types.ts, so the share-link viewer can use them without this
+// store. Re-exported for the editor's components, which import them from here.
+export type {
+  CameraProfile,
+  ColorLayer,
+  DeepPartial,
+  DepthLayer,
+  DisplaceLayer,
+  DisplaceType,
+  Entity,
+  FresnelLayer,
+  GlassLayer,
+  GradientLayer,
+  LightingMapSlot,
+  NoiseLayer,
+  MatcapLayer,
+  NoiseType,
+  NormalLayer,
+  PaintColor,
+  RainbowLayer,
+  RampStop,
+  TextureRef,
+  VoronoiStyle,
+  EntityType,
+  FrameMode,
+  FrameSettingsConfig,
+  FrameSizePreset,
+  ImageLayer,
+  ImageProjection,
+  ImportNodeSpec,
+  LightingLayer,
+  LightingModel,
+  BlendMode,
+  MaterialAsset,
+  MaterialLayer,
+  MaterialLayerType,
+  PlayCameraMode,
+  PlayCameraSettings,
+  PostProcessingConfig,
+  SceneSettingsConfig,
+} from "../scene/types";
 
 /**
  * Why the open scene can't be edited here. `openElsewhere`: another tab or device holds its editing
  * lock (useSceneLock.ts). A viewer of a shared scene would be another reason, later.
  */
 export type ReadOnlyReason = "openElsewhere";
-
-export type MaterialLayerType = "color" | "lighting" | "image" | "depth";
-export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
-
-// Which glTF texture channel an ImageLayer feeds. "metallicRoughness" is a
-// single packed map (green = roughness, blue = metalness) that Three assigns to
-// both material.roughnessMap and material.metalnessMap — one layer covers both,
-// never split into two.
-export type ImageSlot = "color" | "normal" | "metallicRoughness" | "emissive" | "ao";
-
-export interface ColorLayer {
-  id: string;
-  type: "color";
-  enabled: boolean;
-  opacity: number; // 0-1
-  color: string;
-  // glTF alpha-blending mode, captured from the source material at derivation
-  // time so imported meshes preserve texture-alpha-driven transparency (BLEND)
-  // and cutout masking (MASK) instead of only reacting to the scalar opacity
-  // above. Undefined for layers on primitives (cube/sphere/torus/plane), which have
-  // no glTF material to inherit this from -- treated as "OPAQUE".
-  alphaMode?: "OPAQUE" | "MASK" | "BLEND";
-  alphaCutoff?: number; // only meaningful when alphaMode === "MASK"
-  // glTF doubleSided, captured the same way -- an imported mesh authored as
-  // double-sided (thin geometry like hair/foliage/fabric) must stay that way
-  // even if its material ever needs a full rebuild (see createMaterialFromLayers).
-  doubleSided?: boolean;
-}
-
-export interface LightingLayer {
-  id: string;
-  type: "lighting";
-  enabled: boolean;
-  opacity: number;
-  model: LightingModel;
-  roughness: number; // only meaningful when model === "physical"
-  metalness: number; // only meaningful when model === "physical"
-  // A clear lacquer over the material (glTF's KHR_materials_clearcoat), physical only. Above 0 it
-  // takes a MeshPhysicalMaterial. Undefined on layers from before it (an imported mesh's then keeps
-  // the clearcoat its glTF material came with).
-  clearcoat?: number;
-  clearcoatRoughness?: number;
-  shininess: number; // only meaningful when model === "phong"
-  emissive: string;
-  emissiveIntensity: number; // ignored when model === "none"
-}
-
-// A texture map layer, derived from an imported glTF material's maps. The pixel
-// data is never stored here (materialLayers is persisted to localStorage) — it
-// lives in the OPFS texture asset store, referenced by textureAssetId. wrapS/wrapT
-// are the THREE wrap constants copied straight off the source texture.
-export interface ImageLayer {
-  id: string;
-  type: "image";
-  enabled: boolean;
-  opacity: number;
-  textureAssetId: string;
-  slot: ImageSlot;
-  wrapS: number;
-  wrapT: number;
-}
-
-// Colours the object by distance (like Spline's Depth layer, Vector origin, Local): each vertex's
-// distance from `origin` in the object's own space, straight out ("radial") or along `direction`
-// ("linear"), is placed on the ramp between `near` (its first stop) and `far` (its last). It's
-// painted as vertex colours (utils/depthColors.ts), so it exports and publishes; over the Color
-// layer's colour by `opacity`. At most one per object.
-export interface DepthStop {
-  color: string;
-  position: number; // 0-1 along the ramp
-}
-
-export interface DepthLayer {
-  id: string;
-  type: "depth";
-  enabled: boolean;
-  opacity: number;
-  gradientType: "radial" | "linear";
-  origin: [number, number, number];
-  direction: [number, number, number]; // only meaningful when gradientType === "linear"
-  near: number;
-  far: number;
-  stops: DepthStop[]; // 2-10
-  smooth: boolean; // eased blends between stops
-}
-
-export type MaterialLayer = ColorLayer | LightingLayer | ImageLayer | DepthLayer;
-
-export interface Entity {
-  id: string;
-  type: EntityType;
-  name: string;
-  position: [number, number, number];
-  rotation: [number, number, number];
-  scale: [number, number, number];
-  color?: string;
-  materialLayers?: MaterialLayer[];
-  assetId?: string;
-  sourceFileName?: string;
-  visible: boolean;
-  locked: boolean;
-  parentId?: string | null;
-  nodePath?: number[];
-  rootEntityId?: string;
-  // Paths (type "path", see paths/pathGeometry.ts): the curve, its tube, and how much of it shows
-  // in Base (0–1 of its length; states can set their own).
-  path?: PathData;
-  stroke?: PathStroke;
-  trimStart?: number;
-  trimEnd?: number;
-  // Shapes (type "shape", see paths/shapeGeometry.ts): a filled outline with holes, flat in its own
-  // XY plane unless it has an extrusion (its depth) or a bevel.
-  shape?: ShapeData;
-  extrusion?: number;
-  bevel?: number;
-  // Images (type "image", see utils/imagePlane.ts): a flat plane as wide for its height as the picture
-  // (width / height), which its Image layer shows.
-  imageAspect?: number;
-}
 
 /**
  * The pen tool (viewport/hooks/useViewportPenTool.ts): drawing new shapes or paths ("draw") or editing
@@ -187,209 +155,7 @@ export interface PenToolState {
   draws?: "shape" | "path";
 }
 
-export interface ImportNodeSpec {
-  tempId: string;
-  parentTempId: string | null;
-  name: string;
-  nodePath: number[];
-  position: [number, number, number];
-  rotation: [number, number, number];
-  scale: [number, number, number];
-}
-
-// How the camera moves in Play (viewport/PlayCamera.ts): it stays put, turns towards the pointer,
-// turns by dragging, or turns by itself.
-export type PlayCameraMode = "fixed" | "softOrbit" | "orbit" | "autoRotate";
-
-export interface PlayCameraSettings {
-  mode: PlayCameraMode;
-  range: number; // softOrbit: degrees at the canvas's edge
-  smoothness: number; // softOrbit and orbit: 0-1, how slowly it eases
-  speed: number; // autoRotate: degrees a second
-}
-
-export interface CameraProfile {
-  id: string;
-  name: string;
-  position: [number, number, number];
-  target: [number, number, number];
-  fov: number;
-  near: number;
-  far: number;
-  zoom: number;
-  // Missing (cameras from before it) or partly missing fields are defaults: resolvePlayCamera.
-  play?: Partial<PlayCameraSettings>;
-}
-
 type EntityTransformUpdates = Partial<Pick<Entity, "position" | "rotation" | "scale" | "color">> & {
-};
-
-export type DeepPartial<T> = T extends object ? {
-  [P in keyof T]?: DeepPartial<T[P]>;
-} : T;
-
-export interface PostProcessingConfig {
-  enabled: boolean;
-  toneMap: string;
-  exposure: number;
-  bloom: {
-    enabled: boolean;
-    intensity: number;
-    threshold: number;
-    radius: number;
-  };
-  ssao: {
-    enabled: boolean;
-    intensity: number;
-  };
-  dof: {
-    enabled: boolean;
-    focusDistance: number;
-    bokeh: number;
-  };
-  chromaticAberration: {
-    enabled: boolean;
-    intensity: number;
-  };
-  motionBlur: {
-    enabled: boolean;
-    intensity: number;
-  };
-  filmGrain: {
-    enabled: boolean;
-    intensity: number;
-  };
-  vignette: {
-    enabled: boolean;
-    intensity: number;
-  };
-  outline: {
-    enabled: boolean;
-    color: string;
-  };
-  colorGrading: {
-    enabled: boolean;
-    brightness: number;
-    contrast: number;
-    saturation: number;
-  };
-}
-
-export interface SceneSettingsConfig {
-  bgColor: string;
-  bgAlpha: string;
-  showGrid: boolean;
-  wireframe: boolean;
-  fogEnabled: boolean;
-  showAxisGuides?: boolean;
-  // Image-based light from a generated room (viewport/sceneEnvironment.ts): soft fill and reflections
-  // for Physical materials. Replaces the ambient light while on. Older scenes open with it off
-  // (scene document v4), new ones with it on.
-  environment: {
-    enabled: boolean;
-    intensity: number;
-  };
-  lights: {
-    intensity: number;
-    color: string;
-    ambientEnabled: boolean;
-    directionalEnabled: boolean;
-    shadow: string;
-  };
-  physics: {
-    enabled: boolean;
-    gravityY: number;
-    collisionType: string;
-  };
-}
-
-export type FrameMode = "responsive" | "fixed";
-export type FrameSizePreset = "responsive" | "1920x1080" | "1080x1080" | "custom";
-
-export interface FrameSettingsConfig {
-  mode: FrameMode;
-  preset: FrameSizePreset;
-  width: number;
-  height: number;
-}
-
-export const initialPostProcessingDefaults: PostProcessingConfig = {
-  enabled: true,
-  toneMap: "ACES Filmic",
-  exposure: 0.00,
-  bloom: {
-    enabled: true,
-    intensity: 40,
-    threshold: 0.85,
-    radius: 0.4,
-  },
-  ssao: {
-    enabled: false,
-    intensity: 25,
-  },
-  dof: {
-    enabled: false,
-    focusDistance: 10.0,
-    bokeh: 0.30,
-  },
-  chromaticAberration: {
-    enabled: false,
-    intensity: 0,
-  },
-  motionBlur: {
-    enabled: false,
-    intensity: 0,
-  },
-  filmGrain: {
-    enabled: false,
-    intensity: 0,
-  },
-  vignette: {
-    enabled: true,
-    intensity: 15,
-  },
-  outline: {
-    enabled: false,
-    color: "5865F2",
-  },
-  colorGrading: {
-    enabled: false,
-    brightness: 0.00,
-    contrast: 0.00,
-    saturation: 0.00,
-  },
-};
-
-export const initialSceneDefaults: SceneSettingsConfig = {
-  bgColor: "#0b1020",
-  bgAlpha: "100%",
-  showGrid: true,
-  wireframe: false,
-  fogEnabled: false,
-  showAxisGuides: false,
-  environment: {
-    enabled: true,
-    intensity: 1,
-  },
-  lights: {
-    intensity: 0.75,
-    color: "#ffffff",
-    ambientEnabled: true,
-    directionalEnabled: true,
-    shadow: "Soft",
-  },
-  physics: {
-    enabled: false,
-    gravityY: -9.8,
-    collisionType: "Mesh",
-  },
-};
-
-export const initialFrameDefaults: FrameSettingsConfig = {
-  mode: "responsive",
-  preset: "responsive",
-  width: 1920,
-  height: 1080,
 };
 
 export interface EditorState {
@@ -408,10 +174,6 @@ export interface EditorState {
   reparentEntities: (ids: string[], newParentId: string | null, index?: number) => void;
   groupEntities: (ids: string[]) => string;
   ungroupEntity: (id: string) => void;
-  applyHierarchyPrune: (
-    removedIds: Set<string>,
-    updates: Map<string, { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number]; parentId: string | null }>,
-  ) => void;
   updateEntityTransform: (id: string, updates: EntityTransformUpdates) => void;
   updateMultipleEntityTransforms: (updates: Record<string, EntityTransformUpdates>) => void;
   selectEntity: (id: string | null, multi?: boolean) => void;
@@ -420,52 +182,72 @@ export interface EditorState {
   toggleLock: (id: string) => void;
   renameEntity: (id: string, newName: string) => void;
   renameEntities: (updates: Record<string, string>) => void;
-  // The radius or cap style of every path among `ids`, in one undo step (not their trim, which
-  // states can set: see updateShownTransforms).
+  /**
+   * The radius or cap style of every path among `ids`, in one undo step (not their trim, which
+   * states can set: see updateShownTransforms).
+   */
   updatePathStrokes: (ids: string[], updates: Partial<PathStroke>) => void;
-  // A shape the pen tool drew: one outline (`outline`, in the shape's own XY plane, so turned by
-  // `rotation`), its origin at `origin`. Filled in the default shape colour from both sides, like an
-  // imported one. Selected, like addEntity. Returns its ID.
+  /**
+   * A shape the pen tool drew: one outline (`outline`, in the shape's own XY plane, so turned by
+   * `rotation`), its origin at `origin`. Filled in the default shape colour from both sides, like an
+   * imported one. Selected, like addEntity. Returns its ID.
+   */
   addShape: (origin: [number, number, number], rotation: [number, number, number], outline: PathData) => string;
-  // A path the pen tool drew (the Path pen), its origin at `origin` and its points relative to it.
-  // Selected, like addEntity. Returns its ID.
+  /**
+   * A path the pen tool drew (the Path pen), its origin at `origin` and its points relative to it.
+   * Selected, like addEntity. Returns its ID.
+   */
   addPath: (origin: [number, number, number], path: PathData) => string;
-  // Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
-  // the path, not to a state, so this changes them in every state.
+  /**
+   * Replaces a path's points (the pen tool's edits; see paths/pathEditing.ts). The points belong to
+   * the path, not to a state, so this changes them in every state.
+   */
   updatePath: (id: string, path: PathData) => void;
-  // Replaces a shape's outlines (the pen tool's edits). Flat: their points' and handles' Z is dropped.
+  /** Replaces a shape's outlines (the pen tool's edits). Flat: their points' and handles' Z is dropped. */
   updateShape: (id: string, shape: ShapeData) => void;
-  // Moves a path's or shape's origin to the middle of its curves (pathsCenter) without moving it on
-  // screen: its points shift one way and its position the other. Its states keep their transforms,
-  // so it's for one that has none yet: the pen tool's, as it finishes drawing one.
+  /**
+   * Moves a path's or shape's origin to the middle of its curves (pathsCenter) without moving it on
+   * screen: its points shift one way and its position the other. Its states keep their transforms,
+   * so it's for one that has none yet: the pen tool's, as it finishes drawing one.
+   */
   centerOrigin: (id: string) => void;
-  // The shapes and paths of an imported SVG (paths/svgImport.ts), in one undo step: one named `name`,
-  // or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
-  // Returns its ID ("" when there's nothing to add).
+  /**
+   * The shapes and paths of an imported SVG (paths/svgImport.ts), in one undo step: one named `name`,
+   * or several ("Shape 1", "Path 1", …) in a group named `name`. Selects it and puts the pen down.
+   * Returns its ID ("" when there's nothing to add).
+   */
   addImportedSvg: (name: string, items: ImportedSvgItem[]) => string;
-  // An imported picture (utils/importImage.ts) as a plane named `name`, at the origin: `aspect` is its
-  // width / height, and `textureAssetId` its bytes in the texture store, shown unlit from both sides
-  // and blended when it has see-through pixels (`transparent`). Selects it and puts the pen down.
-  // Returns its ID.
+  /**
+   * An imported picture (utils/importImage.ts) as a plane named `name`, at the origin: `aspect` is its
+   * width / height, and `textureAssetId` its bytes in the texture store, shown unlit from both sides
+   * and blended when it has see-through pixels (`transparent`). Selects it and puts the pen down.
+   * Returns its ID.
+   */
   addImagePlane: (name: string, textureAssetId: string, aspect: number, transparent: boolean) => string;
-  // The extrusion (depth) or bevel of every shape among `ids`, in one undo step.
+  /** The extrusion (depth) or bevel of every shape among `ids`, in one undo step. */
   updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
-  // Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
-  // a path along the middle of its strokes (paths/centerLine.ts), with a tube as thick as the
-  // strokes, in one undo step. A shape keeps its ID, name, place, material, states and events; when
-  // it has several strokes, the others become paths next to it ("Shape 1 (2)"). Returns how many
-  // shapes were converted.
+  /**
+   * Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
+   * a path along the middle of its strokes (paths/centerLine.ts), with a tube as thick as the
+   * strokes, in one undo step. A shape keeps its ID, name, place, material, states and events; when
+   * it has several strokes, the others become paths next to it ("Shape 1 (2)"). Returns how many
+   * shapes were converted.
+   */
   convertShapesToPaths: (ids: string[]) => number;
 
   // Viewport / Projection
   activeTransformTool: "translate" | "rotate" | "scale";
-  // Drawing or editing paths (see PenToolState), or null. Not saved and not undoable; off in Play,
-  // during a ▶ preview, and while view only.
+  /**
+   * Drawing or editing paths (see PenToolState), or null. Not saved and not undoable; off in Play,
+   * during a ▶ preview, and while view only.
+   */
   penTool: PenToolState | null;
   setPenTool: (penTool: PenToolState | null) => void;
-  // Editing an object's Depth layer in the viewport (useViewportDepthGizmo): its handles show, and
-  // the transform gizmo moves the layer's origin instead of the object. The object's ID, or null.
-  // Not saved and not undoable; off like the pen, and the pen and it end each other.
+  /**
+   * Editing an object's Depth layer in the viewport (useViewportDepthGizmo): its handles show, and
+   * the transform gizmo moves the layer's origin instead of the object. The object's ID, or null.
+   * Not saved and not undoable; off like the pen, and the pen and it end each other.
+   */
   depthEdit: string | null;
   setDepthEdit: (entityId: string | null) => void;
   projectionMode: "perspective" | "orthographic";
@@ -482,255 +264,233 @@ export interface EditorState {
   // Play Mode / Preview
   isPreviewMode: boolean;
   setPreviewMode: (active: boolean) => void;
-  // The transition the Edit Event panel's ▶ is playing in the editor viewport (useViewportPlay), by
-  // action ID, or null. Not saved and not undoable, and allowed in a view-only scene: it's looking.
+  /**
+   * The transition the Edit Event panel's ▶ is playing in the editor viewport (useViewportPlay), by
+   * action ID, or null. Not saved and not undoable, and allowed in a view-only scene: it's looking.
+   */
   previewingActionId: string | null;
   setPreviewingAction: (actionId: string | null) => void;
 
-  // Number of .glb imports currently being read/parsed (file picked but
-  // entities not yet materialized). Not persisted — like isPreviewMode it's
-  // transient session state that happens to need cross-component visibility.
+  /**
+   * Number of .glb imports currently being read/parsed (file picked but
+   * entities not yet materialized). Not persisted — like isPreviewMode it's
+   * transient session state that happens to need cross-component visibility.
+   */
   pendingImportCount: number;
   adjustPendingImports: (delta: number) => void;
 
-  // Why the scene can't be edited right now; null when it can. While set, updates that would change
-  // the scene's content are dropped (see guardSceneContent). Not persisted and not undoable: the
-  // editor sets it each time it opens a scene and whenever the editing lock moves.
+  /**
+   * Why the scene can't be edited right now; null when it can. While set, updates that would change
+   * the scene's content are dropped (see guardSceneContent). Not persisted and not undoable: the
+   * editor sets it each time it opens a scene and whenever the editing lock moves.
+   */
   readOnlyReason: ReadOnlyReason | null;
   setReadOnly: (reason: ReadOnlyReason | null) => void;
 
-  // Object states and events (see animation/objectStates.ts and animation/events.ts). Saved with the
-  // scene and undoable.
+  /**
+   * Object states and events (see animation/objectStates.ts and animation/events.ts). Saved with the
+   * scene and undoable.
+   */
   animation: SceneAnimation;
-  // The state each object is shown in while editing (entity ID → state ID; no entry = Base). It
-  // stays when the object is deselected, and is saved with the scene so it reopens as it was left.
-  // Not undoable, and allowed while read-only (looking at a state changes nothing). Read it through
-  // selectViewedObjectState, which treats an entry whose state is gone (deleted, undone) as Base.
+  /**
+   * The state each object is shown in while editing (entity ID → state ID; no entry = Base). It
+   * stays when the object is deselected, and is saved with the scene so it reopens as it was left.
+   * Not undoable, and allowed while read-only (looking at a state changes nothing). Read it through
+   * selectViewedObjectState, which treats an entry whose state is gone (deleted, undone) as Base.
+   */
   viewedStates: Record<string, string>;
-  // Shows an object in one of its states, or in Base (null).
+  /** Shows an object in one of its states, or in Base (null). */
   setViewedState: (entityId: string, stateId: string | null) => void;
-  // Adds "State N" (setting nothing yet) to an object and views it, like addEntity selects. Returns its ID.
+  /** Adds "State N" (setting nothing yet) to an object and views it, like addEntity selects. Returns its ID. */
   addState: (entityId: string) => string;
   renameState: (stateId: string, name: string) => void;
   removeState: (stateId: string) => void;
-  // Sets values in a state, leaving the ones not passed as they are.
+  /** Sets values in a state, leaving the ones not passed as they are. */
   setStateValues: (stateId: string, values: StateValues) => void;
-  // Transform edits from the inspector and the gizmo: each object's go to the state it's shown in,
-  // or to its own values in Base. One undo step for all of them.
+  /**
+   * Transform edits from the inspector and the gizmo: each object's go to the state it's shown in,
+   * or to its own values in Base. One undo step for all of them.
+   */
   updateShownTransforms: (updates: Record<string, StateValues>) => void;
-  // "Reset to Base": the state stops setting that value, so it follows the object's own again.
+  /**
+   * Colour and opacity edits from the Materials panel (entity ID → what changed): each object's go
+   * to the state it's shown in, or in Base to its own opacity and its top Color layer. An object
+   * that uses a material asset is the asset's colour and opacity in every state, so both always go
+   * to the asset (its top Color layer, its opacity) and every object using it changes. One undo
+   * step for all of them. A colour is dropped for an object with no Color layer.
+   */
+  updateShownLooks: (updates: Record<string, Look>) => void;
+  /** "Reset to Base": the state stops setting that value, so it follows the object's own again. */
   clearStateValue: (stateId: string, key: StateValueKey) => void;
-  // Adds an event to an object, last in its list, with one transition of the object. Returns its ID.
+  /** Adds an event to an object, last in its list, with one transition of the object. Returns its ID. */
   addEvent: (ownerId: string, trigger: EventTrigger) => string;
-  // Changes an event's trigger or replaces its actions (a list edited as a whole).
+  /** Changes an event's trigger or replaces its actions (a list edited as a whole). */
   updateEvent: (eventId: string, updates: { trigger?: EventTrigger; actions?: TransitionAction[] }) => void;
   removeEvent: (eventId: string) => void;
 
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
   updateSceneSettings: (updates: DeepPartial<SceneSettingsConfig>) => void;
   updateFrameSettings: (updates: DeepPartial<FrameSettingsConfig>) => void;
-  // `depthFar`: where a new Depth layer's ramp ends (its object's reach); 2 when not given.
-  addMaterialLayer: (entityId: string, layerType: MaterialLayerType, depthFar?: number) => void;
-  removeMaterialLayer: (entityId: string, layerId: string) => void;
-  updateMaterialLayer: (entityId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
+  /**
+   * Reusable materials by ID, saved with the scene (`scene.materials`). Empty until material assets
+   * arrive (task D, PR 6). Undoable.
+   */
+  materials: Record<string, MaterialAsset>;
+  /**
+   * Makes a material asset and returns its ID: a new one (Lighting over a white Color layer), or,
+   * given an object, one with a copy of that object's layers and its opacity, which the object then uses.
+   */
+  createMaterialAsset: (fromEntityId?: string) => string;
+  /**
+   * Adds a copy of a material from outside the scene (the Libre3D library) as an asset of this
+   * scene, its layers under new IDs, and returns its ID ("" when the store refused it).
+   */
+  addMaterialAsset: (source: Pick<MaterialAsset, "name" | "layers" | "opacity">) => string;
+  renameMaterialAsset: (assetId: string, name: string) => void;
+  /** Sets how see-through every object using an asset is (0-1, clamped; 1 is stored as none). */
+  setMaterialAssetOpacity: (assetId: string, opacity: number) => void;
+  /** Deletes an asset. The objects using it keep its look as layers of their own, in the same undo step. */
+  removeMaterialAsset: (assetId: string) => void;
+  /**
+   * Makes objects use an asset in place of their own layers, which are discarded (scene/materialAssets.ts).
+   * Groups, lights and imported models' meshes are left as they are.
+   */
+  applyMaterialAsset: (assetId: string, entityIds: string[]) => void;
+  /** Gives objects their asset's layers as their own (new layer IDs) and unlinks them from it. */
+  detachMaterialAsset: (entityIds: string[]) => void;
+  /**
+   * The layer actions below take the ID of whose stack they edit: an object's, or a material
+   * asset's. An object that uses an asset has its asset's stack edited, so every object using it
+   * changes.
+   *
+   * Adds a layer to a stack (scene/layerStack.ts): a colour layer just under Lighting (a
+   * Fresnel layer over it, where it glows), or a Lighting layer on top when it has none. `depthFar`:
+   * where a new Depth layer's ramp ends (its object's reach); 2 when not given.
+   */
+  addMaterialLayer: (ownerId: string, layerType: MaterialLayerType, depthFar?: number) => void;
+  /** Removes a layer the stack rules allow removing (never Lighting; a painting layer only while another one stays). */
+  removeMaterialLayer: (ownerId: string, layerId: string) => void;
+  /** Turns a colour layer into another colour type, keeping its ID, eye, opacity, blend mode and Mode. */
+  switchMaterialLayerType: (ownerId: string, layerId: string, type: PaintLayerType, depthFar?: number) => void;
+  /** Moves a layer to `toIndex` in the stack (top = 0), above the Image layers. */
+  moveMaterialLayer: (ownerId: string, layerId: string, toIndex: number) => void;
+  updateMaterialLayer: (ownerId: string, layerId: string, updates: Partial<MaterialLayer>) => void;
+  /** One layer of each stack (owner ID → layer and changes), one undo step for all of them. */
   updateMultipleEntityMaterialLayers: (updates: Record<string, { layerId: string; updates: Partial<MaterialLayer> }>) => void;
-  setEntityMaterialLayers: (entityId: string, layers: MaterialLayer[]) => void;
-  // Replaces the whole scene with a saved one (null = a new scene's starting content) and clears
-  // undo history, so Ctrl+Z can't reach into the previously open scene.
+  /** Sets how see-through objects are (entity ID → 0-1), one undo step for all of them. */
+  setEntityOpacity: (opacities: Record<string, number>) => void;
+  /**
+   * Replaces an object's whole layer stack, and its opacity when given. Used for the layers derived
+   * from an imported mesh's own material (viewport/importedModels.ts).
+   */
+  setEntityMaterialLayers: (entityId: string, layers: MaterialLayer[], opacity?: number) => void;
+  /**
+   * Replaces the whole scene with a saved one (null = a new scene's starting content) and clears
+   * undo history, so Ctrl+Z can't reach into the previously open scene.
+   */
   loadScene: (content: StoredSceneContent | null) => void;
   setEditorState:(updates: Partial<Omit<EditorState, "entities" | "animation" | "selectedEntityIds" | "addEntity" | "addImportedModelHierarchy" | "removeEntity" | "updateEntityTransform" | "updateMultipleEntityTransforms" | "selectEntity" | "selectEntities" | "toggleVisibility" | "toggleLock" | "renameEntity" | "updatePostProcessing" | "updateSceneSettings" | "setEditorState" | "setActiveProfile" | "addCameraProfile" | "updateProfileData" | "setPreviewMode" | "setPreviewingAction" | "addMaterialLayer" | "removeMaterialLayer" | "updateMaterialLayer" | "updateMultipleEntityMaterialLayers" | "setEntityMaterialLayers">>) => void;
 }
 
-const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }> = {
-  cube: {
-    name: "Cube",
-    color: "#4f8cff",
-  },
-  sphere: {
-    name: "Sphere",
-    color: "#3DFFA0",
-  },
-  torus: {
-    name: "Torus",
-    color: "#FF7AE0",
-  },
-  plane: {
-    name: "Plane",
-    color: "#B39DFF",
-  },
-  path: {
-    name: "Path",
-    color: "#FFC24D",
-  },
-  shape: {
-    name: "Shape",
-    color: "#9AA4B2",
-  },
-  image: {
-    name: "Image",
-    color: "#ffffff",
-  },
-  directionalLight: {
-    name: "Directional Light",
-    color: "#ffffff",
-  },
-  importedModel: {
-    name: "Imported Model",
-    color: "#ffffff",
-  },
-  group: {
-    name: "Group",
-    color: "#ffffff",
-  },
+// The layers of `entity` changed by `change`, for actions that edit one object's stack; the same
+// entity when it has none or nothing changed.
+const withLayers = (entity: Entity, change: (layers: MaterialLayer[]) => MaterialLayer[]): Entity => {
+  if (!entity.materialLayers) return entity;
+  const layers = change(entity.materialLayers);
+  return layers === entity.materialLayers ? entity : { ...entity, materialLayers: layers };
 };
 
-const MANDATORY_LAYER_TYPES: MaterialLayerType[] = ["color", "lighting"];
+type LayerChange = (layers: MaterialLayer[]) => MaterialLayer[];
 
-const createColorLayer = (color: string, opacity = 1): ColorLayer => ({
-  id: createEntityId(),
-  type: "color",
-  enabled: true,
-  opacity,
-  color,
-});
+// The update that applies each change to its owner's stack (owner ID → change), or no update at
+// all when nothing changed, so an action the stack rules refuse records no undo step. An owner is a
+// material asset, an object that uses one (its asset's stack is changed, once, however many of its
+// users are named), or an object with layers of its own.
+const changeStacks = (state: EditorState, changes: Record<string, LayerChange>): Partial<EditorState> | EditorState => {
+  const { byId } = getEntityIndex(state.entities);
+  const ownChanges = new Map<string, LayerChange>();
+  let materials = state.materials;
+  const changedAssets = new Set<string>();
 
-// `far` is fitted to the object when the panel can measure it (utils/depthColors.ts, depthReach).
-export const createDepthLayer = (far = 2): DepthLayer => ({
-  id: createEntityId(),
-  type: "depth",
-  enabled: true,
-  opacity: 1,
-  gradientType: "radial",
-  origin: [0, 0, 0],
-  direction: [1, 0, 0],
-  near: 0,
-  far,
-  stops: [
-    { color: "#ff3b30", position: 0 },
-    { color: "#ffcc00", position: 0.5 },
-    { color: "#af52de", position: 1 },
-  ],
-  smooth: false,
-});
+  for (const [ownerId, change] of Object.entries(changes)) {
+    const entity = byId.get(ownerId);
+    const asset = state.materials[ownerId] ?? (entity && assetOf(entity, state.materials));
+    if (!asset) {
+      ownChanges.set(ownerId, change);
+    } else if (!changedAssets.has(asset.id)) {
+      changedAssets.add(asset.id);
+      const layers = change(asset.layers);
+      if (layers !== asset.layers) materials = { ...materials, [asset.id]: { ...asset, layers } };
+    }
+  }
 
-// A copy that shares nothing with `layer` (a Depth layer holds arrays).
-export const cloneMaterialLayer = (layer: MaterialLayer): MaterialLayer =>
-  layer.type === "depth"
-    ? { ...layer, origin: cloneVector(layer.origin), direction: cloneVector(layer.direction), stops: layer.stops.map((stop) => ({ ...stop })) }
-    : { ...layer };
-
-const createLightingLayer = (overrides: Partial<LightingLayer> = {}): LightingLayer => ({
-  id: createEntityId(),
-  type: "lighting",
-  enabled: true,
-  opacity: 1,
-  model: "physical",
-  roughness: 0.45,
-  metalness: 0.08,
-  clearcoat: 0,
-  clearcoatRoughness: 0,
-  shininess: 30,
-  emissive: "#000000",
-  emissiveIntensity: 1,
-  ...overrides,
-});
-
-const createDefaultMaterialLayers = (color: string): MaterialLayer[] => [
-  createColorLayer(color, 1),
-  createLightingLayer(),
-];
-
-const ZERO_VECTOR: [number, number, number] = [0, 0, 0];
-const UNIT_VECTOR: [number, number, number] = [1, 1, 1];
-const DEFAULT_CAMERA_PROFILE_ID = "personal";
-
-export const DEFAULT_CAMERA_PROFILE: CameraProfile = {
-  id: "personal",
-  name: "Personal Camera",
-  position: [0, 5, 10],
-  target: [0, 0, 0],
-  fov: 45,
-  near: 0.1,
-  far: 1000,
-  zoom: 1,
+  const entities =
+    ownChanges.size > 0 ? state.entities.map((entity) => (ownChanges.has(entity.id) ? withLayers(entity, ownChanges.get(entity.id)!) : entity)) : state.entities;
+  const entitiesChanged = entities.some((entity, index) => entity !== state.entities[index]);
+  if (!entitiesChanged && materials === state.materials) return state;
+  return { ...(entitiesChanged ? { entities } : null), ...(materials !== state.materials ? { materials } : null) };
 };
 
-const createEntityId = (): string => createId("entity");
+const changeLayers = (state: EditorState, ownerId: string, change: LayerChange) => changeStacks(state, { [ownerId]: change });
 
-const createEntity = (type: EntityType): Entity => ({
-  id: createEntityId(),
-  type,
-  name: ENTITY_DEFAULTS[type].name,
-  position: (type === "directionalLight" ? [5, 8, 4] : [...ZERO_VECTOR]) as [number, number, number],
-  rotation: [...ZERO_VECTOR] as [number, number, number],
-  scale: [...UNIT_VECTOR] as [number, number, number],
-  ...(type === "directionalLight"
-    ? { color: ENTITY_DEFAULTS[type].color }
-    : type === "group"
-      ? null // groups are pure transform pivots — no material, no color
-      : type === "plane"
-        ? // flat, so shown from both sides, like a shape or an image
-          { materialLayers: [{ ...createColorLayer(ENTITY_DEFAULTS.plane.color, 1), doubleSided: true }, createLightingLayer()] }
-        : { materialLayers: createDefaultMaterialLayers(ENTITY_DEFAULTS[type].color) }),
-  // The Add menu's path is a sample curve; the Path pen draws its own (addPath).
-  ...(type === "path" ? { path: createSamplePath(), stroke: { ...DEFAULT_STROKE }, trimStart: 0, trimEnd: 1 } : null),
-  visible: true,
-  locked: false,
-});
+// The entities with these opacities (entity ID → 0-1; 1 is stored as none), for the ones that have
+// a material of their own (an object on a material asset has the asset's opacity); the same list
+// when nothing changed.
+const withOpacities = (entities: Entity[], opacities: Record<string, number>): Entity[] => {
+  const next = entities.map((entity) => {
+    const opacity = opacities[entity.id];
+    if (opacity === undefined || !entity.materialLayers || entity.materialAssetId) return entity;
+    const clamped = Math.min(1, Math.max(0, opacity));
+    if ((entity.opacity ?? 1) === clamped) return entity;
+    const { opacity: _old, ...rest } = entity;
+    return clamped === 1 ? rest : { ...rest, opacity: clamped };
+  });
+  return next.some((entity, index) => entity !== entities[index]) ? next : entities;
+};
 
-const initialEntities: Entity[] = [
-  createEntity("cube"),
-  {
-    id: "directional-light-1",
-    type: "directionalLight",
-    name: "Directional Light",
-    position: [5, 8, 4],
-    rotation: [0, 0, 0],
-    scale: [1, 1, 1],
-    color: "#ffffff",
-    visible: true,
-    locked: false,
-  },
-];
+// The assets with these opacities (asset ID → 0-1; 1 is stored as none); the same record when
+// nothing changed.
+const withAssetOpacities = (materials: Record<string, MaterialAsset>, opacities: Record<string, number>): Record<string, MaterialAsset> => {
+  let next = materials;
+  for (const [assetId, opacity] of Object.entries(opacities)) {
+    const asset = next[assetId];
+    const clamped = Math.min(1, Math.max(0, opacity));
+    if (!asset || assetOpacity(asset) === clamped) continue;
+    const { opacity: _old, ...rest } = asset;
+    next = { ...next, [assetId]: clamped === 1 ? rest : { ...rest, opacity: clamped } };
+  }
+  return next;
+};
 
-const cloneVector = (vector: [number, number, number]): [number, number, number] => [
-  vector[0],
-  vector[1],
-  vector[2],
-];
+// A stack with one layer's values changed; the same stack when it doesn't hold the layer.
+const withLayerUpdates =
+  (layerId: string, updates: Partial<MaterialLayer>): LayerChange =>
+  (layers) =>
+    layers.some((layer) => layer.id === layerId) ? layers.map((layer) => (layer.id === layerId ? ({ ...layer, ...updates } as MaterialLayer) : layer)) : layers;
 
-const cloneCameraProfile = (profile: CameraProfile): CameraProfile => ({
-  ...profile,
-  position: cloneVector(profile.position),
-  target: cloneVector(profile.target),
-  ...(profile.play ? { play: { ...profile.play } } : null),
-});
+// `entity` with a copy of its asset's layers and the asset's opacity as its own, no longer using the asset.
+const detached = (entity: Entity, materials: Record<string, MaterialAsset>): Entity => {
+  if (!entity.materialAssetId) return entity;
+  const { materialAssetId: _assetId, ...rest } = entity;
+  const asset = assetOf(entity, materials);
+  if (!asset || !entity.materialLayers) return rest;
+  const { opacity: _own, ...kept } = rest;
+  const opacity = assetOpacity(asset);
+  return { ...kept, materialLayers: copyLayers(asset.layers), ...(opacity < 1 ? { opacity } : null) };
+};
 
-const createCameraProfile = (id: string, data: Partial<CameraProfile> = {}): CameraProfile => ({
-  ...cloneCameraProfile(DEFAULT_CAMERA_PROFILE),
-  ...data,
-  id,
-  name: data.name ?? DEFAULT_CAMERA_PROFILE.name,
-  position: cloneVector(data.position ?? DEFAULT_CAMERA_PROFILE.position),
-  target: cloneVector(data.target ?? DEFAULT_CAMERA_PROFILE.target),
-  fov: data.fov ?? DEFAULT_CAMERA_PROFILE.fov,
-  near: data.near ?? DEFAULT_CAMERA_PROFILE.near,
-  far: data.far ?? DEFAULT_CAMERA_PROFILE.far,
-  zoom: data.zoom ?? DEFAULT_CAMERA_PROFILE.zoom,
-});
+// `entity` using the asset `assetId`: its own layers and opacity are discarded, as it's drawn with
+// the asset's (scene/materialAssets.ts).
+const attached = (entity: Entity, assetId: string): Entity => {
+  const { opacity: _own, ...rest } = entity;
+  return { ...rest, materialAssetId: assetId, materialLayers: [] };
+};
 
-const cloneEntity = (entity: Entity): Entity => ({
-  ...entity,
-  position: cloneVector(entity.position),
-  rotation: cloneVector(entity.rotation),
-  scale: cloneVector(entity.scale),
-  visible: entity.visible ?? true,
-  locked: entity.locked ?? false,
-  ...(entity.materialLayers ? { materialLayers: entity.materialLayers.map(cloneMaterialLayer) } : null),
-  ...(entity.path ? { path: clonePath(entity.path) } : null),
-  ...(entity.stroke ? { stroke: { ...entity.stroke } } : null),
-  ...(entity.shape ? { shape: cloneShape(entity.shape) } : null),
-});
+/**
+ * The entities as the viewport draws them: each object that uses a material asset with the asset's
+ * layers (scene/materialAssets.ts). The same list while the entities and assets are the same.
+ */
+export const selectDrawnEntities = (state: Pick<EditorState, "entities" | "materials">): Entity[] => resolveEntities(state.entities, state.materials);
 
 /** The parts of the state that are saved as the scene (see utils/sceneDocument.ts). */
 export const selectSceneContent = (state: EditorState): SceneContent => ({
@@ -742,6 +502,7 @@ export const selectSceneContent = (state: EditorState): SceneContent => ({
   activeProfileId: state.activeProfileId,
   animation: state.animation,
   viewedStates: state.viewedStates,
+  materials: state.materials,
 });
 
 /** The state an object is shown in, or null when it's shown in Base (see `viewedStates`). */
@@ -779,31 +540,10 @@ const updatingState = (
 const getParentWorld = (entities: Entity[], parentId: string | null | undefined) =>
   parentId ? getEntityWorldMatrix(entities, parentId) : null;
 
-// What a new scene starts with: a fresh cube (new ID) and the default light.
-const createStartingEntities = (): Entity[] => [
-  createEntity("cube"),
-  ...initialEntities.filter((entity) => entity.type === "directionalLight").map(cloneEntity),
-];
-
-function deepMerge(target: any, source: any): any {
-  const result = { ...target };
-  for (const key in source) {
-    if (Object.prototype.hasOwnProperty.call(source, key)) {
-      const sourceVal = source[key];
-      if (sourceVal !== null && typeof sourceVal === "object" && !Array.isArray(sourceVal)) {
-        result[key] = deepMerge(target[key] || {}, sourceVal);
-      } else {
-        result[key] = sourceVal;
-      }
-    }
-  }
-  return result;
-}
-
 // What read-only mode protects: the scene's content, less its cameras. Moving the view (and picking
 // a camera) is how you look at a scene you can't edit, and nothing is saved while read-only; the
 // scene is reloaded from the cloud before editing resumes.
-const PROTECTED_SCENE_KEYS = ["entities", "sceneSettings", "postProcessing", "frame", "animation"] as const;
+const PROTECTED_SCENE_KEYS = ["entities", "sceneSettings", "postProcessing", "frame", "animation", "materials"] as const;
 
 // What persist saves in this browser (partialize): editor preferences only. The scene is saved per
 // scene in the cloud.
@@ -956,12 +696,13 @@ export const useEditorStore = create<EditorState>()(
           },
           duplicateEntity: (ids) => {
             set((state) => {
+              const { byId } = getEntityIndex(state.entities);
               const requestedRootIds = new Set(ids);
               const cloneOrder: string[] = [];
               const seen = new Set<string>();
 
               ids.forEach((id) => {
-                if (!state.entities.some((e) => e.id === id)) return;
+                if (!byId.has(id)) return;
                 if (!seen.has(id)) {
                   seen.add(id);
                   cloneOrder.push(id);
@@ -986,7 +727,7 @@ export const useEditorStore = create<EditorState>()(
               );
 
               const newEntities: Entity[] = cloneOrder.map((id) => {
-                const original = state.entities.find((e) => e.id === id)!;
+                const original = byId.get(id)!;
                 const isRequestedRoot = requestedRootIds.has(id);
                 const newParentId = original.parentId ? idMap.get(original.parentId) ?? original.parentId : original.parentId;
                 const newRootEntityId = original.rootEntityId ? idMap.get(original.rootEntityId) ?? original.rootEntityId : original.rootEntityId;
@@ -1057,11 +798,12 @@ export const useEditorStore = create<EditorState>()(
                 return state;
               }
 
+              const { byId } = getEntityIndex(state.entities);
               const parentWorld = newParentId ? getEntityWorldMatrix(state.entities, newParentId) : null;
               const solvedById = new Map<string, EntityTRS>();
               const parentChanges: ParentChange[] = [];
               for (const id of moveRoots) {
-                const entity = state.entities.find((e) => e.id === id)!;
+                const entity = byId.get(id)!;
                 // Same-parent moves are pure sibling reorders — keep the stored
                 // TRS bit-identical instead of a solve/decompose round-trip.
                 if ((entity.parentId ?? null) === (newParentId ?? null)) continue;
@@ -1072,7 +814,7 @@ export const useEditorStore = create<EditorState>()(
               const movingSet = new Set(moveRoots);
               const remaining = state.entities.filter((entity) => !movingSet.has(entity.id));
               const moved: Entity[] = moveRoots.map((id) => {
-                const original = state.entities.find((e) => e.id === id)!;
+                const original = byId.get(id)!;
                 const solved = solvedById.get(id);
                 return {
                   ...original,
@@ -1109,9 +851,8 @@ export const useEditorStore = create<EditorState>()(
               const moveRoots = filterMoveRoots(state.entities, ids);
               if (moveRoots.length === 0) return state;
 
-              const parentIds = new Set(
-                moveRoots.map((id) => state.entities.find((e) => e.id === id)?.parentId ?? null),
-              );
+              const { byId } = getEntityIndex(state.entities);
+              const parentIds = new Set(moveRoots.map((id) => byId.get(id)?.parentId ?? null));
               const groupParentId = parentIds.size === 1 ? [...parentIds][0] : null;
               // The members end up under the new group, whose own parent is
               // groupParentId — legality (cycles, imported-model boundary) is
@@ -1174,22 +915,6 @@ export const useEditorStore = create<EditorState>()(
             });
             return groupId;
           },
-          applyHierarchyPrune: (removedIds, updates) =>
-            set((state) => ({
-              entities: state.entities
-                .filter((entity) => !removedIds.has(entity.id))
-                .map((entity) => {
-                  const update = updates.get(entity.id);
-                  if (!update) return entity;
-                  return {
-                    ...entity,
-                    parentId: update.parentId,
-                    position: cloneVector(update.position),
-                    rotation: cloneVector(update.rotation),
-                    scale: cloneVector(update.scale),
-                  };
-                }),
-            })),
           ungroupEntity: (id) =>
             set((state) => {
               const group = state.entities.find((entity) => entity.id === id);
@@ -1348,7 +1073,7 @@ export const useEditorStore = create<EditorState>()(
                 position: cloneVector(origin),
                 rotation: cloneVector(rotation),
                 shape: flattenShape({ regions: [{ outline, holes: [] }] }),
-                materialLayers: [{ ...createColorLayer(ENTITY_DEFAULTS.shape.color, 1), doubleSided: true }, createLightingLayer()],
+                materialLayers: createFlatMaterialLayers(ENTITY_DEFAULTS.shape.color),
               };
               newId = entity.id;
               return { entities: [...state.entities, entity], selectedEntityIds: [entity.id] };
@@ -1407,7 +1132,7 @@ export const useEditorStore = create<EditorState>()(
                   : {
                       shape: cloneShape(imported.shape),
                       // A flat shape shows from both sides.
-                      materialLayers: [{ ...createColorLayer(imported.color, 1), doubleSided: true }, createLightingLayer()],
+                      materialLayers: createFlatMaterialLayers(imported.color),
                     }),
                 ...(parentId ? { parentId } : null),
               });
@@ -1426,27 +1151,15 @@ export const useEditorStore = create<EditorState>()(
           addImagePlane: (name, textureAssetId, aspect, transparent) => {
             let newId = "";
             set((state) => {
-              const image: ImageLayer = {
-                id: createEntityId(),
-                type: "image",
-                enabled: true,
-                opacity: 1,
-                textureAssetId,
-                slot: "color",
-                // The picture covers the plane once; clamping keeps its edges from bleeding into each other.
-                wrapS: ClampToEdgeWrapping,
-                wrapT: ClampToEdgeWrapping,
-              };
+              // The picture covers the plane once; clamping keeps its edges from bleeding into each other.
+              const image = createImageLayer({ textureAssetId, name, wrapS: ClampToEdgeWrapping, wrapT: ClampToEdgeWrapping });
               const entity: Entity = {
                 ...createEntity("image"),
                 name,
                 imageAspect: aspect,
-                // White, so the picture shows in its own colours (the Color layer tints it), whatever the lights.
-                materialLayers: [
-                  { ...createColorLayer(ENTITY_DEFAULTS.image.color, 1), doubleSided: true, ...(transparent ? { alphaMode: "BLEND" as const } : null) },
-                  createLightingLayer({ model: "none" }),
-                  image,
-                ],
+                // Unlit, so the picture shows in its own colours whatever the lights; a see-through
+                // one blends (its alpha mode).
+                materialLayers: [createLightingLayer({ model: "none", doubleSided: true, ...(transparent ? { alphaMode: "BLEND" } : {}) }), image],
               };
               newId = entity.id;
               return { entities: [...state.entities, entity], selectedEntityIds: [entity.id], penTool: null };
@@ -1566,7 +1279,7 @@ export const useEditorStore = create<EditorState>()(
               const entity = state.entities.find((each) => each.id === entityId);
               if (!entity) return state;
               const pose = resolveState(entity, selectViewedObjectState(state, entityId));
-              const objectState = { ...createObjectState(state.animation.states, entityId), values: cloneStateValues(pose) };
+              const objectState = { ...createObjectState(state.animation.states, entityId), values: cloneStateValues(withoutLook(pose)) };
               stateId = objectState.id;
               return {
                 animation: { ...state.animation, states: { ...state.animation.states, [objectState.id]: objectState } },
@@ -1664,73 +1377,186 @@ export const useEditorStore = create<EditorState>()(
             set((state) => ({
               frame: deepMerge(state.frame, updates),
             })),
-          addMaterialLayer: (entityId, layerType, depthFar) =>
-            set((state) => ({
-              entities: state.entities.map((entity) => {
-                if (entity.id !== entityId || !entity.materialLayers) return entity;
-                if (entity.materialLayers.some((layer) => layer.type === layerType)) return entity;
-
-                const colorLayer = entity.materialLayers.find((layer): layer is ColorLayer => layer.type === "color");
-                const newLayer: MaterialLayer =
-                  layerType === "color"
-                    ? createColorLayer(colorLayer?.color ?? "#ffffff")
-                    : layerType === "depth"
-                      ? createDepthLayer(depthFar !== undefined && depthFar > 0 ? depthFar : undefined)
-                      : createLightingLayer();
-
-                return {
-                  ...entity,
-                  materialLayers: [...entity.materialLayers, newLayer],
-                };
+          materials: {},
+          createMaterialAsset: (fromEntityId) => {
+            let assetId = "";
+            set((state) => {
+              const source = fromEntityId ? getEntityIndex(state.entities).byId.get(fromEntityId) : undefined;
+              if (fromEntityId && !(source && canUseMaterialAsset(source))) return state;
+              const sourceOpacity = source ? opacityOf(source, state.materials) : 1;
+              const asset: MaterialAsset = {
+                id: createEntityId(),
+                name: nextMaterialAssetName(state.materials),
+                layers: source ? copyLayers(layersOf(source, state.materials)!) : createMaterialAssetLayers(),
+                // The object's opacity becomes the material's.
+                ...(sourceOpacity < 1 ? { opacity: sourceOpacity } : null),
+              };
+              assetId = asset.id;
+              return {
+                materials: { ...state.materials, [asset.id]: asset },
+                ...(source ? { entities: state.entities.map((entity) => (entity === source ? attached(entity, asset.id) : entity)) } : null),
+                // An asset is one look in every state.
+                ...(source ? withAnimation(state.animation, { states: withoutStateLooks(state.animation.states, new Set([source.id])) }) : null),
+              };
+            });
+            // Empty when the store refused it (view only): nothing was made.
+            return get().materials[assetId] ? assetId : "";
+          },
+          addMaterialAsset: (source) => {
+            const opacity = assetOpacity(source);
+            const asset: MaterialAsset = {
+              id: createEntityId(),
+              name: source.name.trim() || nextMaterialAssetName(get().materials),
+              layers: copyLayers(source.layers),
+              ...(opacity < 1 ? { opacity } : null),
+            };
+            set((state) => ({ materials: { ...state.materials, [asset.id]: asset } }));
+            // Empty when the store refused it (view only): nothing was added.
+            return get().materials[asset.id] ? asset.id : "";
+          },
+          setMaterialAssetOpacity: (assetId, opacity) =>
+            set((state) => {
+              const materials = withAssetOpacities(state.materials, { [assetId]: opacity });
+              return materials === state.materials ? state : { materials };
+            }),
+          renameMaterialAsset: (assetId, name) =>
+            set((state) => {
+              const asset = state.materials[assetId];
+              const trimmed = name.trim();
+              if (!asset || !trimmed || trimmed === asset.name) return state;
+              return { materials: { ...state.materials, [assetId]: { ...asset, name: trimmed } } };
+            }),
+          removeMaterialAsset: (assetId) =>
+            set((state) => {
+              if (!state.materials[assetId]) return state;
+              const { [assetId]: _removed, ...materials } = state.materials;
+              const usesIt = state.entities.some((entity) => entity.materialAssetId === assetId);
+              return {
+                materials,
+                ...(usesIt ? { entities: state.entities.map((entity) => (entity.materialAssetId === assetId ? detached(entity, state.materials) : entity)) } : null),
+              };
+            }),
+          applyMaterialAsset: (assetId, entityIds) =>
+            set((state) => {
+              const asset = state.materials[assetId];
+              if (!asset) return state;
+              const ids = new Set(entityIds);
+              const entities = state.entities.map((entity) =>
+                ids.has(entity.id) && canUseMaterialAsset(entity) && entity.materialAssetId !== assetId ? attached(entity, assetId) : entity,
+              );
+              if (!entities.some((entity, index) => entity !== state.entities[index])) return state;
+              // An asset is one look in every state: the colours and opacities these objects' states set go, in the same undo step.
+              const applied = new Set(entities.filter((entity, index) => entity !== state.entities[index]).map((entity) => entity.id));
+              return { entities, ...withAnimation(state.animation, { states: withoutStateLooks(state.animation.states, applied) }) };
+            }),
+          detachMaterialAsset: (entityIds) =>
+            set((state) => {
+              const ids = new Set(entityIds);
+              const entities = state.entities.map((entity) => (ids.has(entity.id) ? detached(entity, state.materials) : entity));
+              return entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : state;
+            }),
+          addMaterialLayer: (ownerId, layerType, depthFar) =>
+            set((state) =>
+              changeLayers(state, ownerId, (layers) => {
+                if (layerType === "lighting") {
+                  return layers.some((layer) => layer.type === "lighting") ? layers : [createLightingLayer(), ...layers];
+                }
+                if (!isColorLayerType(layerType)) return layers;
+                // A new Color layer starts as the colour of the one it goes over, so adding one changes nothing yet.
+                const newLayer = createPaintLayer(layerType as PaintLayerType, depthFar, colorLayerOf(layers)?.color ?? "#ffffff");
+                const index = layerType === "fresnel" ? 0 : newLayerIndex(layers);
+                return [...layers.slice(0, index), newLayer, ...layers.slice(index)];
               }),
-            })),
-          removeMaterialLayer: (entityId, layerId) =>
-            set((state) => ({
-              entities: state.entities.map((entity) => {
-                if (entity.id !== entityId || !entity.materialLayers) return entity;
-                const layer = entity.materialLayers.find((l) => l.id === layerId);
-                if (!layer || MANDATORY_LAYER_TYPES.includes(layer.type)) return entity;
+            ),
+          updateShownLooks: (updates) =>
+            set((state) => {
+              const { byId } = getEntityIndex(state.entities);
+              const states = { ...state.animation.states };
+              let isStateEdit = false;
+              const baseOpacities: Record<string, number> = {};
+              const assetOpacities: Record<string, number> = {};
+              const baseColors: Record<string, LayerChange> = {};
 
-                return {
-                  ...entity,
-                  materialLayers: entity.materialLayers.filter((l) => l.id !== layerId),
-                };
+              for (const [entityId, look] of Object.entries(updates)) {
+                const entity = byId.get(entityId);
+                if (!entity?.materialLayers) continue;
+                const hasColorLayer = !!colorLayerOf(layersOf(entity, state.materials));
+                const color = hasColorLayer ? look.color : undefined;
+                const shown = selectViewedObjectState(state, entityId);
+                // An object on a material asset is the asset's colour and opacity in every state: both edit the asset.
+                const asset = assetOf(entity, state.materials);
+                const stateColor = shown && !entity.materialAssetId ? color : undefined;
+                if (color !== undefined && stateColor === undefined) baseColors[entityId] = (layers) => withTopColor(layers, color);
+                if (entity.materialAssetId) {
+                  if (asset && look.opacity !== undefined) assetOpacities[asset.id] = look.opacity;
+                } else if (shown) {
+                  const values: StateValues = {
+                    ...(stateColor !== undefined ? { color: stateColor } : null),
+                    ...(look.opacity !== undefined ? { opacity: Math.min(1, Math.max(0, look.opacity)) } : null),
+                  };
+                  if (Object.keys(values).length === 0) continue;
+                  // `states[shown.id]`, not `shown`: nothing here edits a state twice, but it costs nothing to be safe.
+                  states[shown.id] = { ...states[shown.id], values: { ...states[shown.id].values, ...values } };
+                  isStateEdit = true;
+                } else {
+                  if (look.opacity !== undefined) baseOpacities[entityId] = look.opacity;
+                }
+              }
+
+              // The colours first (an asset's stack, or the objects' own), then the opacities on top.
+              const stacks = changeStacks(state, baseColors) as Partial<EditorState>;
+              const entities = withOpacities(stacks.entities ?? state.entities, baseOpacities);
+              const materials = withAssetOpacities(stacks.materials ?? state.materials, assetOpacities);
+              if (entities === state.entities && materials === state.materials && !isStateEdit) return state;
+              return {
+                ...(entities !== state.entities ? { entities } : null),
+                ...(materials !== state.materials ? { materials } : null),
+                ...(isStateEdit ? { animation: { ...state.animation, states } } : null),
+              };
+            }),
+          removeMaterialLayer: (ownerId, layerId) =>
+            set((state) =>
+              changeLayers(state, ownerId, (layers) => {
+                const layer = layers.find((each) => each.id === layerId);
+                return layer && canRemoveLayer(layers, layer) ? layers.filter((each) => each.id !== layerId) : layers;
               }),
-            })),
-          updateMaterialLayer: (entityId, layerId, updates) =>
-            set((state) => ({
-              entities: state.entities.map((entity) => {
-                if (entity.id !== entityId || !entity.materialLayers) return entity;
-                return {
-                  ...entity,
-                  materialLayers: entity.materialLayers.map((layer) =>
-                    layer.id === layerId ? ({ ...layer, ...updates } as MaterialLayer) : layer,
-                  ),
-                };
+            ),
+          switchMaterialLayerType: (ownerId, layerId, type, depthFar) =>
+            set((state) =>
+              changeLayers(state, ownerId, (layers) => {
+                const layer = layers.find((each) => each.id === layerId);
+                if (!layer || layer.type === type || !canSwitchLayerType(layers, layer, type)) return layers;
+                const color = colorLayerOf(layers.filter((each) => each.id !== layerId))?.color;
+                return layers.map((each) => (each.id === layerId ? switchLayerType(each, type, depthFar, color) : each));
               }),
-            })),
+            ),
+          moveMaterialLayer: (ownerId, layerId, toIndex) =>
+            set((state) => changeLayers(state, ownerId, (layers) => moveLayer(layers, layerId, toIndex))),
+          setEntityOpacity: (opacities) =>
+            set((state) => {
+              const entities = withOpacities(state.entities, opacities);
+              return entities === state.entities ? state : { entities };
+            }),
+          updateMaterialLayer: (ownerId, layerId, updates) => set((state) => changeLayers(state, ownerId, withLayerUpdates(layerId, updates))),
           updateMultipleEntityMaterialLayers: (updatesMap) =>
-            set((state) => ({
-              entities: state.entities.map((entity) => {
-                const change = updatesMap[entity.id];
-                if (!change || !entity.materialLayers) return entity;
-                return {
-                  ...entity,
-                  materialLayers: entity.materialLayers.map((layer) =>
-                    layer.id === change.layerId ? ({ ...layer, ...change.updates } as MaterialLayer) : layer,
-                  ),
-                };
-              }),
-            })),
-          // Replaces an entity's whole layer stack. Used by hydrate-time backfill
-          // (ObjectManager) to write the layers derived from an imported mesh's
-          // parsed glTF material — the one place layers can be built, since it
-          // needs parsed texture/material data unavailable at migrate() time.
-          setEntityMaterialLayers: (entityId, layers) =>
+            set((state) =>
+              changeStacks(
+                state,
+                Object.fromEntries(Object.entries(updatesMap).map(([ownerId, change]) => [ownerId, withLayerUpdates(change.layerId, change.updates)])),
+              ),
+            ),
+          // Replaces an entity's whole layer stack. Used when hydrating imported models
+          // (viewport/importedModels.ts) to write the layers derived from an imported mesh's
+          // parsed glTF material.
+          setEntityMaterialLayers: (entityId, layers, opacity) =>
             set((state) => ({
               entities: state.entities.map((entity) =>
                 entity.id === entityId
-                  ? { ...entity, materialLayers: layers.map((layer) => ({ ...layer })) }
+                  ? {
+                      ...entity,
+                      materialLayers: layers.map(cloneMaterialLayer),
+                      ...(opacity !== undefined && opacity !== 1 ? { opacity } : null),
+                    }
                   : entity,
               ),
             })),
@@ -1757,6 +1583,7 @@ export const useEditorStore = create<EditorState>()(
               activeProfileId,
               animation: cloneAnimation(content?.animation),
               viewedStates: { ...content?.viewedStates },
+              materials: structuredClone(content?.materials ?? {}),
               selectedEntityIds: [],
               isPreviewMode: false,
               previewingActionId: null,
@@ -1775,7 +1602,7 @@ export const useEditorStore = create<EditorState>()(
           // (utils/sceneLibrary.ts) and loaded with loadScene. The key keeps its name from when it
           // held the scene.
           name: "libre3d-scene-state",
-          version: 17,
+          version: 18,
           storage: createJSONStorage(() => localStorage),
           // Before v17 the scene was saved here too. Scenes live in the cloud now and nothing saved
           // before then is kept, so an older blob keeps only the editor preferences (the fields
@@ -1787,6 +1614,8 @@ export const useEditorStore = create<EditorState>()(
               );
             }
 
+            // v18 added `materials` (material assets) to the scene's part of the store. Scenes aren't
+            // kept here, so a v17 blob's preferences carry over as they are.
             return persistedState;
           },
           partialize: (state) =>
@@ -1811,6 +1640,7 @@ export const useEditorStore = create<EditorState>()(
           postProcessing: state.postProcessing,
           frame: state.frame,
           animation: state.animation,
+          materials: state.materials,
         }),
         // Only record a step when something undo restores changed. Every action replaces what it
         // changes, so comparing references is enough; without this, selecting an object or picking
@@ -1829,4 +1659,11 @@ export const useEditorStore = create<EditorState>()(
 if (!useEditorStore.persist.hasHydrated()) {
   void useEditorStore.persist.rehydrate();
   useEditorStore.temporal.getState().clear();
+}
+
+// Dev server only. A hot update of this module, or of anything it imports, would hand the open
+// editor a new store holding the starter scene while a cloud scene is still open, and autosave
+// would save that over the scene. Reloading the page instead reopens the scene from the cloud.
+if (import.meta.hot) {
+  import.meta.hot.accept(() => window.location.reload());
 }

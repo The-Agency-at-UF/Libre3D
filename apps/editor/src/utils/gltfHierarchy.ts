@@ -24,6 +24,16 @@ export function nodePathKey(nodePath: number[]): string {
   return nodePath.join(",");
 }
 
+// Every node of a parsed gltf.scene by its nodePath key, to find the object an imported-model
+// entity stands for (its `nodePath`).
+export function indexNodesByPath(scene: THREE.Object3D): Map<string, THREE.Object3D> {
+  const nodeByPath = new Map<string, THREE.Object3D>();
+  walkGltfScene(scene, (object, nodePath) => {
+    nodeByPath.set(nodePathKey(nodePath), object);
+  });
+  return nodeByPath;
+}
+
 // Collects every Bone referenced by any SkinnedMesh's skeleton in the scene.
 // Used to protect bones from the empty/pass-through pruning pass (see
 // pruneImportHierarchy.ts) -- a bone often has no mesh and nothing else

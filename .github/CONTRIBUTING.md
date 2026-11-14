@@ -41,7 +41,7 @@ Naming is `[initials]/[kebab-case-name]` — `em/add-cone-primitive`, `ja/fix-gi
 ```
 feat: add cone primitive entity type
 
-Adds ConeGeometry to ObjectManager and a defaults entry to
+Adds ConeGeometry to entityGeometry.ts and a defaults entry to
 ENTITY_DEFAULTS, so "Cone" appears in the Add Shape dropdown.
 ```
 
@@ -101,7 +101,7 @@ Pull the branch and actually run it — don't review from the diff alone. Then c
 - `sceneSettings` / `postProcessing` / `frame` updated through their actions, not replaced wholesale
 - Store shape changed → persist `version` bumped **and** a matching migration added
 - No new Context providers or parallel stores; durable state belongs in `useEditorStore`
-- New entity type → `ObjectManager.createGeometry` has a case for it
+- New entity type → `createPrimitiveGeometry` (`viewport/entityGeometry.ts`) has a case for it
 
 **Style** — matches [docs/conventions.md](../docs/conventions.md) and the surrounding code. No leftover `console.log`, no dead code, comments that say why rather than what.
 

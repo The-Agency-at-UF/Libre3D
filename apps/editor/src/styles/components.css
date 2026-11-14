@@ -128,14 +128,6 @@
   z-index: 5;
 }
 
-.hierarchy-drop-line--top {
-  top: -1px;
-}
-
-.hierarchy-drop-line--bottom {
-  bottom: -1px;
-}
-
 .hierarchy-drop-line::before {
   content: "";
   position: absolute;
@@ -244,19 +236,6 @@
   min-width: 0;
 }
 
-.editor-tree-type {
-  font-size: 9.5px;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-  flex-shrink: 0;
-  max-width: 68px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-
-
 .editor-tree-delete {
   background: transparent;
   border: none;
@@ -273,90 +252,6 @@
 .editor-tree-delete:hover {
   background: var(--red);
   color: #ffffff;
-}
-
-
-
-.editor-inspector-card {
-  display: grid;
-  gap: 1rem;
-  padding: 1.25rem;
-  border-radius: var(--radius);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  background:
-    linear-gradient(180deg, rgba(15, 23, 42, 0.9), rgba(2, 6, 23, 0.84));
-}
-
-.editor-inspector-card--empty {
-  min-height: 280px;
-  align-content: center;
-}
-
-.editor-inspector-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.editor-inspector-kicker,
-.editor-inspector-subtitle {
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: rgba(61, 255, 160, 0.78);
-}
-
-.editor-inspector-title {
-  margin: 0.25rem 0 0;
-  font-size: 1.15rem;
-}
-
-.editor-inspector-copy {
-  margin: 0;
-  color: rgba(226, 232, 240, 0.68);
-  line-height: 1.6;
-}
-
-.editor-inspector-section {
-  display: grid;
-  gap: 0.75rem;
-}
-
-.editor-field {
-  display: grid;
-  gap: 0.4rem;
-  font-size: 0.84rem;
-  color: rgba(226, 232, 240, 0.78);
-}
-
-.editor-field input {
-  width: 100%;
-  border-radius: var(--radius);
-  border: 1px solid var(--input-border);
-  background: var(--input-bg);
-  color: var(--text-primary);
-  padding: 0.75rem 0.85rem;
-  outline: none;
-  font-family: var(--font);
-  font-size: var(--font-size-xs);
-  transition: border-color 0.1s ease, box-shadow 0.1s ease;
-}
-
-.editor-field input[type="color"] {
-  padding: 0.3rem;
-  min-height: 48px;
-}
-
-.editor-field input:focus {
-  border-color: var(--input-border-focus);
-  box-shadow: 0 0 0 3px var(--input-focus-shadow);
-}
-
-.editor-vector-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.65rem;
 }
 
 .editor-modal-backdrop {
@@ -1012,92 +907,8 @@
 }
 
 /* Collapsible Inspector Sections */
-.inspector-collapsible-section {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.inspector-collapsible-header {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.85rem 1rem;
-  background: transparent;
-  border: none;
-  color: #e2e8f0;
-  font-weight: 600;
-  font-size: 0.85rem;
-  cursor: pointer;
-  text-align: left;
-}
-
-.inspector-collapsible-header:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.inspector-collapsible-content {
-  padding: 0 1rem 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
 
 /* Row elements inside inspector */
-.inspector-row {
-  display: grid;
-  grid-template-columns: 80px 1fr;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.8rem;
-  color: rgba(226, 232, 240, 0.6);
-}
-
-.dark-select-wrapper {
-  background: var(--bg-surface-sunken);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 6px;
-  color: #e2e8f0;
-  padding: 0.35rem 0.5rem;
-  outline: none;
-  font-size: 0.8rem;
-  width: 100%;
-}
-
-.color-picker-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.color-picker-preview {
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  cursor: pointer;
-  overflow: hidden;
-  padding: 0;
-  background: none;
-}
-
-.segmented-button-array {
-  display: flex;
-  background: var(--bg-surface-sunken);
-  border-radius: 6px;
-  padding: 0.15rem;
-}
-
-.segmented-btn {
-  flex: 1;
-  background: transparent;
-  border: none;
-  color: rgba(226, 232, 240, 0.5);
-  font-size: 0.75rem;
-  padding: 0.25rem;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: all 120ms ease;
-}
 
 .segmented-btn.active {
   background: rgba(255, 255, 255, 0.08);
@@ -1677,22 +1488,6 @@
   color: var(--text-tertiary);
 }
 
-.section-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.section-actions i {
-  font-size: 14px;
-  color: var(--text-tertiary);
-  cursor: pointer;
-}
-
-.section-actions i:hover {
-  color: var(--text-secondary);
-}
-
 /* Phase 2: Chevron bumped to secondary so it's visible but not dominant */
 .chevron {
   font-size: 11px;
@@ -1730,11 +1525,6 @@ details[open].section::before {
   pointer-events: none;
 }
 
-.section-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 2px 0;
-}
 
 /* ── PROPERTY ROW ── */
 .prop {
@@ -1774,8 +1564,7 @@ details[open].section::before {
 /* ── INPUTS ── */
 select,
 input[type="text"],
-input[type="number"],
-.input-base {
+input[type="number"] {
   background: var(--input-bg);
   border: 1px solid var(--input-border);
   color: var(--text-primary);
@@ -1792,8 +1581,7 @@ input[type="number"],
 
 select:focus,
 input[type="text"]:focus,
-input[type="number"]:focus,
-.input-base:focus {
+input[type="number"]:focus {
   border-color: var(--input-border-focus);
   box-shadow: 0 0 0 2px var(--input-focus-shadow);
 }
@@ -1934,20 +1722,9 @@ input[type="number"]:focus,
   margin-top: 2px;
 }
 
-.w-full {
-  width: 100%;
-}
 
 .w-60 {
   width: 60%;
-}
-
-.w-50 {
-  width: 50%;
-}
-
-.w-40 {
-  width: 40%;
 }
 
 .right-sidebar.panel input[type="number"] {
@@ -2100,55 +1877,26 @@ input[type="range"]::-moz-range-thumb {
 }
 
 /* ── COLOR PICKER ── */
-.color-row {
+
+/* The scene background's Reset, under its colour row */
+.scene-reset-btn {
   display: flex;
   align-items: center;
-  gap: 5px;
-}
-
-/* Phase 6: Compound color-field — swatch + hex share one bordered container */
-.inspector-color-field {
-  display: flex;
-  align-items: center;
-  border: 1px solid var(--input-border);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-  background: var(--input-bg);
-  transition: border-color 0.1s ease, box-shadow 0.1s ease;
-}
-
-.inspector-color-field:focus-within {
-  border-color: var(--input-border-focus);
-  box-shadow: 0 0 0 2px var(--input-focus-shadow);
-}
-
-.inspector-color-swatch {
-  width: 28px;
-  height: 28px;
-  border-right: 1px solid var(--border-strong);
-  flex-shrink: 0;
-  position: relative;
-  overflow: hidden;
-}
-
-.inspector-color-swatch input[type="color"] {
-  position: absolute;
-  inset: -4px;
-  width: calc(100% + 8px);
-  height: calc(100% + 8px);
-  padding: 0;
+  align-self: flex-end;
+  gap: 4px;
+  padding: 2px 6px;
   border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
   cursor: pointer;
-  background: transparent;
+  transition: all 120ms ease;
 }
 
-.inspector-color-field .hex-input {
-  flex: 1;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  outline: none;
-  box-shadow: none !important;
+.scene-reset-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
 }
 
 .swatch {
@@ -2178,60 +1926,12 @@ input[type="range"]::-moz-range-thumb {
   box-shadow: 0 0 0 2px var(--input-focus-shadow);
 }
 
-.alpha-input {
-  width: 36px;
-}
 
 /* ── EFFECT ROW ── */
-.effect-group {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-
-.effect-row {
-  display: flex;
-  align-items: center;
-  padding: 7px 10px;
-  gap: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.effect-row:last-child {
-  border-bottom: none;
-}
 
 .effect-row.sub {
   padding: 5px 10px 5px 32px;
   background: rgba(0, 0, 0, 0.15);
-}
-
-.effect-icon {
-  font-size: 13px;
-  color: var(--text-tertiary);
-  width: 16px;
-  text-align: center;
-  flex-shrink: 0;
-}
-
-.effect-name {
-  flex: 1;
-  color: var(--text-primary);
-  font-size: 11.5px;
-}
-
-.effect-controls {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.effect-val {
-  font-size: 10.5px;
-  color: var(--text-secondary);
-  min-width: 22px;
-  text-align: right;
 }
 
 /* ── NESTED ACCORDION ── */
@@ -2240,14 +1940,6 @@ input[type="range"]::-moz-range-thumb {
    name · trailing action), property rows indented beneath it along a hairline
    guide. Property-row rules are scoped to .mat-layer-body so the shared
    Slider/Select/Switch components stay untouched elsewhere in the inspector. */
-.material-layer-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  width: 100%;
-  min-width: 0;
-}
-
 .mat-layer {
   width: 100%;
   min-width: 0;
@@ -2382,36 +2074,6 @@ input[type="range"]::-moz-range-thumb {
   border-left: 1px solid var(--border);
 }
 
-/* The Depth layer's ramp (DepthRamp): a colour bar with a handle per stop */
-.depth-ramp {
-  position: relative;
-  flex: 1;
-  height: 16px;
-  margin: 0 7px;
-  border-radius: 4px;
-  border: 1px solid var(--border);
-  cursor: copy;
-}
-
-.depth-ramp-stop {
-  position: absolute;
-  top: 50%;
-  width: 12px;
-  height: 20px;
-  padding: 0;
-  transform: translate(-50%, -50%);
-  border: 2px solid #ffffff;
-  border-radius: 4px;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
-  cursor: ew-resize;
-  touch-action: none;
-}
-
-.depth-ramp-stop.selected {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
 /* Property rows: fixed label column so every control lines up */
 .mat-layer-body .prop {
   gap: 8px;
@@ -2454,35 +2116,7 @@ input[type="range"]::-moz-range-thumb {
   right: 7px;
 }
 
-.mat-layer-body .inspector-color-field {
-  flex: 1;
-  min-width: 0;
-  height: 22px;
-  border-radius: 4px;
-}
-
-.mat-layer-body .inspector-color-swatch {
-  width: 22px;
-  height: 22px;
-}
-
-.mat-layer-body .inspector-color-field .hex-input {
-  width: 100%;
-  min-width: 0;
-  height: 100%;
-  padding: 0 7px;
-  font-size: 11px;
-}
-
-/* Add-layer actions — quiet secondary buttons, not a call to action */
-.mat-layer-add {
-  display: flex;
-  gap: 4px;
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border);
-}
-
+/* Quiet secondary "+" buttons (States, Events, Shape) */
 .mat-add-btn {
   flex: 1;
   height: 22px;
@@ -2513,6 +2147,12 @@ input[type="range"]::-moz-range-thumb {
 .mat-add-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* The section header's action (Materials' "+") */
+.section-action {
+  display: flex;
+  align-items: center;
 }
 
 /* ── OBJECT STATES (StatesPanel, and the Transform panel's state markers) ── */
@@ -2790,15 +2430,6 @@ input[type="range"]::-moz-range-thumb {
 .badge.amber {
   background: rgba(245, 158, 11, 0.15);
   color: #fbbf24;
-}
-
-.two-col {
-  display: flex;
-  gap: 6px;
-}
-
-.two-col>* {
-  flex: 1;
 }
 
 /* Help menu: compact info chip + tutorial / shortcuts dialog */
