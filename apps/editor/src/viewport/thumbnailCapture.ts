@@ -32,11 +32,11 @@ let pending: PendingCapture[] = [];
 export const hasPendingThumbnail = (): boolean => pending.length > 0;
 
 /**
- * Called by the render loop with this frame's camera: renders the scene without the editor's own
+ * Called by the render loop with what draws the scene as Play shows it (effects and all): draws it without the editor's own
  * objects, with every object in its Base State, and copies it, cropped to 16:9 from the middle, into a small canvas for every waiting
  * request. The frame's normal render follows and replaces it on screen.
  */
-export const renderPendingThumbnail = (renderer: SceneRenderer, scene: THREE.Scene, camera: THREE.Camera): void => {
+export const renderPendingThumbnail = (renderer: SceneRenderer, scene: THREE.Scene, draw: () => void): void => {
   const waiting = pending;
   pending = [];
 
@@ -49,7 +49,7 @@ export const renderPendingThumbnail = (renderer: SceneRenderer, scene: THREE.Sce
   const restorePoses = showBasePoses(scene);
 
   try {
-    renderer.render(scene, camera);
+    draw();
 
     const scale = Math.min(source.width / THUMBNAIL_WIDTH, source.height / THUMBNAIL_HEIGHT);
     const cropWidth = THUMBNAIL_WIDTH * scale;

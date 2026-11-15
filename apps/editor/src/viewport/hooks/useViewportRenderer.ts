@@ -5,6 +5,7 @@ import Stats from "three/examples/jsm/libs/stats.module.js";
 import { hasPendingThumbnail, renderPendingThumbnail } from "../thumbnailCapture";
 import { hasPendingPreviews, renderPendingPreviews } from "../materialPreview";
 import { hideEditorOnlyObjects } from "../editorOnly";
+import { createEffectChain } from "../postProcessing";
 import { setLiveRenderer } from "../liveViewport";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "../rendererSettings";
 import { RIGHT_SIDEBAR_CLEARANCE } from "./useViewportGizmo";
@@ -39,6 +40,16 @@ export function useViewportRenderer(
     // KTX2 decoding in .glb imports (non-component code) needs the live renderer.
     const clearLiveRenderer = setLiveRenderer(renderer);
 
+    // The scene's effects, in Play and in the gallery picture. Edit mode is drawn without them (and
+    // without the scene's exposure) for now: the editor's own objects must stay out of the chain.
+    const effects = createEffectChain(renderer, scene);
+    const draw = (withEffects: boolean) => {
+      const { postProcessing } = useEditorStore.getState();
+      // With the master switch off the chain draws nothing and sets no exposure.
+      const config = withEffects || !postProcessing.enabled ? postProcessing : { ...postProcessing, enabled: false };
+      if (!effects.render(cameraRef.current, config)) renderer.render(scene, cameraRef.current);
+    };
+
     let animationFrameId = 0;
     let disposed = false;
 
@@ -51,14 +62,15 @@ export function useViewportRenderer(
       // render paints over them.
       if (hasPendingPreviews()) renderPendingPreviews(renderer);
 
-      if (hasPendingThumbnail()) renderPendingThumbnail(renderer, scene, cameraRef.current);
+      if (hasPendingThumbnail()) renderPendingThumbnail(renderer, scene, () => draw(true));
       // Play shows the scene without the editor's own objects (grid, light helpers, selection
       // outlines, gizmo): the set exports and the gallery picture leave out. Hidden for each
       // render rather than once when Play starts, so nothing the editor shows again meanwhile
       // gets into a Play frame.
-      const restoreEditorOnlyObjects = useEditorStore.getState().isPreviewMode ? hideEditorOnlyObjects(scene) : null;
+      const playing = useEditorStore.getState().isPreviewMode;
+      const restoreEditorOnlyObjects = playing ? hideEditorOnlyObjects(scene) : null;
       // cameraRef.current is always the active camera — no stale closure.
-      renderer.render(scene, cameraRef.current);
+      draw(playing);
       restoreEditorOnlyObjects?.();
       if (onAfterRender) onAfterRender();
     };
@@ -76,6 +88,7 @@ export function useViewportRenderer(
       disposed = true;
       window.cancelAnimationFrame(animationFrameId);
       clearLiveRenderer();
+      effects.dispose();
       disposeSceneRenderer(renderer);
     };
     // Only scene/container matter for renderer lifecycle; camera is via ref.

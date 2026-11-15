@@ -373,8 +373,8 @@ export type DeepPartial<T> = T extends object ? {
 } : T;
 
 /**
- * The scene's effects, drawn over the finished picture. Saved with every scene; nothing draws them
- * yet (task F). `enabled` at the top is the master switch. Each effect has its own `enabled` (the
+ * The scene's effects, drawn over the finished picture (viewport/postProcessing.ts; depth of field,
+ * pixelation and aberration are not drawn yet). `enabled` at the top is the master switch. Each effect has its own `enabled` (the
  * row's eye) and `amount` (0 to 100: how much of the effect's result is mixed over the picture
  * before it), then its own values, in the units the Effects panel shows.
  */

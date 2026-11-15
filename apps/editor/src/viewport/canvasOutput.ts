@@ -13,7 +13,10 @@
  * `canvasOutput` instead. Scenes then come out as they always have.
  *
  * Only on the way to the canvas: a material drawn into a texture (the environment map's room) keeps
- * its linear colours, as it did with WebGLRenderer.
+ * its linear colours, as it did with WebGLRenderer. The one texture that takes the picture as the
+ * canvas does is the effect chain's (postProcessing.ts, `takesFinishedPicture`): the effects work on
+ * the finished picture, so a scene with the chain on and no effect showing looks exactly as it
+ * does without it.
  *
  * No store, React or DOM here: the share-link viewer draws with this too.
  */
@@ -30,8 +33,27 @@ import { applyLayerNodes } from "./layerNodes";
 // scenes look as they always have, in the editor and published alike.
 export const SCENE_EXPOSURE = 1.3;
 
-// 1 while the renderer draws to the canvas, 0 while it draws into a texture.
-const toCanvas = uniform(1).onRenderUpdate(({ renderer }) => (renderer?.getRenderTarget() === null ? 1 : 0));
+// The exposure a scene sets over that (the effects' Exposure, in stops; postProcessing.ts keeps it
+// on the scene): 0, or none, is the look without it.
+export const EXPOSURE_STOPS_KEY = "libre3dExposureStops";
+export const sceneExposure = uniform(SCENE_EXPOSURE).onRenderUpdate(
+  ({ scene }) => SCENE_EXPOSURE * 2 ** ((scene?.userData[EXPOSURE_STOPS_KEY] as number | undefined) ?? 0),
+);
+
+// The textures that take the finished picture, as the canvas does: an effect chain's scene pass.
+const finishedPictureTargets = new WeakSet<object>();
+export const takesFinishedPicture = (target: object): void => {
+  finishedPictureTargets.add(target);
+};
+const drawsFinishedPicture = (renderer: Renderer | null | undefined): boolean => {
+  if (!renderer) return false;
+  const target = renderer.getRenderTarget();
+  return target === null || finishedPictureTargets.has(target);
+};
+
+// 1 while the renderer draws the finished picture (to the canvas, or into an effect chain), 0 while
+// it draws into any other texture.
+const toCanvas = uniform(1).onRenderUpdate(({ renderer }) => (drawsFinishedPicture(renderer) ? 1 : 0));
 
 // The scene's fog, read from `scene.fog` at each render, as WebGLRenderer's fog_fragment used it:
 // its colour as the canvas takes it (sRGB) while drawing to the canvas, linear while drawing into a
@@ -48,7 +70,7 @@ const fogColor = uniform(new THREE.Color()).onRenderUpdate(({ scene, renderer })
   const fog = scene?.fog;
   if (!fog) return fogColorValue; // not mixed in
   fogColorValue.copy(fog.color);
-  return renderer?.getRenderTarget() === null ? fogColorValue.convertLinearToSRGB() : fogColorValue;
+  return drawsFinishedPicture(renderer) ? fogColorValue.convertLinearToSRGB() : fogColorValue;
 });
 // The ambient fill Lambert, Phong and Toon materials miss while the scene's environment light is on
 // (SceneManager turns the ambient light off then, as Physical materials take their fill from the
@@ -78,7 +100,7 @@ const fogFactor = Fn(() => {
 // order (tonemapping, colorspace, then fog_fragment).
 const canvasOutput = (toneMapped: boolean, fogged: boolean, source: typeof output = output) =>
   Fn(() => {
-    const color = toneMapped ? toneMapping(THREE.NeutralToneMapping, float(SCENE_EXPOSURE), source).rgb : source.rgb;
+    const color = toneMapped ? toneMapping(THREE.NeutralToneMapping, sceneExposure, source).rgb : source.rgb;
     const finished = mix(source.rgb, sRGBTransferOETF(color), toCanvas);
     const fogApplied = fogged ? mix(finished, fogColor, fogFactor()) : finished;
     // Dithering, as WebGLRenderer's `dithering` did: a shift of up to half a step of the canvas's
@@ -101,7 +123,9 @@ const endings = {
  * node on every frame (NodeMaterialObserver), which cost 3 ms a frame for 400 objects. So a node
  * material is built from a stand-in that inherits all it has from it. A node material that sets its
  * own `outputNode` keeps it, and its fog. An entity material whose layers need nodes (layerNodes.ts)
- * gets them on the stand-in here too.
+ * gets them on the stand-in here too. A bare NodeMaterial is not something in the scene but one of
+ * three's full-screen passes (the effect chain's, bloom's): the picture it draws is finished
+ * already, so it gets no ending.
  */
 export const installCanvasOutput = (renderer: Renderer): void => {
   const library = renderer.library;
@@ -109,7 +133,7 @@ export const installCanvasOutput = (renderer: Renderer): void => {
   library.fromMaterial = (material: Material) => {
     // Three's types say a plain Material can come back; what does is a node material or null.
     const nodeMaterial = toNodeMaterial(material) as NodeMaterial | null;
-    if (!nodeMaterial || nodeMaterial.outputNode !== null) return nodeMaterial;
+    if (!nodeMaterial || nodeMaterial.outputNode !== null || material.type === "NodeMaterial") return nodeMaterial;
     const built: NodeMaterial = nodeMaterial === material ? Object.create(nodeMaterial) : nodeMaterial;
     // Not every material has `fog` (three's types leave it off Material); one without takes none.
     const fogged = (material as Material & { fog?: boolean }).fog === true;

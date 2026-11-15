@@ -10,7 +10,7 @@
  * as it did in Play: the same renderer settings (rendererSettings.ts), scene (SceneManager, with its
  * environment light), objects (ObjectManager), events (SceneRuntime: Start events on load, Mouse
  * Down on a click, a pointer cursor over what can be clicked) and camera (PlayCamera, with the
- * scene camera's Play setting). The editor's own objects (grid, light helpers, outlines) are never
+ * scene camera's Play setting) and effects (postProcessing.ts). The editor's own objects (grid, light helpers, outlines) are never
  * built (`editorHelpers: false`), so there is nothing to hide. Nothing here loads the editor's
  * store: the published scene is the only state, and nothing is ever saved.
  *
@@ -21,14 +21,16 @@
 import * as THREE from "three";
 import { fadingObjects } from "../animation/objectStates";
 import { SceneRuntime } from "../animation/sceneRuntime";
-import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialSceneDefaults } from "../scene/defaults";
+import { deepMerge } from "../scene/deepMerge";
+import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
 import { resolveEntities } from "../scene/materialAssets";
 
-import type { CameraProfile, SceneSettingsConfig } from "../scene/types";
+import type { CameraProfile, PostProcessingConfig, SceneSettingsConfig } from "../scene/types";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
 import { pickEntityAt } from "./pickEntity";
+import { createEffectChain } from "./postProcessing";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
 import { SceneManager } from "./SceneManager";
@@ -47,6 +49,10 @@ export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"])
     },
     lights: { intensity: stored?.lights?.intensity ?? initialSceneDefaults.lights.intensity },
   }) as SceneSettingsConfig;
+
+/** The effects a published scene is drawn with, the stored ones over the defaults. */
+export const viewerPostProcessing = (stored: StoredSceneContent["postProcessing"]): PostProcessingConfig =>
+  deepMerge(initialPostProcessingDefaults, stored ?? {});
 
 /** The camera a published scene starts from: its active profile, over the default camera's values. */
 export const viewerCamera = (content: StoredSceneContent): Pick<CameraProfile, "position" | "target" | "fov" | "near" | "far" | "play"> => {
@@ -76,6 +82,11 @@ export class SceneViewer {
     const scene = sceneManager.scene;
     // Made once the renderer has started, below.
     let environment: THREE.RenderTarget | null = null;
+
+    // The scene's effects (and its exposure), which nothing changes while it plays.
+    const postProcessing = viewerPostProcessing(content.postProcessing);
+    const effects = createEffectChain(renderer, scene);
+    this.disposers.push(() => effects.dispose());
 
     const objects = new ObjectManager(scene, new Map(), source, { getRenderer: () => renderer, editorHelpers: false });
     // Objects that use a material asset are drawn with its layers, from the document alone.
@@ -152,7 +163,7 @@ export class SceneViewer {
         hoverPoint = null;
       }
 
-      renderer.render(scene, camera.camera);
+      if (!effects.render(camera.camera, postProcessing)) renderer.render(scene, camera.camera);
     };
 
     // Nothing can be drawn until the renderer has started. Start events fired above, but their

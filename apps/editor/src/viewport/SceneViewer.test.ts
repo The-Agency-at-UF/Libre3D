@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_CAMERA_PROFILE, initialSceneDefaults } from "../scene/defaults";
+import { DEFAULT_CAMERA_PROFILE, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
 import type { Entity, MaterialLayer } from "../scene/types";
 import { stubBrowserGlobals } from "../testing/browserStubs";
 import { createPublishedSceneSource } from "./publishedSceneSource";
 import { SceneManager } from "./SceneManager";
-import { viewerCamera, viewerSceneSettings } from "./SceneViewer";
+import { viewerCamera, viewerPostProcessing, viewerSceneSettings } from "./SceneViewer";
 
 const entity = (id: string): Entity => ({
   id,
@@ -27,6 +27,14 @@ afterEach(() => {
 
 // The defaults are scene/defaults.ts's, the ones the editor's store starts a scene with.
 describe("the viewer's defaults", () => {
+  it("draw a scene without effects with none, and one with them over the defaults for the rest", () => {
+    expect(viewerPostProcessing(undefined)).toEqual(initialPostProcessingDefaults);
+    expect(viewerPostProcessing({ bloom: { enabled: true, threshold: 0.5 } })).toEqual({
+      ...initialPostProcessingDefaults,
+      bloom: { ...initialPostProcessingDefaults.bloom, enabled: true, threshold: 0.5 },
+    });
+  });
+
   it("fill what a scene doesn't hold, under the settings it does, without the editor's grid", () => {
     expect(viewerSceneSettings({ bgColor: "#c7dfff", environment: { intensity: 2 } })).toMatchObject({
       bgColor: "#c7dfff",
