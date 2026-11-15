@@ -631,13 +631,14 @@ Not an action: the state an object is shown in, or `null` for Base. Read it thro
 
 ## Events
 
-The second part of state-based animation. An event is a trigger on an object (its owner: `start` when Play begins, `mouseDown` when the owner or one of its descendants is clicked in Play) and the transitions it runs. Events live in `animation.events`, keyed by ID. A transition's actions and steps are small ordered lists inside the event, always replaced whole. The logic is in `animation/events.ts`, `animation/transitions.ts`, and `animation/sceneRuntime.ts` (what Play runs), none of which depend on the store, React, or the DOM.
+The second part of state-based animation. An event is a trigger on an object (its owner) and the transitions it runs: `start` when Play begins; the pointer triggers `mouseDown` (a press), `mouseUp` (a release) and `mouseHover` (the pointer entering it, once per entry, no hover-out) when the pointer is on the owner or one of its descendants in Play. The document also knows `keyDown`, `keyUp` (with the event's `key`, a `KeyboardEvent.code`) and `scroll` since schema v6, kept but not fired until they are built; the trigger dropdown offers only what fires (`EVENT_TRIGGERS`), the full table is `TRIGGER_INFO`. Events live in `animation.events`, keyed by ID. A transition's actions and steps are small ordered lists inside the event, always replaced whole. The logic is in `animation/events.ts`, `animation/transitions.ts`, and `animation/sceneRuntime.ts` (what Play runs), none of which depend on the store, React, or the DOM.
 
 ```typescript
 interface SceneEvent {
   id: string;
   ownerId: string;                  // entity ID
-  trigger: "start" | "mouseDown";
+  trigger: "start" | "mouseDown" | "mouseUp" | "mouseHover" | "keyDown" | "keyUp" | "scroll";
+  key?: string;                     // Key Down / Key Up: a KeyboardEvent.code ("KeyW", "Space")
   order: number;                    // position in the object's Events list
   actions: TransitionAction[];
 }
@@ -657,7 +658,7 @@ interface TransitionAction {
 
 A row naming no state of the target (a deleted state, another object's, or `""` for none picked) or a missing target makes Play skip that transition, and the inspector says "Pick a state" / "Pick a target".
 
-#### `addEvent(ownerId: string, trigger: "start" | "mouseDown") → string`
+#### `addEvent(ownerId: string, trigger: EventTrigger) → string`
 Add an event to an object, last in its list, with one transition of the object from Base to its first state (none picked yet if it has none), 1 s, Ease In Out. Returns its ID (`""` if the object isn't there).
 
 #### `updateEvent(eventId: string, updates: { trigger?, actions? }) → void`
