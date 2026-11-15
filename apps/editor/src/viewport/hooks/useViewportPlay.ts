@@ -11,6 +11,8 @@ import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
 import { pickEntityAt } from "../pickEntity";
 import { attachPlayInput } from "../playInput";
 import { registerPlayScroll } from "../playScroll";
+import { easeScrollProgress } from "../scrollProgress";
+import { clampProgress } from "../../animation/transitions";
 
 // A runtime running in the viewport: Play's, or the ▶ preview of one transition. A preview stops
 // when what it was started from changes: an edit (undo included) or another selection.
@@ -122,13 +124,14 @@ export function useViewportPlay(
       session = null;
     };
 
+    const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+
     const canvasAspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
 
     // Play's camera starts where the scene's camera is, with its Play setting, read once here.
     const startView = (store: EditorState): NonNullable<Session["view"]> => {
       const profile = store.cameraProfiles[store.activeProfileId] ?? store.cameraProfiles.personal;
-      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-      const camera = new PlayCamera(profile, resolvePlayCamera(profile.play), canvasAspect(), { reduceMotion });
+      const camera = new PlayCamera(profile, resolvePlayCamera(profile.play), canvasAspect(), { reduceMotion: prefersReducedMotion() });
       const editorCamera = cameraRef.current;
       cameraRef.current = camera.camera;
       return { camera, editorCamera, detach: camera.attach(canvas) };
@@ -163,11 +166,20 @@ export function useViewportPlay(
         if (session) {
           runtime = session.runtime;
           runtime.tick((now - lastFrameTime) / 1000);
+          // The scrubber's progress, eased as the share page eases page scroll (scrollProgress.ts).
+          if (scrollShown !== scrollTarget) {
+            const smooth = store.sceneSettings.scroll.smooth && !scrollReducedMotion;
+            scrollShown = easeScrollProgress(scrollShown, scrollTarget, (now - lastFrameTime) / 1000, smooth);
+            runtime.setScrollProgress(scrollShown);
+          }
           session.view?.camera.setAspect(canvasAspect());
           session.view?.camera.update((now - lastFrameTime) / 1000);
         } else {
           runtime = startSession(store, false);
           runtime.start();
+          scrollTarget = 0;
+          scrollShown = 0;
+          scrollReducedMotion = prefersReducedMotion();
         }
       } else if (store.previewingActionId) {
         if (session && !session.preview) endSession();
@@ -203,8 +215,12 @@ export function useViewportPlay(
 
     // The Play bar's scrubber puts Play's Scroll events at a progress (playScroll.ts), straight on the
     // runtime, never through the store. A new Play starts at 0 (`start`), as does the scrubber.
+    // The frame eases what's shown toward it, as the share page does with page scroll.
+    let scrollTarget = 0;
+    let scrollShown = 0;
+    let scrollReducedMotion = false; // read once per Play
     const unregisterScroll = registerPlayScroll((progress) => {
-      if (session && !session.preview) session.runtime.setScrollProgress(progress);
+      if (session && !session.preview) scrollTarget = clampProgress(progress);
     });
 
     // Play or the preview started or stopped: drop what was running. The next frame starts what's asked for.
