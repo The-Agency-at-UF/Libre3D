@@ -636,6 +636,23 @@ describe("events", () => {
     expect(useEditorStore.getState().animation.events[eventId]).toMatchObject({ trigger: "mouseDown", actions: [{ loop: 0 }] });
   });
 
+  it("takes item B's triggers, and keeps such an event through a save and a reload", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithCube();
+    const hover = useEditorStore.getState().addEvent("cube-1", "mouseHover");
+    const other = useEditorStore.getState().addEvent("cube-1", "scroll");
+    useEditorStore.getState().updateEvent(other, { trigger: "mouseUp" });
+    expect(Object.values(useEditorStore.getState().animation.events).map((event) => event.trigger)).toEqual(["mouseHover", "mouseUp"]);
+
+    const saved = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+    const parsed = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+
+    expect(saved.schemaVersion).toBe(6);
+    expect(Object.keys(useEditorStore.getState().animation.events)).toEqual([hover, other]);
+    expect(useEditorStore.getState().animation.events[other].trigger).toBe("mouseUp");
+  });
+
   it("removes an event", async () => {
     const { useEditorStore } = await storeWithCube();
     const eventId = useEditorStore.getState().addEvent("cube-1", "start");

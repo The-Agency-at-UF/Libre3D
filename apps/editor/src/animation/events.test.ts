@@ -8,6 +8,9 @@ import {
   normalizeEvents,
   removeEventsOf,
   transitionProblem,
+  EVENT_TRIGGERS,
+  TRIGGER_INFO,
+  type EventTrigger,
   type SceneEvent,
 } from "./events";
 import type { ObjectState } from "./objectStates";
@@ -166,6 +169,27 @@ describe("duplicateEvents", () => {
 });
 
 describe("normalizeEvents", () => {
+  it("keeps every trigger the document may hold, offered in the dropdown or not", () => {
+    const triggers = Object.keys(TRIGGER_INFO) as EventTrigger[];
+    const events = byId(...triggers.map((trigger) => event(trigger, { trigger })));
+
+    expect(triggers).toEqual(["start", "mouseDown", "mouseUp", "mouseHover", "keyDown", "keyUp", "scroll"]);
+    expect(normalizeEvents(events)).toEqual(events);
+    expect(EVENT_TRIGGERS.map((option) => option.value).every((value) => triggers.includes(value))).toBe(true);
+  });
+
+  it("drops an unknown trigger, and a trigger that is a built-in object property", () => {
+    expect(normalizeEvents(byId(event("e", { trigger: "hover" as EventTrigger }), event("f", { trigger: "constructor" as EventTrigger })))).toEqual({});
+  });
+
+  it("keeps an event's key when it's a string and drops it otherwise", () => {
+    const keyed = event("k", { trigger: "keyDown", key: "KeyW" });
+
+    expect(normalizeEvents(byId(keyed))).toEqual(byId(keyed));
+    expect(normalizeEvents({ k: { ...keyed, key: 87 } })).toEqual(byId(event("k", { trigger: "keyDown" })));
+    expect(normalizeEvents(byId(keyed)).k).not.toHaveProperty("key", undefined);
+  });
+
   it("keeps well-formed events as they are", () => {
     const events = byId(event("e", { trigger: "mouseDown", order: 2 }));
 

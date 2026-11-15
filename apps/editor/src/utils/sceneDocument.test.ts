@@ -230,6 +230,7 @@ describe("toSceneDocument / parseSceneDocument", () => {
     const document = { ...toSceneDocument(makeContent()), schemaVersion: CURRENT_SCENE_SCHEMA_VERSION + 1 };
 
     expect(parseSceneDocument(document)).toEqual({ ok: false, reason: "newer" });
+    expect(parseSceneDocument({ ...document, schemaVersion: 7 })).toEqual({ ok: false, reason: "newer" });
   });
 
   it.each([
@@ -374,6 +375,26 @@ describe("schema v5: the material layer stack", () => {
     content.animation.states.up.values = { ...content.animation.states.up.values, color: "#ff0000", opacity: 0.5 };
     content.materials = { m: { id: "m", name: "Gloss", layers: [] } };
     content.entities[0] = { ...content.entities[0], materialAssetId: "m", opacity: 0.7 };
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    expect(parsed).toEqual({ ok: true, content });
+  });
+
+  it("opens a v5 document (from before item B's triggers) unchanged as v6", () => {
+    const content = makeContent();
+    const v5 = { ...toSceneDocument(content), schemaVersion: 5 };
+
+    expect(CURRENT_SCENE_SCHEMA_VERSION).toBe(6);
+    expect(parseSceneDocument(JSON.parse(JSON.stringify(v5)))).toEqual({ ok: true, content });
+  });
+
+  it("round-trips a v6 document with every trigger, and a key event's key", () => {
+    const content = makeContent();
+    const grow = content.animation.events.grow;
+    const triggers = ["start", "mouseDown", "mouseUp", "mouseHover", "keyDown", "keyUp", "scroll"] as const;
+    content.animation.events = Object.fromEntries(
+      triggers.map((trigger, order) => [trigger, { ...grow, id: trigger, trigger, order, ...(trigger.startsWith("key") ? { key: "Space" } : {}) }]),
+    );
     const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
 
     expect(parsed).toEqual({ ok: true, content });

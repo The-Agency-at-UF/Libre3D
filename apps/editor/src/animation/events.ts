@@ -1,7 +1,7 @@
 /**
  * PURPOSE: Events, the second part of state-based animation (notes/animation-plan.md, A3): on an
- * object, a trigger (Start, Mouse Down) and the actions it runs, which for now are transitions
- * (transitions.ts).
+ * object, a trigger (Start, a pointer on the object, a key, the page's scroll) and the actions it
+ * runs, which for now are transitions (transitions.ts).
  *
  * Events live in the scene's `animation` section next to the states, keyed by ID, and point at
  * their object (the owner) by entity ID. Their actions are a small ordered list inside the event,
@@ -13,18 +13,47 @@ import { createId } from "../utils/createId";
 import { getObjectStates, type ObjectState } from "./objectStates";
 import { normalizeTransition, type StateRef, type TransitionAction } from "./transitions";
 
-export type EventTrigger = "start" | "mouseDown";
+export type EventTrigger = "start" | "mouseDown" | "mouseUp" | "mouseHover" | "keyDown" | "keyUp" | "scroll";
+
+/**
+ * Every trigger a document may hold (schema v6 taught the document all of them at once, so adding
+ * the ones that fire later needs no further bump), with its name and icon. What normalizeEvents
+ * keeps. A trigger here but not in EVENT_TRIGGERS is kept in the document and never fires.
+ */
+export const TRIGGER_INFO: Record<EventTrigger, { label: string; icon: string }> = {
+  start: { label: "Start", icon: "flag" },
+  mouseDown: { label: "Mouse Down", icon: "pointer" },
+  mouseUp: { label: "Mouse Up", icon: "pointer-up" },
+  mouseHover: { label: "Mouse Hover", icon: "hand-finger" },
+  keyDown: { label: "Key Down", icon: "keyboard" },
+  keyUp: { label: "Key Up", icon: "keyboard" },
+  scroll: { label: "Scroll", icon: "mouse" },
+};
+
+export const isEventTrigger = (value: unknown): value is EventTrigger =>
+  typeof value === "string" && Object.hasOwn(TRIGGER_INFO, value);
+
+/**
+ * The triggers fired on the object under the pointer (or its nearest ancestor with one): the ones
+ * Play's pointer input picks for, and the ones the pointer cursor shows over.
+ */
+export const POINTER_TRIGGERS: readonly EventTrigger[] = ["mouseDown", "mouseUp", "mouseHover"];
+
+/** The triggers that fire today, which is what the trigger dropdown offers. Key and Scroll join when they are built. */
+const OFFERED_TRIGGERS: readonly EventTrigger[] = ["start", "mouseDown"];
 
 /** The triggers in the order the trigger dropdown lists them, with their names and icons there. */
-export const EVENT_TRIGGERS: { value: EventTrigger; label: string; icon: string }[] = [
-  { value: "start", label: "Start", icon: "flag" },
-  { value: "mouseDown", label: "Mouse Down", icon: "pointer" },
-];
+export const EVENT_TRIGGERS: { value: EventTrigger; label: string; icon: string }[] = OFFERED_TRIGGERS.map((value) => ({
+  value,
+  ...TRIGGER_INFO[value],
+}));
 
 export interface SceneEvent {
   id: string;
-  ownerId: string; // entity ID; Mouse Down fires when it's clicked
+  ownerId: string; // entity ID; a pointer trigger fires when the pointer is on it (or a descendant)
   trigger: EventTrigger;
+  /** For Key Down and Key Up: the key, as a `KeyboardEvent.code` ("KeyW", "Space"). */
+  key?: string;
   order: number; // position in the owner's Events list
   actions: TransitionAction[];
 }
@@ -198,12 +227,13 @@ export const normalizeEvents = (raw: unknown): Record<string, SceneEvent> => {
   const events: Record<string, SceneEvent> = {};
   for (const value of Object.values(raw)) {
     if (!isRecord(value) || typeof value.id !== "string" || typeof value.ownerId !== "string") continue;
-    if (!EVENT_TRIGGERS.some((trigger) => trigger.value === value.trigger)) continue;
+    if (!isEventTrigger(value.trigger)) continue;
 
     events[value.id] = {
       id: value.id,
       ownerId: value.ownerId,
-      trigger: value.trigger as EventTrigger,
+      trigger: value.trigger,
+      ...(typeof value.key === "string" ? { key: value.key } : {}),
       order: typeof value.order === "number" && Number.isFinite(value.order) ? value.order : 0,
       actions: (Array.isArray(value.actions) ? value.actions : [])
         .map(normalizeTransition)
