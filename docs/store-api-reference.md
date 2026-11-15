@@ -341,24 +341,27 @@ updateSceneSettings({
 ### Post-Processing
 
 #### `updatePostProcessing(updates: DeepPartial<PostProcessingConfig>) → void`
-Update visual effects: bloom, SSAO, depth of field, motion blur, color grading, etc.
+Update the scene's effects (deep-merged). Saved with the scene and drawn by `viewport/postProcessing.ts` in Play, the gallery picture and the share link (not in edit mode yet). No panel calls this yet. `dof`, `pixelation` and `aberration` are saved but not drawn yet.
 
-**Major categories**:
-- **tone mapping**: "ACES Filmic" | others
-- **exposure**: Number (-2 to +2)
-- **bloom**: `{ enabled, intensity, threshold, radius }`
-- **ssao** (screen-space ambient occlusion): `{ enabled, intensity }`
-- **dof** (depth of field): `{ enabled, focusDistance, bokeh }`
-- **motionBlur**: `{ enabled, intensity }`
-- **filmGrain**: `{ enabled, intensity }`
-- **vignette**: `{ enabled, intensity }`
-- **colorGrading**: `{ enabled, brightness, contrast, saturation }`
+- **enabled**: the master switch (on in a new scene, with every effect off)
+- **exposure**: stops over the scene's fixed exposure (0 is the look without it; none while the master switch is off); **toneMap**: `"Neutral"`, not read
+- Every effect has `enabled` (its row's eye) and `amount` (0–100: how much of its result is mixed over the picture before it), then its own values:
+  - **dof**: `focusDistance`, `range`, `blur`
+  - **pixelation**: `granularity`
+  - **aberration**: `offsetX`, `offsetY`, `locked` (the panel keeps X and Y equal)
+  - **bloom**: `intensity`, `blurScale` (0 to 1), `threshold` (a brightness on screen, 0 to 1), `smoothing`
+  - **hue**: `hue` (radians), `saturation` (-1 to 1)
+  - **brightness**: `brightness`, `contrast` (both -1 to 1)
+  - **vignette**: `darkness`, `offset` (0 to 1)
+  - **noise**: amount only
+
+Defaults: `initialPostProcessingDefaults` (`scene/defaults.ts`).
 
 **Example**:
 ```typescript
 updatePostProcessing({
-  bloom: { intensity: 50 },
-  exposure: 0.1
+  bloom: { enabled: true, threshold: 0.5 },
+  exposure: 0.5
 })
 ```
 
@@ -873,7 +876,7 @@ useEditorStore.subscribe(
 - animation (object states and events), viewedStates
 - materials (material assets)
 
-**Persisted (localStorage, `persist` v18)** — editor preferences:
+**Persisted (localStorage, `persist` v19)** — editor preferences:
 - activeTransformTool, projectionMode, transformSpace
 - hudOverlay, viewportZoom
 
