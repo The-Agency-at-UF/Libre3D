@@ -254,6 +254,33 @@ describe("SceneRuntime: fire, the one way in", () => {
     expect(runtime.poses().size).toBe(0);
   });
 
+  it("fires an event only for its own trigger, through the ancestor rule, for every pointer trigger", () => {
+    for (const trigger of ["mouseDown", "mouseUp", "mouseHover"] as const) {
+      const runtime = cubeScene(
+        [event("grow", { trigger, actions: [transition({ steps: [{ to: "big", duration: 1, easing: "linear" }] })] })],
+        [entity("handle", { parentId: "cube" }), entity("floor")],
+      );
+      const others = (["mouseDown", "mouseUp", "mouseHover", "start"] as const).filter((other) => other !== trigger);
+
+      expect(runtime.ownerOf(trigger, "handle")).toBe("cube");
+      expect(runtime.ownerOf(trigger, "floor")).toBeNull();
+      expect(others.map((other) => runtime.ownerOf(other, "handle"))).toEqual([null, null, null]);
+      expect(others.map((other) => runtime.fire(other, "handle"))).toEqual([false, false, false]);
+      expect(runtime.poses().size).toBe(0);
+      expect(runtime.fire(trigger, "handle")).toBe(true);
+      runtime.tick(1);
+      expect(runtime.poses().get("cube")!.scale).toEqual([2, 2, 2]);
+    }
+  });
+
+  it("skips a hover or release event whose owner is gone", () => {
+    const runtime = cubeScene([event("hover", { ownerId: "deleted", trigger: "mouseHover" }), event("up", { ownerId: "deleted", trigger: "mouseUp" })]);
+
+    expect(runtime.triggersInUse.size).toBe(0);
+    expect(runtime.fire("mouseHover", "cube")).toBe(false);
+    expect(runtime.fire("mouseUp", "deleted")).toBe(false);
+  });
+
   it("knows which triggers the scene uses", () => {
     expect(cubeScene([event("rise")]).triggersInUse).toEqual(new Set(["start"]));
     expect(cubeScene([]).triggersInUse.size).toBe(0);
