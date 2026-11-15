@@ -1,0 +1,37 @@
+/*
+ * The Play bar (PreviewControls): the floating Stop chip, and the scroll scrubber beside it when
+ * the scene has a Scroll event. Imported after components.css (index.css), whose .btn-chip and
+ * .preview-exit-btn look these keep.
+ */
+
+/* The bar takes the spot the Stop chip had alone; the chip sits in it. */
+.play-bar {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.play-bar .btn-chip.preview-exit-btn {
+  position: static;
+}
+
+.play-scrubber {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  backdrop-filter: blur(12px);
+}
+
+.play-scrubber input[type="range"] {
+  width: 180px;
+}

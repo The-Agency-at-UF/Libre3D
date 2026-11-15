@@ -3,13 +3,14 @@ import * as THREE from "three";
 import type { SceneRenderer } from "../rendererSettings";
 import { resolveState } from "../../animation/objectStates";
 import { SceneRuntime } from "../../animation/sceneRuntime";
-import { previewTiming, type TransitionAction } from "../../animation/transitions";
+import { previewTiming, scrubTiming, type TransitionAction } from "../../animation/transitions";
 import { selectDrawnEntities, selectViewedObjectState, useEditorStore, type EditorState } from "../../store/useEditorStore";
 import { getEntityIndex } from "../../scene/entityIndex";
 import type { ObjectManager } from "../ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
 import { pickEntityAt } from "../pickEntity";
 import { attachPlayInput } from "../playInput";
+import { registerPlayScroll } from "../playScroll";
 
 // A runtime running in the viewport: Play's, or the ▶ preview of one transition. A preview stops
 // when what it was started from changes: an edit (undo included) or another selection.
@@ -23,10 +24,15 @@ interface Session {
   view: { camera: PlayCamera; editorCamera: THREE.Camera; detach: () => void } | null;
 }
 
-const findAction = (state: EditorState, actionId: string): TransitionAction | undefined => {
+// The action the ▶ preview plays, timed as it plays there: a Scroll event's once through by time,
+// without the Delay, Loop, or Cycle it has no use for (and Current in row 1 read as Base, as the
+// runtime reads it while scrolling); any other without its Delay and run once.
+const findPreviewAction = (state: EditorState, actionId: string): TransitionAction | undefined => {
   for (const event of Object.values(state.animation.events)) {
     const action = event.actions.find((candidate) => candidate.id === actionId);
-    if (action) return action;
+    if (!action) continue;
+    if (event.trigger !== "scroll") return previewTiming(action);
+    return { ...action, ...scrubTiming(action), from: action.from === "current" ? "base" : action.from };
   }
   return undefined;
 };
@@ -57,8 +63,11 @@ const findAction = (state: EditorState, actionId: string): TransitionAction | un
  * Orbit camera, a press on an object fires its Mouse Down and dragging from it still turns the
  * camera. Locked objects count: locking is for editing.
  *
+ * Scroll events have no page to scroll in the editor: the Play bar's scrubber (PreviewControls)
+ * hands its progress to the session through playScroll.ts.
+ *
  * The ▶ preview (`previewingActionId`) works the same way outside Play, for one transition: without
- * its Delay and run once (there and back for a ping-pong loop), starting from the state its target
+ * its Delay and run once (there and back for a ping-pong loop; a Scroll event's once through), starting from the state its target
  * is shown in, then back to that state. It stops early on any edit, another selection, Play (which
  * clears it), or ■.
  * The gizmo is detached meanwhile (ViewportCanvas), so a drag can't save a pose it's showing.
@@ -135,13 +144,13 @@ export function useViewportPlay(
 
     // The preview's runtime, started on its action, or null when there's nothing it can play.
     const startPreview = (store: EditorState, actionId: string): SceneRuntime | null => {
-      const action = findAction(store, actionId);
+      const action = findPreviewAction(store, actionId);
       const target = action && selectDrawnEntities(store).find((entity) => entity.id === action.targetId);
       if (!action || !target) return null;
 
       const runtime = startSession(store, true);
       runtime.place(target.id, resolveState(target, selectViewedObjectState(store, target.id)));
-      return runtime.run(previewTiming(action)) ? runtime : null;
+      return runtime.run(action) ? runtime : null;
     };
 
     frameRef.current = () => {
@@ -192,6 +201,12 @@ export function useViewportPlay(
       runtime.poses().forEach((pose, entityId) => objectManager.applyPose(entityId, pose));
     };
 
+    // The Play bar's scrubber puts Play's Scroll events at a progress (playScroll.ts), straight on the
+    // runtime, never through the store. A new Play starts at 0 (`start`), as does the scrubber.
+    const unregisterScroll = registerPlayScroll((progress) => {
+      if (session && !session.preview) session.runtime.setScrollProgress(progress);
+    });
+
     // Play or the preview started or stopped: drop what was running. The next frame starts what's asked for.
     const unsubscribePlay = useEditorStore.subscribe((state) => state.isPreviewMode, endSession);
     const unsubscribePreview = useEditorStore.subscribe((state) => state.previewingActionId, endSession);
@@ -219,6 +234,7 @@ export function useViewportPlay(
       frameRef.current = null;
       unsubscribePlay();
       unsubscribePreview();
+      unregisterScroll();
       input.detach();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);

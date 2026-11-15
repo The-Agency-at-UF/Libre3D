@@ -18,7 +18,7 @@ export type EventTrigger = "start" | "mouseDown" | "mouseUp" | "mouseHover" | "k
 /**
  * Every trigger a document may hold (schema v6 taught the document all of them at once, so adding
  * the ones that fire later needs no further bump), with its name and icon. What normalizeEvents
- * keeps. A trigger here but not in EVENT_TRIGGERS is kept in the document and never fires.
+ * keeps. A trigger added here before it is built stays out of EVENT_TRIGGERS until it fires.
  */
 export const TRIGGER_INFO: Record<EventTrigger, { label: string; icon: string }> = {
   start: { label: "Start", icon: "flag" },
@@ -39,8 +39,8 @@ export const isEventTrigger = (value: unknown): value is EventTrigger =>
  */
 export const POINTER_TRIGGERS: readonly EventTrigger[] = ["mouseDown", "mouseUp", "mouseHover"];
 
-/** The triggers that fire today, which is what the trigger dropdown offers. Scroll joins when it is built. */
-const OFFERED_TRIGGERS: readonly EventTrigger[] = ["start", "mouseDown", "mouseUp", "mouseHover", "keyDown", "keyUp"];
+/** The triggers that fire today, which is what the trigger dropdown offers: every one the document knows. */
+const OFFERED_TRIGGERS: readonly EventTrigger[] = ["start", "mouseDown", "mouseUp", "mouseHover", "keyDown", "keyUp", "scroll"];
 
 /** Whether a trigger is set off by a key, so its event has a key to pick (`SceneEvent.key`). */
 export const isKeyTrigger = (trigger: EventTrigger): trigger is "keyDown" | "keyUp" => trigger === "keyDown" || trigger === "keyUp";

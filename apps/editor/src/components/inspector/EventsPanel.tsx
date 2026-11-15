@@ -111,7 +111,7 @@ export function EventsPanel({ entity, onEditEvent }: EventsPanelProps) {
         {events.length === 0 && (
           <p className="state-hint">
             Events run in Play: Start when it begins, the mouse ones when the pointer is on this object, the key ones
-            when a key is pressed or let go.
+            when a key is pressed or let go, Scroll as the page scrolls.
           </p>
         )}
       </div>

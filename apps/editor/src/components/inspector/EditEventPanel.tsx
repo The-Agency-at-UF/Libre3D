@@ -1,6 +1,6 @@
 /**
  * PURPOSE: Inspector panel for configuring interactive animation events and transition sequences.
- * Allows users to set event triggers (Start, Mouse Down, Mouse Up, Mouse Hover, Key Down, Key Up)
+ * Allows users to set event triggers (Start, Mouse Down, Mouse Up, Mouse Hover, Key Down, Key Up, Scroll)
  * and a key trigger's key, target entities, transition sequences, durations, easing curves,
  * repeats, and loop modes.
  */
@@ -72,19 +72,65 @@ function PropRow({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+// The Sequence settings that repeat a clocked transition: Delay, Delay Repeat, Loop (and its count), Cycle.
+function SequenceSettings({ action, rowCount, onChange }: { action: TransitionAction; rowCount: number; onChange: (action: TransitionAction) => void }) {
+  const loopMode = action.loop === "infinite" ? "infinite" : action.loop === 0 ? "none" : "count";
+  const setLoopMode = (mode: string) =>
+    onChange({ ...action, loop: mode === "infinite" ? "infinite" : mode === "none" ? 0 : Math.max(1, typeof action.loop === "number" ? action.loop : 1) });
+
+  return (
+    <>
+      <div className="event-editor-heading">
+        <span>Sequence (1 → {rowCount})</span>
+      </div>
+      <PropRow label="Delay">
+        <NumberField commit="enter" min={0} label="Delay in seconds" value={action.delay} onChange={(delay) => onChange({ ...action, delay })} />
+        <span className="transition-step-unit">s</span>
+      </PropRow>
+      <Select
+        label="Delay Repeat"
+        options={DELAY_REPEATS}
+        value={action.delayRepeat}
+        onChange={(delayRepeat) => onChange({ ...action, delayRepeat: delayRepeat as DelayRepeat })}
+      />
+      <Select label="Loop" options={LOOPS} value={loopMode} onChange={setLoopMode} />
+      {loopMode === "count" && (
+        <PropRow label="Repeats">
+          <NumberField
+            commit="enter"
+            label="Repeats after the first run"
+            value={action.loop as number}
+            min={1}
+            step={1}
+            integer
+            onChange={(loop) => onChange({ ...action, loop })}
+          />
+        </PropRow>
+      )}
+      {loopMode !== "none" && (
+        <Select label="Cycle" options={CYCLES} value={action.cycle} onChange={(cycle) => onChange({ ...action, cycle: cycle as Cycle })} />
+      )}
+    </>
+  );
+}
+
 interface TransitionEditorProps {
   action: TransitionAction;
   entities: Entity[];
   states: Record<string, ObjectState>;
   isReadOnly: boolean;
+  /** A Scroll event's: driven by scroll progress, so it has no Delay, Loop, or Cycle, and row 1 is never Current. */
+  isScrubbed: boolean;
   onChange: (action: TransitionAction) => void;
   onRemove: () => void;
 }
 
 // One Transition action: its target, the states it goes through with a duration and easing between
 // each, and the Sequence settings that repeat it. Collapsible, like a material layer. The header
-// stays usable in a view-only scene (collapsing and ▶ are looking); the rest is disabled there.
-function TransitionEditor({ action, entities, states, isReadOnly, onChange, onRemove }: TransitionEditorProps) {
+// stays usable in a view-only scene (collapsing and ▶ are looking); the rest is disabled there. A
+// Scroll event's hides the Sequence settings and Current, which scrolling has no use for; their
+// values stay in the action, so switching the trigger back brings them back.
+function TransitionEditor({ action, entities, states, isReadOnly, isScrubbed, onChange, onRemove }: TransitionEditorProps) {
   const [open, setOpen] = useState(true);
   const isPreviewing = useEditorStore((state) => state.previewingActionId === action.id);
   const setPreviewingAction = useEditorStore((state) => state.setPreviewingAction);
@@ -96,7 +142,7 @@ function TransitionEditor({ action, entities, states, isReadOnly, onChange, onRe
 
   const stateOptions = (index: number, ref: StateRef | "current") => {
     const options = [
-      ...(index === 0 ? [{ label: "Current", value: "current" }] : []),
+      ...(index === 0 && !isScrubbed ? [{ label: "Current", value: "current" }] : []),
       { label: "Base State", value: "base" },
       ...targetStates.map((objectState) => ({ label: objectState.name, value: objectState.id })),
     ];
@@ -130,10 +176,6 @@ function TransitionEditor({ action, entities, states, isReadOnly, onChange, onRe
     const keep = <T extends string>(ref: T): T => (ref === "base" || ref === "current" ? ref : ("" as T));
     onChange({ ...action, targetId, from: keep(action.from), steps: action.steps.map((step) => ({ ...step, to: keep(step.to) })) });
   };
-
-  const loopMode = action.loop === "infinite" ? "infinite" : action.loop === 0 ? "none" : "count";
-  const setLoopMode = (mode: string) =>
-    onChange({ ...action, loop: mode === "infinite" ? "infinite" : mode === "none" ? 0 : Math.max(1, typeof action.loop === "number" ? action.loop : 1) });
 
   return (
     <div className="mat-layer event-action" data-open={open}>
@@ -210,7 +252,12 @@ function TransitionEditor({ action, entities, states, isReadOnly, onChange, onRe
                   )}
                   <div className="transition-row">
                     <span className="transition-row-number">{index + 1}</span>
-                    <Select options={stateOptions(index, ref)} value={ref} onChange={(value) => setRow(index, value)} />
+                    <Select
+                      options={stateOptions(index, ref)}
+                      // Scrolling reads a Current row 1 as Base (sceneRuntime.ts), so it shows as Base.
+                      value={isScrubbed && ref === "current" ? "base" : ref}
+                      onChange={(value) => setRow(index, value)}
+                    />
                     {index >= 2 ? (
                       <button
                         type="button"
@@ -235,35 +282,13 @@ function TransitionEditor({ action, entities, states, isReadOnly, onChange, onRe
               <p className="state-hint">{target.name} has no states yet. Add one in its States section to move it somewhere.</p>
             )}
   
-            <div className="event-editor-heading">
-              <span>Sequence (1 → {rows.length})</span>
-            </div>
-            <PropRow label="Delay">
-              <NumberField commit="enter" min={0} label="Delay in seconds" value={action.delay} onChange={(delay) => onChange({ ...action, delay })} />
-              <span className="transition-step-unit">s</span>
-            </PropRow>
-            <Select
-              label="Delay Repeat"
-              options={DELAY_REPEATS}
-              value={action.delayRepeat}
-              onChange={(delayRepeat) => onChange({ ...action, delayRepeat: delayRepeat as DelayRepeat })}
-            />
-            <Select label="Loop" options={LOOPS} value={loopMode} onChange={setLoopMode} />
-            {loopMode === "count" && (
-              <PropRow label="Repeats">
-                <NumberField
-                  commit="enter"
-                  label="Repeats after the first run"
-                  value={action.loop as number}
-                  min={1}
-                  step={1}
-                  integer
-                  onChange={(loop) => onChange({ ...action, loop })}
-                />
-              </PropRow>
-            )}
-            {loopMode !== "none" && (
-              <Select label="Cycle" options={CYCLES} value={action.cycle} onChange={(cycle) => onChange({ ...action, cycle: cycle as Cycle })} />
+            {isScrubbed ? (
+              <p className="state-hint">
+                Scrolling plays this from row 1 to the last row and back; each step takes a share of the scroll as long as its
+                seconds.
+              </p>
+            ) : (
+              <SequenceSettings action={action} rowCount={rows.length} onChange={onChange} />
             )}
           </div>
         </fieldset>
@@ -301,10 +326,6 @@ export function EditEventPanel({ event, onClose }: EditEventPanelProps) {
   }, [onClose]);
 
   const trigger = TRIGGER_INFO[event.trigger];
-  // A trigger the document knows but this build doesn't fire yet (Key, Scroll) stays pickable as itself.
-  const triggerOptions = EVENT_TRIGGERS.some((option) => option.value === event.trigger)
-    ? EVENT_TRIGGERS
-    : [...EVENT_TRIGGERS, { value: event.trigger, ...trigger }];
   const setActions = (actions: TransitionAction[]) => updateEvent(event.id, { actions });
   const setKey = useCallback((key: string) => updateEvent(event.id, { key }), [updateEvent, event.id]);
 
@@ -322,7 +343,7 @@ export function EditEventPanel({ event, onClose }: EditEventPanelProps) {
           <div className="event-trigger">
             <i className={`ti ti-${trigger.icon}`}></i>
             <Select
-              options={triggerOptions.map(({ value, label }) => ({ value, label }))}
+              options={EVENT_TRIGGERS.map(({ value, label }) => ({ value, label }))}
               value={event.trigger}
               onChange={(value) => updateEvent(event.id, { trigger: value as EventTrigger })}
             />
@@ -357,6 +378,7 @@ export function EditEventPanel({ event, onClose }: EditEventPanelProps) {
             entities={entities}
             states={states}
             isReadOnly={isReadOnly}
+            isScrubbed={event.trigger === "scroll"}
             onChange={(next) => setActions(event.actions.map((other, i) => (i === index ? next : other)))}
             onRemove={() => setActions(event.actions.filter((_, i) => i !== index))}
           />
