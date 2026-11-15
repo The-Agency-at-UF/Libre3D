@@ -1602,7 +1602,7 @@ export const useEditorStore = create<EditorState>()(
           // (utils/sceneLibrary.ts) and loaded with loadScene. The key keeps its name from when it
           // held the scene.
           name: "libre3d-scene-state",
-          version: 18,
+          version: 19,
           storage: createJSONStorage(() => localStorage),
           // Before v17 the scene was saved here too. Scenes live in the cloud now and nothing saved
           // before then is kept, so an older blob keeps only the editor preferences (the fields
@@ -1615,7 +1615,8 @@ export const useEditorStore = create<EditorState>()(
             }
 
             // v18 added `materials` (material assets) to the scene's part of the store. Scenes aren't
-            // kept here, so a v17 blob's preferences carry over as they are.
+            // kept here, so a v17 blob's preferences carry over as they are. So does a v18 blob's:
+            // v19 changed the shape of `postProcessing` (the effects), which is the scene's too.
             return persistedState;
           },
           partialize: (state) =>

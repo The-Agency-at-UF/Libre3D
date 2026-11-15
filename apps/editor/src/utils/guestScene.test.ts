@@ -66,6 +66,15 @@ describe("the guest scene", () => {
     }
   });
 
+  it("opens a scene kept by an older build through the document's migrations", () => {
+    const older = { format: "libre3d.scene", schemaVersion: 5, scene: { entities: [], postProcessing: { bloom: { enabled: true } } } };
+    browser.localStorage.setItem(KEY, JSON.stringify(older));
+
+    const opened = readGuestScene();
+    expect(opened.status === "ready" && opened.content).toMatchObject({ entities: [] });
+    expect(opened.status === "ready" && opened.content?.postProcessing).toBeUndefined(); // v8 drops it
+  });
+
   it("refuses a scene saved by a newer build rather than opening (and then overwriting) it", () => {
     const newer = { format: "libre3d.scene", schemaVersion: CURRENT_SCENE_SCHEMA_VERSION + 1, scene: { entities: [] } };
     browser.localStorage.setItem(KEY, JSON.stringify(newer));

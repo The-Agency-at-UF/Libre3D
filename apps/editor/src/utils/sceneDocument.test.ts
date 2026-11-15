@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { initialPostProcessingDefaults } from "../scene/defaults";
 import type { Entity } from "../store/useEditorStore";
 import {
   CURRENT_SCENE_SCHEMA_VERSION,
@@ -155,14 +156,15 @@ describe("toSceneDocument / parseSceneDocument", () => {
     const { animation: _animation, viewedStates: _viewedStates, materials: _materials, ...v1Scene } = makeContent();
     const parsed = parseSceneDocument({ format: SCENE_DOCUMENT_FORMAT, schemaVersion: 1, scene: v1Scene });
 
-    expect(parsed).toEqual({ ok: true, content: { ...v1Scene, animation: undefined, viewedStates: undefined, materials: {} } });
+    expect(parsed).toEqual({ ok: true, content: { ...v1Scene, postProcessing: undefined, animation: undefined, viewedStates: undefined, materials: {} } });
   });
 
   it("opens a v2 document (from before trim) as it was", () => {
     const content = makeContent();
     const parsed = parseSceneDocument({ ...toSceneDocument(content), schemaVersion: 2 });
 
-    expect(parsed).toEqual(parseSceneDocument(toSceneDocument(content)));
+    const { postProcessing: _postProcessing, ...kept } = content; // dropped by v8, below
+    expect(parsed).toEqual({ ok: true, content: kept });
     expect(parsed.ok && parsed.content.animation?.states).toEqual(content.animation.states);
   });
 
@@ -261,6 +263,25 @@ describe("toSceneDocument / parseSceneDocument", () => {
         materials: {},
       },
     });
+  });
+});
+
+describe("schema v8: the effects", () => {
+  // What every scene held before v8: defaults nothing drew, with bloom and a vignette on.
+  const v5Effects = { enabled: true, toneMap: "ACES Filmic", bloom: { enabled: true, intensity: 40 }, vignette: { enabled: true, intensity: 15 }, ssao: { enabled: false } };
+
+  it("drops an older document's effects, so the scene opens with the defaults (every effect off)", () => {
+    const parsed = parseSceneDocument({ ...toSceneDocument({ ...makeContent(), postProcessing: v5Effects as never }), schemaVersion: 5 });
+
+    expect(parsed.ok && "postProcessing" in parsed.content && parsed.content.postProcessing).toBeUndefined();
+    expect(parsed.ok && parsed.content.entities).toEqual(makeContent().entities);
+  });
+
+  it("keeps a current document's effects", () => {
+    const postProcessing = { ...initialPostProcessingDefaults, bloom: { ...initialPostProcessingDefaults.bloom, enabled: true, threshold: 0.5 } };
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument({ ...makeContent(), postProcessing }))));
+
+    expect(parsed.ok && parsed.content.postProcessing).toEqual(postProcessing);
   });
 });
 
@@ -369,7 +390,7 @@ describe("schema v5: the material layer stack", () => {
     expect(light.ok && light.content.entities[1]).toEqual(makeContent().entities[1]);
   });
 
-  it("round-trips a v5 document unchanged, and keeps colour and opacity state values", () => {
+  it("round-trips a current document unchanged, and keeps colour and opacity state values", () => {
     const content = makeContent();
     content.animation.states.up.values = { ...content.animation.states.up.values, color: "#ff0000", opacity: 0.5 };
     content.materials = { m: { id: "m", name: "Gloss", layers: [] } };

@@ -52,7 +52,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("persist migration (v17: preferences only; v18: material assets, no change)", () => {
+describe("persist migration (v17: preferences only; v18 and v19: scene shape only, no change)", () => {
   it("keeps only editor preferences from an older blob; the scene saved there is dropped", async () => {
     seedEditorState(
       {
@@ -68,7 +68,7 @@ describe("persist migration (v17: preferences only; v18: material assets, no cha
     const { useEditorStore } = await loadStore();
     const state = useEditorStore.getState();
 
-    expect(persisted().version).toBe(18);
+    expect(persisted().version).toBe(19);
     expect(Object.keys(persisted().state).sort()).toEqual(PREFERENCE_KEYS);
     expect(state).toMatchObject({ projectionMode: "orthographic", viewportZoom: 66, selectedEntityIds: [] });
     // The starter scene, not the old one: scenes are opened from the cloud.
@@ -94,7 +94,7 @@ describe("persist migration (v17: preferences only; v18: material assets, no cha
     const { useEditorStore } = await loadStore();
 
     expect(useEditorStore.persist.hasHydrated()).toBe(true);
-    expect(persisted().version).toBe(18);
+    expect(persisted().version).toBe(19);
     expect(useEditorStore.temporal.getState().pastStates).toHaveLength(0);
   });
 
@@ -145,6 +145,19 @@ describe("loadScene", () => {
     expect(useEditorStore.getState().sceneSettings.environment).toEqual({ enabled: false, intensity: 1 });
   });
 
+  it("opens a scene from before the effects were drawn with every effect off", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    const { parseSceneDocument, toSceneDocument } = await import("../utils/sceneDocument");
+
+    // What such a scene holds: the old defaults, bloom and a vignette on, never drawn.
+    const v5Effects = { enabled: true, bloom: { enabled: true, intensity: 40 }, vignette: { enabled: true, intensity: 15 }, ssao: { enabled: false } };
+    const v5 = { ...toSceneDocument({ ...selectSceneContent(useEditorStore.getState()), postProcessing: v5Effects as never }), schemaVersion: 5 };
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(v5)));
+    useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+
+    expect(useEditorStore.getState().postProcessing).toEqual(initialPostProcessingDefaults);
+  });
+
   it("gives every new scene a fresh cube ID", async () => {
     const { useEditorStore } = await loadStore();
 
@@ -161,7 +174,7 @@ describe("loadScene", () => {
     useEditorStore.getState().loadScene({
       entities: [light],
       sceneSettings: { bgColor: "#123456", lights: { intensity: 2 } },
-      postProcessing: { bloom: { enabled: false } },
+      postProcessing: { bloom: { enabled: true } },
     });
 
     const state = useEditorStore.getState();
@@ -170,7 +183,7 @@ describe("loadScene", () => {
       bgColor: "#123456",
       lights: { ...initialSceneDefaults.lights, intensity: 2 },
     });
-    expect(state.postProcessing.bloom).toEqual({ ...initialPostProcessingDefaults.bloom, enabled: false });
+    expect(state.postProcessing.bloom).toEqual({ ...initialPostProcessingDefaults.bloom, enabled: true });
     expect(state.frame).toEqual(initialFrameDefaults);
   });
 
@@ -265,7 +278,7 @@ describe("read-only (the scene is open for editing elsewhere)", () => {
     store.toggleVisibility("cube-1");
     store.updateEntityTransform("cube-1", { position: [5, 5, 5] });
     store.updateSceneSettings({ bgColor: "#ff0000" });
-    store.updatePostProcessing({ bloom: { enabled: false } });
+    store.updatePostProcessing({ bloom: { enabled: true } });
     store.updateFrameSettings({ mode: "fixed" });
     store.addMaterialLayer("cube-1", "color");
     store.setEditorState({ sceneSettings: { ...before.sceneSettings, bgColor: "#00ff00" } });
@@ -353,7 +366,7 @@ describe("store → document → cloud → store", () => {
     store.renameEntity(torusId, "Donut");
     const groupId = store.groupEntities([torusId]);
     store.updateSceneSettings({ bgColor: "#abcdef", fogEnabled: true });
-    store.updatePostProcessing({ vignette: { intensity: 40 } });
+    store.updatePostProcessing({ vignette: { enabled: true, amount: 40 } });
     store.updateFrameSettings({ mode: "fixed", preset: "1080x1080", width: 1080, height: 1080 });
     store.addCameraProfile("closeup", { position: [0, 2, 3], fov: 35 });
     const stateId = store.addState(torusId);

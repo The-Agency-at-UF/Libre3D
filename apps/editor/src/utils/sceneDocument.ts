@@ -18,7 +18,7 @@
  *   New values a state can set do (as a path's trim did in v3): a state's values are copied only
  *   as far as the build knows them (objectStates.ts, cloneStateValues). So does a new setting whose
  *   default shouldn't apply to older scenes (the environment light, v4): the migration writes the
- *   old behaviour in.
+ *   old behaviour in. And so does a section whose shape changes (the effects, v8).
  * - Adding a section or a state value bumps `CURRENT_SCENE_SCHEMA_VERSION` and adds a migration.
  *   Old documents upgrade on read; nothing breaks.
  * - A document newer than this build is refused rather than loaded: otherwise a tab still running an
@@ -43,7 +43,7 @@ import type {
 } from "../scene/types";
 
 export const SCENE_DOCUMENT_FORMAT = "libre3d.scene";
-export const CURRENT_SCENE_SCHEMA_VERSION = 5;
+export const CURRENT_SCENE_SCHEMA_VERSION = 8;
 
 /** The parts of the editor state that make up a scene. */
 export interface SceneContent {
@@ -116,6 +116,20 @@ const migrations: Record<number, (document: any) => any> = {
         materials: isPlainObject(scene.materials) ? scene.materials : {},
       },
     };
+  },
+  // v6 and v7 are kept for the triggers (item B) and the actions (item C), built alongside task F.
+  // Neither fills anything in.
+  5: (document) => document,
+  6: (document) => document,
+  // v8 is the effects as task F draws them (`postProcessing`: eight effects, each with an eye and an
+  // amount). The section a scene held before was never drawn, and its defaults had bloom and a
+  // vignette on, so nothing in it was chosen: it goes, and loadScene and the viewer fill in the
+  // defaults, which have every effect off.
+  7: (document) => {
+    const scene = document?.scene;
+    if (!isPlainObject(scene)) return document;
+    const { postProcessing: _postProcessing, ...rest } = scene;
+    return { ...document, scene: rest };
   },
 };
 

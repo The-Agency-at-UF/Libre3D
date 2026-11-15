@@ -9,51 +9,19 @@
 
 import type { CameraProfile, FrameSettingsConfig, PostProcessingConfig, SceneSettingsConfig } from "./types";
 
+// Every effect starts off, holding the values its row shows the first time it's turned on.
 export const initialPostProcessingDefaults: PostProcessingConfig = {
   enabled: true,
-  toneMap: "ACES Filmic",
-  exposure: 0.00,
-  bloom: {
-    enabled: true,
-    intensity: 40,
-    threshold: 0.85,
-    radius: 0.4,
-  },
-  ssao: {
-    enabled: false,
-    intensity: 25,
-  },
-  dof: {
-    enabled: false,
-    focusDistance: 10.0,
-    bokeh: 0.30,
-  },
-  chromaticAberration: {
-    enabled: false,
-    intensity: 0,
-  },
-  motionBlur: {
-    enabled: false,
-    intensity: 0,
-  },
-  filmGrain: {
-    enabled: false,
-    intensity: 0,
-  },
-  vignette: {
-    enabled: true,
-    intensity: 15,
-  },
-  outline: {
-    enabled: false,
-    color: "5865F2",
-  },
-  colorGrading: {
-    enabled: false,
-    brightness: 0.00,
-    contrast: 0.00,
-    saturation: 0.00,
-  },
+  toneMap: "Neutral",
+  exposure: 0,
+  dof: { enabled: false, amount: 100, focusDistance: 100, range: 20, blur: 5 },
+  pixelation: { enabled: false, amount: 100, granularity: 15 },
+  aberration: { enabled: false, amount: 100, offsetX: 2, offsetY: 2, locked: true },
+  bloom: { enabled: false, amount: 100, intensity: 1, blurScale: 1, threshold: 0.25, smoothing: 0.03 },
+  hue: { enabled: false, amount: 100, hue: 3, saturation: 0 },
+  brightness: { enabled: false, amount: 100, brightness: 0.25, contrast: 0 },
+  vignette: { enabled: false, amount: 100, darkness: 1, offset: 0 },
+  noise: { enabled: false, amount: 100 },
 };
 
 export const initialSceneDefaults: SceneSettingsConfig = {
