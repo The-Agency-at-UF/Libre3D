@@ -327,6 +327,9 @@ Update background color, grid, fog, lighting, physics, etc.
 - **scroll** (nested): how Scroll events follow the share page's scroll (the Scene panel shows it only for a scene with a Scroll event). Older scenes open with the defaults (deep merge), so it needed no document bump.
   - `length`: How much scrolling plays them from start to end, in screen heights (1-10, default 3, shown as 300%)
   - `smooth`: Ease the shown progress toward the scrolled one (default on; skipped with reduced motion)
+- **audioButton** (nested): the mute/unmute button a scene with sound shows in Play and on the share page (the Scene panel shows it only for a scene with sound). Scenes start muted either way. Deep-merged like `scroll`, so older scenes get the defaults.
+  - `visible`: Show the button (default on). Off, the scene stays muted unless the page it's embedded in unmutes it in code (`SceneViewer.setMuted(false)`)
+  - `position`: Where it sits; only `"bottomRight"` for now (later looks will be added to this object)
 - **physics** (nested):
   - `enabled`: Enable physics simulation
   - `gravityY`: Gravity vector Y component
