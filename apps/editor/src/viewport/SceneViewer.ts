@@ -8,9 +8,9 @@
  *
  * Built from the editor's own pieces, not copies of them, so a published scene looks and behaves
  * as it did in Play: the same renderer settings (rendererSettings.ts), scene (SceneManager, with its
- * environment light), objects (ObjectManager), events (SceneRuntime: Start events on load, Mouse
- * Down on a click, a pointer cursor over what can be clicked) and camera (PlayCamera, with the
- * scene camera's Play setting). The editor's own objects (grid, light helpers, outlines) are never
+ * environment light), objects (ObjectManager), events (SceneRuntime: Start events on load), pointer
+ * input (playInput.ts: Mouse Down on a click, a pointer cursor over what can be clicked) and camera
+ * (PlayCamera, with the scene camera's Play setting). The editor's own objects (grid, light helpers, outlines) are never
  * built (`editorHelpers: false`), so there is nothing to hide. Nothing here loads the editor's
  * store: the published scene is the only state, and nothing is ever saved.
  *
@@ -29,6 +29,7 @@ import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
 import { pickEntityAt } from "./pickEntity";
+import { attachPlayInput } from "./playInput";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
 import { SceneManager } from "./SceneManager";
@@ -113,27 +114,8 @@ export class SceneViewer {
     const raycaster = new THREE.Raycaster();
     const pick = (x: number, y: number) =>
       pickEntityAt(raycaster, camera.camera, canvas, [...objects.getMeshes().values()].filter((object) => object.visible), x, y, true);
-    let hoverPoint: { x: number; y: number } | null = null;
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      const entityId = pick(event.clientX, event.clientY);
-      if (entityId) runtime.click(entityId);
-    };
-    const onPointerMove = (event: PointerEvent) => {
-      hoverPoint = { x: event.clientX, y: event.clientY };
-    };
-    const onPointerLeave = () => {
-      hoverPoint = null;
-      container.style.cursor = "";
-    };
-    canvas.addEventListener("pointerdown", onPointerDown);
-    canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerleave", onPointerLeave);
-    this.disposers.push(() => {
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerleave", onPointerLeave);
-    });
+    const input = attachPlayInput({ canvas, cursorElement: container, pick, getRuntime: () => runtime });
+    this.disposers.push(() => input.detach());
 
     let lastTime = 0;
     const animate = () => {
@@ -145,12 +127,7 @@ export class SceneViewer {
       camera.update(dt);
       runtime.tick(dt);
       runtime.poses().forEach((pose, entityId) => objects.applyPose(entityId, pose));
-
-      if (hoverPoint) {
-        const entityId = runtime.hasClickEvents ? pick(hoverPoint.x, hoverPoint.y) : null;
-        container.style.cursor = entityId && runtime.clickOwnerOf(entityId) ? "pointer" : "";
-        hoverPoint = null;
-      }
+      input.frame();
 
       renderer.render(scene, camera.camera);
     };
