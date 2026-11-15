@@ -9,6 +9,7 @@ import { getEntityIndex } from "../../scene/entityIndex";
 import type { ObjectManager } from "../ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
 import { pickEntityAt } from "../pickEntity";
+import { attachPlayInput } from "../playInput";
 
 // A runtime running in the viewport: Play's, or the ▶ preview of one transition. A preview stops
 // when what it was started from changes: an edit (undo included) or another selection.
@@ -48,9 +49,11 @@ const findAction = (state: EditorState, actionId: string): TransitionAction | un
  * orbiting off). `cameraRef` points at it from Play's first frame to Stop, so rendering and clicks
  * use it; on Stop the editor's camera is put back exactly as it was.
  *
- * Clicks in Play (left button, without Alt or Space) fire Mouse Down events, and the cursor is a
- * pointer over objects that have one. With an Orbit camera, a press on an object fires its Mouse
- * Down and dragging from it still turns the camera. Locked objects count: locking is for editing.
+ * Play's pointer input is playInput.ts, shared with the share-link viewer: clicks fire Mouse Down
+ * events, and the cursor is a pointer over objects that have one. The editor adds its own rules
+ * (not with Alt or Space held, which orbit the camera instead; not during the ▶ preview). With an
+ * Orbit camera, a press on an object fires its Mouse Down and dragging from it still turns the
+ * camera. Locked objects count: locking is for editing.
  *
  * The ▶ preview (`previewingActionId`) works the same way outside Play, for one transition: without
  * its Delay and run once (there and back for a ping-pong loop), starting from the state its target
@@ -75,20 +78,21 @@ export function useViewportPlay(
     const raycaster = new THREE.Raycaster();
     let session: Session | null = null;
     let lastFrameTime = 0;
-    let hoverPoint: { x: number; y: number } | null = null;
     let isSpacePressed = false;
-
-    // On the canvas's container, so the orbit controls' own cursor on the canvas (grab while Space
-    // is held) still wins.
-    const setCursor = (cursor: string) => {
-      const container = canvas.parentElement;
-      if (container && container.style.cursor !== cursor) container.style.cursor = cursor;
-    };
 
     const pick = (clientX: number, clientY: number) => {
       const targets = [...objectManager.getMeshes().values()].filter((object) => object.visible);
       return pickEntityAt(raycaster, cameraRef.current, canvas, targets, clientX, clientY, true);
     };
+
+    const input = attachPlayInput({
+      canvas,
+      cursorElement: canvas.parentElement,
+      pick,
+      // Play's runtime only: the ▶ preview takes no input.
+      getRuntime: () => (session && !session.preview ? session.runtime : null),
+      shouldIgnore: (event) => event.altKey || isSpacePressed,
+    });
 
     // Each object the runtime moved goes back to the state it's shown in while editing. The entity
     // sync does the same when it next runs, but only after React renders, which can be a frame late.
@@ -105,8 +109,6 @@ export function useViewportPlay(
         if (cameraRef.current === session.view.camera.camera) cameraRef.current = session.view.editorCamera;
       }
       session = null;
-      hoverPoint = null;
-      setCursor("");
     };
 
     const canvasAspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
@@ -177,16 +179,13 @@ export function useViewportPlay(
         }
       } else {
         endSession();
+        input.frame(); // nothing playing: drops the cursor Play set
         return;
       }
       lastFrameTime = now;
 
       // At most one hover test a frame, against what the last frame showed. Play only.
-      if (hoverPoint && store.isPreviewMode) {
-        const entityId = runtime.hasClickEvents ? pick(hoverPoint.x, hoverPoint.y) : null;
-        setCursor(entityId && runtime.clickOwnerOf(entityId) ? "pointer" : "");
-        hoverPoint = null;
-      }
+      input.frame();
 
       runtime.poses().forEach((pose, entityId) => objectManager.applyPose(entityId, pose));
     };
@@ -194,23 +193,6 @@ export function useViewportPlay(
     // Play or the preview started or stopped: drop what was running. The next frame starts what's asked for.
     const unsubscribePlay = useEditorStore.subscribe((state) => state.isPreviewMode, endSession);
     const unsubscribePreview = useEditorStore.subscribe((state) => state.previewingActionId, endSession);
-
-    const onPointerDown = (event: PointerEvent) => {
-      if (!session || session.preview || !useEditorStore.getState().isPreviewMode) return;
-      if (event.button !== 0 || event.altKey || isSpacePressed) return;
-
-      const entityId = pick(event.clientX, event.clientY);
-      if (entityId) session.runtime.click(entityId);
-    };
-
-    const onPointerMove = (event: PointerEvent) => {
-      if (session && !session.preview) hoverPoint = { x: event.clientX, y: event.clientY };
-    };
-
-    const onPointerLeave = () => {
-      hoverPoint = null;
-      setCursor("");
-    };
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code === "Space") isSpacePressed = true;
@@ -222,9 +204,6 @@ export function useViewportPlay(
       isSpacePressed = false;
     };
 
-    canvas.addEventListener("pointerdown", onPointerDown);
-    canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerleave", onPointerLeave);
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
@@ -238,13 +217,10 @@ export function useViewportPlay(
       frameRef.current = null;
       unsubscribePlay();
       unsubscribePreview();
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerleave", onPointerLeave);
+      input.detach();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
-      setCursor("");
     };
   }, [frameRef, cameraRef, rendererRef, objectManager]);
 }
