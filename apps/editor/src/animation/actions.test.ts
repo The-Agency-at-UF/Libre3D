@@ -70,13 +70,15 @@ describe("the other helpers", () => {
     const sound: SoundAction = { id: "s", type: "sound", assetId: "abc", volume: 0.5, loop: true, mode: "play" };
     expect(actionEffect(sound)).toEqual({ type: "sound", assetId: "abc", volume: 0.5, loop: true, mode: "play" });
     expect(actionEffect({ ...sound, assetId: "" })).toBeNull();
-    expect(actionEffect({ id: "l", type: "openLink", url: "https://example.com", newTab: false })).toEqual({ type: "openLink", url: "https://example.com", newTab: false });
+    expect(actionEffect({ id: "l", type: "openLink", url: " https://Example.com", newTab: false })).toEqual({ type: "openLink", url: "https://example.com/", newTab: false });
+    expect(actionEffect({ id: "l", type: "openLink", url: "javascript:alert(1)", newTab: true })).toBeNull();
+    expect(actionEffect({ id: "l", type: "openLink", url: "example.com", newTab: true })).toBeNull();
     expect(actionEffect({ id: "l", type: "openLink", url: "", newTab: true })).toBeNull();
     expect(actionEffect(createAction("transition", { states, ownerId: "cube" }) as TransitionAction)).toBeNull();
   });
 
-  it("offers only Transition so far, and names every type", () => {
-    expect(OFFERED_ACTIONS).toEqual(["transition"]);
+  it("offers Transition and Open Link so far, and names every type", () => {
+    expect(OFFERED_ACTIONS).toEqual(["transition", "openLink"]);
     expect(Object.keys(ACTION_INFO)).toEqual(["transition", "openLink", "sound"]);
   });
 });

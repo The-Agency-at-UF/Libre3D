@@ -145,7 +145,7 @@ export function useViewportPlay(
 
     const startSession = (store: EditorState, preview: boolean): SceneRuntime => {
       // The entities as they are drawn, so a state's colour goes over a material asset's layers.
-      const effects = preview ? null : createPlayEffects();
+      const effects = preview ? null : createPlayEffects({ alwaysNewTab: true });
       const runtime = new SceneRuntime({ entities: selectDrawnEntities(store), animation: store.animation }, { onEffect: effects?.onEffect });
       const view = preview ? null : startView(store);
       session = { runtime, effects, preview, entities: store.entities, animation: store.animation, selection: store.selectedEntityIds, view };

@@ -15,6 +15,7 @@
  */
 
 import { createId } from "../utils/createId";
+import { safeLinkUrl } from "./links";
 import { getObjectStates, type ObjectState } from "./objectStates";
 import { normalizeTransition, type TransitionAction } from "./transitions";
 
@@ -51,8 +52,8 @@ export const ACTION_INFO: Record<ActionType, { label: string; icon: string }> = 
   sound: { label: "Sound", icon: "volume" },
 };
 
-/** The types the "Add action" menu offers: only those that work. Open Link and Sound join when they are built. */
-export const OFFERED_ACTIONS: readonly ActionType[] = ["transition"];
+/** The types the "Add action" menu offers: only those that work. Sound joins when it is built. */
+export const OFFERED_ACTIONS: readonly ActionType[] = ["transition", "openLink"];
 
 export const isTransition = (action: SceneAction): action is TransitionAction => action.type === "transition";
 
@@ -134,10 +135,14 @@ export const actionTargetId = (action: SceneAction): string | null => (isTransit
 const EFFECT: { [T in ActionType]: (action: Extract<SceneAction, { type: T }>) => SceneEffect | null } = {
   // The runtime runs transitions itself.
   transition: () => null,
-  openLink: ({ url, newTab }) => (url ? { type: "openLink", url, newTab } : null),
+  // Only a web or email link, normalized (links.ts): a hand-edited document can hold anything.
+  openLink: ({ url, newTab }) => {
+    const safe = safeLinkUrl(url);
+    return safe ? { type: "openLink", url: safe, newTab } : null;
+  },
   sound: ({ assetId, volume, loop, mode }) => (assetId ? { type: "sound", assetId, volume, loop, mode } : null),
 };
 
-/** The effect a non-transition action asks for, or null when it asks for none (a transition, or bad data). */
+/** The effect a non-transition action asks for, or null when it asks for none (a transition, or bad data: an unsafe link included). */
 export const actionEffect = (action: SceneAction): SceneEffect | null =>
   (EFFECT[action.type] as (action: SceneAction) => SceneEffect | null)(action);

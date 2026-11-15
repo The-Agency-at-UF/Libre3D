@@ -5,14 +5,16 @@
  * INPUT: The props every action row takes (`ActionEditorProps`).
  * OUTPUT: `ACTION_EDITORS`, by action type.
  *
- * Open Link and Sound aren't offered yet (C2, C4 build them): an event that holds one, from a later
- * build, shows it by name with its remove button, and keeps it as it is.
+ * Sound isn't offered yet (C3 builds it): an event that holds one, from a later build, shows it by
+ * name with its remove button, and keeps it as it is.
  */
 
 import type { ReactElement } from "react";
+import type { EventTrigger } from "../../../animation/events";
 import type { ObjectState } from "../../../animation/objectStates";
 import { ACTION_INFO, type ActionType, type SceneAction } from "../../../animation/actions";
 import type { Entity } from "../../../store/useEditorStore";
+import { OpenLinkActionRow } from "./OpenLinkActionRow";
 import { TransitionActionEditor } from "./TransitionActionEditor";
 
 /** What every action row is given. */
@@ -20,6 +22,8 @@ export interface ActionEditorProps<A extends SceneAction> {
   action: A;
   entities: Entity[];
   states: Record<string, ObjectState>;
+  /** Its event's trigger. */
+  trigger: EventTrigger;
   isReadOnly: boolean;
   /** Whether its event is a Scroll event (which plays transitions by scroll, not time). */
   isScrubbed: boolean;
@@ -51,7 +55,7 @@ function NamedActionRow<A extends SceneAction>({ action, isReadOnly, onRemove }:
 
 export const ACTION_EDITORS: { [T in ActionType]: ActionEditor<T> } = {
   transition: TransitionActionEditor,
-  openLink: NamedActionRow,
+  openLink: OpenLinkActionRow,
   sound: NamedActionRow,
 };
 

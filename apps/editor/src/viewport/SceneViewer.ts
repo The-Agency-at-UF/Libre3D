@@ -73,6 +73,8 @@ export interface SceneViewerOptions {
   reduceMotion?: boolean;
   /** Where Key Down and Key Up are listened for: the window unless given (an embed scopes keys to its element). */
   keyTarget?: PlayInputKeyTarget;
+  /** Given, an Open Link action calls it instead of opening the link (an embed hands links to its page). */
+  onOpenLink?: (url: string, newTab: boolean) => void;
 }
 
 export class SceneViewer {
@@ -87,7 +89,7 @@ export class SceneViewer {
   private frameId = 0;
   private disposed = false;
 
-  constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false, keyTarget }: SceneViewerOptions = {}) {
+  constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false, keyTarget, onOpenLink }: SceneViewerOptions = {}) {
     const renderer = createSceneRenderer();
     this.renderer = renderer;
     container.appendChild(renderer.domElement);
@@ -121,7 +123,7 @@ export class SceneViewer {
 
     // The drawn entities, so a state's colour goes over an asset's layers.
     // What its actions ask of the page (open a link, play a sound), shared with the editor's Play.
-    const effects = createPlayEffects();
+    const effects = createPlayEffects({ onOpenLink });
     this.disposers.push(() => effects.dispose());
     const runtime = new SceneRuntime({ entities: drawn, animation: content.animation ?? {} }, { onEffect: effects.onEffect });
     runtime.start();

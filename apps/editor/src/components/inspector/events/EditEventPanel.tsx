@@ -92,6 +92,7 @@ export function EditEventPanel({ event, onClose }: EditEventPanelProps) {
               action={action}
               entities={entities}
               states={states}
+              trigger={event.trigger}
               isReadOnly={isReadOnly}
               isScrubbed={event.trigger === "scroll"}
               onChange={(next) => setActions(event.actions.map((other, i) => (i === index ? next : other)))}

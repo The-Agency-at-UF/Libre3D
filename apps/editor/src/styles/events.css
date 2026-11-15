@@ -69,3 +69,25 @@
 .event-key-row .key-capture-button {
   width: 100%;
 }
+
+/* Open Link: the URL field beside its label, and the "Use https://…" fix inside the warning. */
+.event-link-row .prop-label {
+  flex: 0 0 84px;
+  font-size: 11px;
+}
+
+.event-link-row input {
+  padding-right: 8px;
+}
+
+.event-link-fix {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  text-align: left;
+}

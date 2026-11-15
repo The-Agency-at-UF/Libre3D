@@ -523,7 +523,7 @@ describe("SceneRuntime: effects", () => {
     const runtime = withLink("mouseDown", (effect) => effects.push(effect));
 
     runtime.click("cube");
-    expect(effects).toEqual([{ type: "openLink", url: "https://example.com", newTab: true }]);
+    expect(effects).toEqual([{ type: "openLink", url: "https://example.com/", newTab: true }]);
     runtime.tick(1);
     expect(positionOf(runtime)).toEqual([0, 2, 0]);
     expect(effects).toHaveLength(1);
@@ -548,6 +548,24 @@ describe("SceneRuntime: effects", () => {
     expect(positionOf(failing)).toEqual([0, 2, 0]);
     expect(error).toHaveBeenCalledOnce();
     error.mockRestore();
+  });
+
+  it("opens no unsafe link, and still runs the event's transition", () => {
+    const effects: unknown[] = [];
+    const runtime = new SceneRuntime(
+      {
+        entities: [entity("cube")],
+        animation: {
+          states: byId(state("up", "cube", { position: [0, 2, 0] })),
+          events: byId(event("e", { trigger: "mouseDown", actions: [{ ...link, url: " JaVaScRiPt:alert(1)" }, transition()] })),
+        },
+      },
+      { onEffect: (effect) => effects.push(effect) },
+    );
+    runtime.click("cube");
+    runtime.tick(1);
+    expect(effects).toEqual([]);
+    expect(positionOf(runtime)).toEqual([0, 2, 0]);
   });
 
   it("hands over nothing for an action with bad data", () => {

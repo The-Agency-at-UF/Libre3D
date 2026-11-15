@@ -13,6 +13,7 @@ import type { ObjectState } from "../../animation/objectStates";
 import { transitionRows } from "../../animation/transitions";
 import { keyLabel } from "../../animation/keys";
 import { ACTION_INFO, isTransition } from "../../animation/actions";
+import { linkProblem } from "../../animation/links";
 import { PanelSection } from "../ui/PanelSection";
 
 interface EventsPanelProps {
@@ -62,7 +63,9 @@ export function EventsPanel({ entity, onEditEvent }: EventsPanelProps) {
         {events.map((event) => {
           const summary = describeEvent(event, entities, states);
           const missingKey = isKeyTrigger(event.trigger) && !event.key;
-          const hasProblem = missingKey || event.actions.some((action) => isTransition(action) && transitionProblem(action, entityExists, states));
+          const movesMissing = event.actions.some((action) => isTransition(action) && transitionProblem(action, entityExists, states));
+          const badLink = event.actions.some((action) => action.type === "openLink" && linkProblem(action.url));
+          const hasProblem = missingKey || movesMissing || badLink;
 
           return (
             <div key={event.id} className="state-row">
@@ -76,7 +79,9 @@ export function EventsPanel({ entity, onEditEvent }: EventsPanelProps) {
                   title={
                     missingKey
                       ? "This event has no key yet, so it never fires. Open it to pick one."
-                      : "Something this event moves is missing, so Play skips it. Open it to pick a target or state."
+                      : movesMissing
+                        ? "Something this event moves is missing, so Play skips it. Open it to pick a target or state."
+                        : "This event's link can't open, so Play skips it. Open it to fix the link."
                   }
                 ></i>
               )}
