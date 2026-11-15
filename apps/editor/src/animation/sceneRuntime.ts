@@ -3,7 +3,8 @@
  * share-link viewer.
  *
  * INPUT: A snapshot of the scene (its objects' own transforms and parents, and its animation
- *        section), taken when Play starts; Start, clicks, and the passing of time.
+ *        section), taken when Play starts; its triggers (Start, and a pointer trigger on an
+ *        object, through `fire`) and the passing of time.
  * OUTPUT: A pose for each object a transition has moved, to put on the Three objects each frame.
  *
  * The runtime never reads the store again and never writes it: Play moves Three objects, not
@@ -26,7 +27,7 @@
 
 import type { MaterialLayer } from "../scene/types";
 import { mixHexLinear } from "../utils/colorSpaces";
-import { normalizeEvents, type SceneEvent } from "./events";
+import { normalizeEvents, type EventTrigger, type SceneEvent } from "./events";
 import { resolveState, withoutLook, type ObjectState, type Pose, type SceneAnimation } from "./objectStates";
 import { sampleTransition, type StateRef, type TransitionAction } from "./transitions";
 
@@ -101,10 +102,11 @@ export class SceneRuntime {
   private readonly current = new Map<string, Pose>(); // where each moved object is, by entity ID
 
   /**
-   * Whether any object has a Mouse Down event (if not, clicks and hovers needn't be looked at).
-   * Events never change after construction, so it's worked out once, not on every hover frame.
+   * The triggers the scene's events use, so a host can skip what the scene can't need (no pick on
+   * a hover when nothing is clickable). Events never change after construction, so it's worked out
+   * once, not on every hover frame.
    */
-  readonly hasClickEvents: boolean;
+  readonly triggersInUse: ReadonlySet<EventTrigger>;
 
   constructor(scene: RuntimeScene) {
     for (const entity of scene.entities) {
@@ -130,38 +132,56 @@ export class SceneRuntime {
       list.push(event);
       this.eventsByOwner.set(event.ownerId, list);
     }
-    this.hasClickEvents = events.some((event) => event.trigger === "mouseDown");
+    this.triggersInUse = new Set(events.map((event) => event.trigger));
+  }
+
+  /** Whether any object has a Mouse Down event. */
+  get hasClickEvents(): boolean {
+    return this.triggersInUse.has("mouseDown");
   }
 
   /** Fires every Start event. */
   start(): void {
-    for (const events of this.eventsByOwner.values()) {
-      events.filter((event) => event.trigger === "start").forEach((event) => this.fire(event));
-    }
+    this.fire("start");
   }
 
   /**
-   * The object whose Mouse Down events a click on `entityId` fires: that object, or its nearest
+   * The one way in: fires the events of a trigger. With an object (a pointer trigger), its owner's
+   * (`ownerOf`); without one (Start), every object's, in scene order. Returns whether any fired.
+   */
+  fire(trigger: EventTrigger, entityId?: string): boolean {
+    if (entityId === undefined) {
+      let fired = false;
+      for (const ownerId of this.eventsByOwner.keys()) fired = this.fireOwn(ownerId, trigger) || fired;
+      return fired;
+    }
+    const ownerId = this.ownerOf(trigger, entityId);
+    return ownerId !== null && this.fireOwn(ownerId, trigger);
+  }
+
+  /**
+   * The object whose events of a trigger a pointer on `entityId` fires: that object, or its nearest
    * ancestor that has any (so clicking part of an imported model fires the model's). Null if none.
    */
-  clickOwnerOf(entityId: string): string | null {
-    const visited = new Set<string>();
+  ownerOf(trigger: EventTrigger, entityId: string): string | null {
+    const visited = new Set<string>(); // a damaged document could make a parent cycle
     let id: string | null | undefined = entityId;
     while (id && !visited.has(id)) {
       visited.add(id);
-      if (this.eventsByOwner.get(id)?.some((event) => event.trigger === "mouseDown")) return id;
+      if (this.eventsByOwner.get(id)?.some((event) => event.trigger === trigger)) return id;
       id = this.entities.get(id)?.parentId;
     }
     return null;
   }
 
-  /** A click (mouse button down) on an object. Returns whether it fired anything. */
-  click(entityId: string): boolean {
-    const ownerId = this.clickOwnerOf(entityId);
-    if (!ownerId) return false;
+  /** `ownerOf("mouseDown", entityId)`: the object whose Mouse Down events a click on `entityId` fires. */
+  clickOwnerOf(entityId: string): string | null {
+    return this.ownerOf("mouseDown", entityId);
+  }
 
-    this.eventsByOwner.get(ownerId)!.filter((event) => event.trigger === "mouseDown").forEach((event) => this.fire(event));
-    return true;
+  /** `fire("mouseDown", entityId)`: a click (mouse button down) on an object. */
+  click(entityId: string): boolean {
+    return this.fire("mouseDown", entityId);
   }
 
   /**
@@ -217,7 +237,18 @@ export class SceneRuntime {
     return this.running.size === 0;
   }
 
-  private fire(event: SceneEvent): void {
+  /** Fires an owner's own events of a trigger, in Events-list order. Returns whether it had any. */
+  private fireOwn(ownerId: string, trigger: EventTrigger): boolean {
+    let fired = false;
+    for (const event of this.eventsByOwner.get(ownerId) ?? []) {
+      if (event.trigger !== trigger) continue;
+      this.runEvent(event);
+      fired = true;
+    }
+    return fired;
+  }
+
+  private runEvent(event: SceneEvent): void {
     event.actions.forEach((action) => this.run(action));
   }
 

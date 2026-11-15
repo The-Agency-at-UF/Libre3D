@@ -210,6 +210,58 @@ describe("SceneRuntime: clicks", () => {
   });
 });
 
+describe("SceneRuntime: fire, the one way in", () => {
+  const growOnClick = () =>
+    cubeScene(
+      [event("grow", { trigger: "mouseDown", actions: [transition({ from: "current", steps: [{ to: "big", duration: 0.3, easing: "linear" }] })] })],
+      [entity("handle", { parentId: "cube" }), entity("floor")],
+    );
+
+  it("fires a pointer trigger on an object as click does", () => {
+    const runtime = growOnClick();
+
+    expect(runtime.fire("mouseDown", "floor")).toBe(false);
+    expect(runtime.fire("mouseDown", "handle")).toBe(true);
+    runtime.tick(0.3);
+    expect(runtime.poses().get("cube")!.scale).toEqual([2, 2, 2]);
+  });
+
+  it("finds the nearest ancestor with the trigger, and survives a parent cycle", () => {
+    const runtime = cubeScene(
+      [event("grow", { trigger: "mouseDown", actions: [transition({ steps: [{ to: "big", duration: 1, easing: "linear" }] })] })],
+      [entity("arm", { parentId: "cube" }), entity("hand", { parentId: "arm" }), entity("a", { parentId: "b" }), entity("b", { parentId: "a" })],
+    );
+
+    expect(runtime.ownerOf("mouseDown", "hand")).toBe("cube");
+    expect(runtime.ownerOf("start", "hand")).toBeNull();
+    expect(runtime.ownerOf("mouseDown", "a")).toBeNull();
+    expect(runtime.fire("mouseDown", "a")).toBe(false);
+  });
+
+  it("fires every Start event without an object", () => {
+    const runtime = cubeScene([event("rise")]);
+
+    expect(runtime.fire("start")).toBe(true);
+    runtime.tick(5);
+    expect(positionOf(runtime)).toEqual([0, 2, 0]);
+    expect(cubeScene([]).fire("start")).toBe(false);
+  });
+
+  it("fires nothing for an object that isn't in the scene", () => {
+    const runtime = growOnClick();
+
+    expect(runtime.fire("mouseDown", "ghost")).toBe(false);
+    expect(runtime.poses().size).toBe(0);
+  });
+
+  it("knows which triggers the scene uses", () => {
+    expect(cubeScene([event("rise")]).triggersInUse).toEqual(new Set(["start"]));
+    expect(cubeScene([]).triggersInUse.size).toBe(0);
+    expect(growOnClick().triggersInUse).toEqual(new Set(["mouseDown"]));
+    expect(cubeScene([event("rise"), event("grow", { trigger: "mouseDown" })]).triggersInUse).toEqual(new Set(["start", "mouseDown"]));
+  });
+});
+
 describe("SceneRuntime: place", () => {
   it("starts a transition from Current where an object was placed, and from row 1 otherwise", () => {
     const runtime = cubeScene([]);
