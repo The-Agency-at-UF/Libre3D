@@ -10,7 +10,8 @@
  * as it did in Play: the same renderer settings (rendererSettings.ts), scene (SceneManager, with its
  * environment light), objects (ObjectManager), events (SceneRuntime: Start events on load), pointer
  * input (playInput.ts: the pointer and key triggers, a pointer cursor over what can be clicked) and camera
- * (PlayCamera, with the scene camera's Play setting). The editor's own objects (grid, light helpers, outlines) are never
+ * (PlayCamera, with the scene camera's Play setting). Scroll events follow `setScrollProgress`,
+ * which the page calls from its scroll (eased by the scene's smoothing setting, scrollProgress.ts). The editor's own objects (grid, light helpers, outlines) are never
  * built (`editorHelpers: false`), so there is nothing to hide. Nothing here loads the editor's
  * store: the published scene is the only state, and nothing is ever saved.
  *
@@ -21,6 +22,7 @@
 import * as THREE from "three";
 import { fadingObjects } from "../animation/objectStates";
 import { SceneRuntime } from "../animation/sceneRuntime";
+import { clampProgress } from "../animation/transitions";
 import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialSceneDefaults } from "../scene/defaults";
 import { resolveEntities } from "../scene/materialAssets";
 
@@ -32,12 +34,13 @@ import { pickEntityAt } from "./pickEntity";
 import { attachPlayInput, type PlayInputKeyTarget } from "./playInput";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
+import { easeScrollProgress } from "./scrollProgress";
 import { SceneManager } from "./SceneManager";
 import type { SceneSource } from "./sceneSource";
 
 /** The scene settings SceneManager draws with, the stored ones over the defaults. */
 export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"]): SceneSettingsConfig =>
-  // SceneManager reads only these; the rest of the settings are the editor's.
+  // SceneManager reads these, and the viewer the scroll settings; the rest are the editor's.
   ({
     bgColor: stored?.bgColor ?? initialSceneDefaults.bgColor,
     fogEnabled: stored?.fogEnabled ?? initialSceneDefaults.fogEnabled,
@@ -47,6 +50,11 @@ export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"])
       intensity: stored?.environment?.intensity ?? initialSceneDefaults.environment.intensity,
     },
     lights: { intensity: stored?.lights?.intensity ?? initialSceneDefaults.lights.intensity },
+    // Read by the viewer itself, for Scroll events.
+    scroll: {
+      length: stored?.scroll?.length ?? initialSceneDefaults.scroll.length,
+      smooth: stored?.scroll?.smooth ?? initialSceneDefaults.scroll.smooth,
+    },
   }) as SceneSettingsConfig;
 
 /** The camera a published scene starts from: its active profile, over the default camera's values. */
@@ -69,6 +77,11 @@ export interface SceneViewerOptions {
 export class SceneViewer {
   /** The viewer's own renderer. Handed to what needs it here; the viewer never puts it on `window`. */
   readonly renderer: SceneRenderer;
+  /** Whether the scene has a Scroll event that can run, so the page knows to make itself scrollable. */
+  readonly hasScrollEvents: boolean;
+  /** How much page scroll plays the Scroll events from start to end, in screen heights. */
+  readonly scrollLength: number;
+  private scrollTarget = 0; // the page's scroll progress, as last handed in
   private readonly disposers: (() => void)[] = [];
   private frameId = 0;
   private disposed = false;
@@ -80,7 +93,8 @@ export class SceneViewer {
     this.disposers.push(() => disposeSceneRenderer(renderer));
     const canvas = renderer.domElement;
 
-    const sceneManager = new SceneManager(viewerSceneSettings(content.sceneSettings), { editorHelpers: false });
+    const settings = viewerSceneSettings(content.sceneSettings);
+    const sceneManager = new SceneManager(settings, { editorHelpers: false });
     const scene = sceneManager.scene;
     // Made once the renderer has started, below.
     let environment: THREE.RenderTarget | null = null;
@@ -107,6 +121,11 @@ export class SceneViewer {
     // The drawn entities, so a state's colour goes over an asset's layers.
     const runtime = new SceneRuntime({ entities: drawn, animation: content.animation ?? {} });
     runtime.start();
+    this.hasScrollEvents = runtime.hasScrollEvents;
+    this.scrollLength = settings.scroll.length;
+    // Smoothing eases the shown progress toward the page's; reduced motion follows the page exactly.
+    const smoothScroll = settings.scroll.smooth && !reduceMotion;
+    let scrollShown = 0;
 
     const resize = () => {
       renderer.setSize(container.clientWidth, container.clientHeight, false);
@@ -133,6 +152,10 @@ export class SceneViewer {
 
       camera.update(dt);
       runtime.tick(dt);
+      if (scrollShown !== this.scrollTarget) {
+        scrollShown = easeScrollProgress(scrollShown, this.scrollTarget, dt, smoothScroll);
+        runtime.setScrollProgress(scrollShown);
+      }
       runtime.poses().forEach((pose, entityId) => objects.applyPose(entityId, pose));
       input.frame();
 
@@ -151,6 +174,15 @@ export class SceneViewer {
       },
       (error) => console.error("[Libre3D] The renderer could not start:", error),
     );
+  }
+
+  /**
+   * The page's scroll progress, 0 to 1 (the share page's scroller; an embed's host may call this
+   * itself). Only stored: the frame loop eases toward it and moves the Scroll events, and stops once
+   * it has arrived, so calling this on every scroll event costs nothing more.
+   */
+  setScrollProgress(progress: number): void {
+    this.scrollTarget = clampProgress(progress);
   }
 
   dispose(): void {

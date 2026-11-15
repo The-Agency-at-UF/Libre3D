@@ -372,6 +372,10 @@ describe("SceneRuntime: scroll", () => {
       },
     });
 
+  it("has no Scroll events in a scene without them", () => {
+    expect(cubeScene([event("rise"), event("grow", { trigger: "mouseDown" })]).hasScrollEvents).toBe(false);
+  });
+
   it("puts a scroll transition at progress 0 before the first frame, its Delay ignored", () => {
     const runtime = scrollScene();
     expect(runtime.hasScrollEvents).toBe(true);

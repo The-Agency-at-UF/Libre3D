@@ -74,6 +74,10 @@ export const initialSceneDefaults: SceneSettingsConfig = {
     directionalEnabled: true,
     shadow: "Soft",
   },
+  scroll: {
+    length: 3,
+    smooth: true,
+  },
   physics: {
     enabled: false,
     gravityY: -9.8,

@@ -446,6 +446,14 @@ export interface SceneSettingsConfig {
     directionalEnabled: boolean;
     shadow: string;
   };
+  // How a scene's Scroll events follow the share page's scroll (decision tree B4): `length` is how
+  // much scrolling plays them from start to end, in screen heights (3 = 300%), and `smooth` eases the
+  // shown progress toward the scrolled one so wheel steps don't jump. Older scenes get the defaults
+  // when they open (settings are deep-merged), so this needed no document bump.
+  scroll: {
+    length: number;
+    smooth: boolean;
+  };
   // Not read yet (there is no physics), kept for the same reason as the lights' unread fields.
   physics: {
     enabled: boolean;

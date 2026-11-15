@@ -44,6 +44,12 @@ describe("the viewer's defaults", () => {
     });
   });
 
+  it("reads the scroll settings over the defaults, a stored value winning", () => {
+    expect(viewerSceneSettings(undefined).scroll).toEqual(initialSceneDefaults.scroll);
+    expect(viewerSceneSettings({ scroll: { length: 6 } }).scroll).toEqual({ length: 6, smooth: initialSceneDefaults.scroll.smooth });
+    expect(viewerSceneSettings({ scroll: { length: 2, smooth: false } }).scroll).toEqual({ length: 2, smooth: false });
+  });
+
   it("start from the scene's active camera with its Play setting, or the default camera", () => {
     const active = { ...DEFAULT_CAMERA_PROFILE, id: "closeup", name: "Close", position: [1, 2, 3] as [number, number, number], play: { mode: "softOrbit" as const } };
 
