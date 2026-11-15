@@ -49,8 +49,10 @@ const findAction = (state: EditorState, actionId: string): TransitionAction | un
  * orbiting off). `cameraRef` points at it from Play's first frame to Stop, so rendering and clicks
  * use it; on Stop the editor's camera is put back exactly as it was.
  *
- * Play's pointer input is playInput.ts, shared with the share-link viewer: clicks fire Mouse Down
- * events, and the cursor is a pointer over objects that have one. The editor adds its own rules
+ * Play's input is playInput.ts, shared with the share-link viewer: the pointer triggers fire on the
+ * object under the pointer, the cursor is a pointer over objects that have one, and Key Down / Key
+ * Up fire from the window. The editor's hotkeys are off in Play (useHotkeys) but for Ctrl/Cmd zoom,
+ * which the keys leave alone; Escape stops Play (PreviewControls), so no event can pick it. The editor adds its own rules
  * (not with Alt or Space held, which orbit the camera instead; not during the ▶ preview). With an
  * Orbit camera, a press on an object fires its Mouse Down and dragging from it still turns the
  * camera. Locked objects count: locking is for editing.

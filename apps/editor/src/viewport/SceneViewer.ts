@@ -9,7 +9,7 @@
  * Built from the editor's own pieces, not copies of them, so a published scene looks and behaves
  * as it did in Play: the same renderer settings (rendererSettings.ts), scene (SceneManager, with its
  * environment light), objects (ObjectManager), events (SceneRuntime: Start events on load), pointer
- * input (playInput.ts: Mouse Down on a click, a pointer cursor over what can be clicked) and camera
+ * input (playInput.ts: the pointer and key triggers, a pointer cursor over what can be clicked) and camera
  * (PlayCamera, with the scene camera's Play setting). The editor's own objects (grid, light helpers, outlines) are never
  * built (`editorHelpers: false`), so there is nothing to hide. Nothing here loads the editor's
  * store: the published scene is the only state, and nothing is ever saved.
@@ -29,7 +29,7 @@ import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
 import { pickEntityAt } from "./pickEntity";
-import { attachPlayInput } from "./playInput";
+import { attachPlayInput, type PlayInputKeyTarget } from "./playInput";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
 import { SceneManager } from "./SceneManager";
@@ -59,6 +59,13 @@ export const viewerCamera = (content: StoredSceneContent): Pick<CameraProfile, "
   return { ...defaults, ...profile };
 };
 
+export interface SceneViewerOptions {
+  /** Plays without camera movement the visitor didn't ask for (prefers-reduced-motion). */
+  reduceMotion?: boolean;
+  /** Where Key Down and Key Up are listened for: the window unless given (an embed scopes keys to its element). */
+  keyTarget?: PlayInputKeyTarget;
+}
+
 export class SceneViewer {
   /** The viewer's own renderer. Handed to what needs it here; the viewer never puts it on `window`. */
   readonly renderer: SceneRenderer;
@@ -66,7 +73,7 @@ export class SceneViewer {
   private frameId = 0;
   private disposed = false;
 
-  constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false } = {}) {
+  constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false, keyTarget }: SceneViewerOptions = {}) {
     const renderer = createSceneRenderer();
     this.renderer = renderer;
     container.appendChild(renderer.domElement);
@@ -110,11 +117,11 @@ export class SceneViewer {
     observer.observe(container);
     this.disposers.push(() => observer.disconnect());
 
-    // Clicks fire Mouse Down events; the cursor is a pointer over what has one (one test a frame).
+    // The pointer and key triggers; the cursor is a pointer over what has a pointer trigger (one test a frame).
     const raycaster = new THREE.Raycaster();
     const pick = (x: number, y: number) =>
       pickEntityAt(raycaster, camera.camera, canvas, [...objects.getMeshes().values()].filter((object) => object.visible), x, y, true);
-    const input = attachPlayInput({ canvas, cursorElement: container, pick, getRuntime: () => runtime });
+    const input = attachPlayInput({ canvas, cursorElement: container, pick, getRuntime: () => runtime, keyTarget });
     this.disposers.push(() => input.detach());
 
     let lastTime = 0;

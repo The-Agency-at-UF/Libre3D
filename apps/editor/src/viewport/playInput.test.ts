@@ -22,6 +22,8 @@ const fakeRuntime = (triggers: string[] = ["mouseDown"], ownerId: string | null 
   triggersInUse: new Set(triggers) as PlayInputRuntime["triggersInUse"],
   fire: vi.fn(() => true),
   ownerOf: vi.fn((_trigger: string, entityId: string) => (owners ? (owners[entityId] ?? null) : ownerId)),
+  keyCodes: new Set<string>(),
+  key: vi.fn(() => true),
 });
 
 /** Moves the pointer onto `entityId` (what the next pick finds) and runs a frame. */
@@ -229,5 +231,90 @@ describe("attachPlayInput", () => {
     canvas.fire("pointermove");
     expect(() => input.frame()).not.toThrow();
     expect(() => input.detach()).not.toThrow();
+  });
+  describe("keys", () => {
+    type KeyListener = (event: KeyboardEvent) => void;
+
+    /** A window that only keeps its key listeners. */
+    const fakeKeyTarget = () => {
+      const listeners = new Map<string, KeyListener>();
+      return {
+        listeners,
+        addEventListener: vi.fn((type: string, listener: KeyListener) => listeners.set(type, listener)),
+        removeEventListener: vi.fn((type: string) => listeners.delete(type)),
+        /** Sends a key and returns whether its default was prevented. */
+        press: (type: "keydown" | "keyup", event: Partial<KeyboardEvent> = {}) => {
+          const preventDefault = vi.fn();
+          listeners.get(type)?.({ code: "Space", repeat: false, ctrlKey: false, metaKey: false, target: null, preventDefault, ...event } as unknown as KeyboardEvent);
+          return preventDefault.mock.calls.length > 0;
+        },
+      };
+    };
+
+    const keyRuntime = (codes: string[] = ["Space"]) => ({ ...fakeRuntime(["keyDown", "keyUp"]), keyCodes: new Set(codes) });
+
+    const setUpKeys = (initial: PlayInputRuntime | null) => {
+      let runtime = initial;
+      const keyTarget = fakeKeyTarget();
+      const input = attachPlayInput({ canvas: fakeCanvas(), cursorElement: null, pick: () => null, getRuntime: () => runtime, keyTarget });
+      input.frame();
+      return { keyTarget, input, setRuntime: (next: PlayInputRuntime | null) => (runtime = next) };
+    };
+
+    it("fires Key Down and Key Up for the scene's keys, and ignores auto-repeat", () => {
+      const runtime = keyRuntime();
+      const { keyTarget } = setUpKeys(runtime);
+
+      expect(keyTarget.press("keydown")).toBe(true);
+      expect(keyTarget.press("keydown", { repeat: true })).toBe(true);
+      expect(keyTarget.press("keyup")).toBe(true);
+      expect(vi.mocked(runtime.key).mock.calls).toEqual([
+        ["keyDown", "Space"],
+        ["keyUp", "Space"],
+      ]);
+    });
+
+    it("leaves every other key alone, and the scene's own with Ctrl or Cmd held", () => {
+      const runtime = keyRuntime();
+      const { keyTarget } = setUpKeys(runtime);
+
+      expect(keyTarget.press("keydown", { code: "KeyW" })).toBe(false);
+      expect(keyTarget.press("keydown", { ctrlKey: true })).toBe(false);
+      expect(keyTarget.press("keydown", { metaKey: true })).toBe(false);
+      expect(runtime.key).not.toHaveBeenCalled();
+    });
+
+    it("leaves a key typed into a field to the field", () => {
+      const runtime = keyRuntime();
+      const { keyTarget } = setUpKeys(runtime);
+
+      for (const target of [{ tagName: "INPUT" }, { tagName: "TEXTAREA" }, { tagName: "SELECT" }, { tagName: "DIV", isContentEditable: true }]) {
+        expect(keyTarget.press("keydown", { target: target as unknown as EventTarget })).toBe(false);
+      }
+      expect(runtime.key).not.toHaveBeenCalled();
+    });
+
+    it("listens for keys only while a scene with key events plays, on the target it's given", () => {
+      const { keyTarget, input, setRuntime } = setUpKeys(fakeRuntime(["start"]));
+      expect(keyTarget.listeners.size).toBe(0);
+
+      setRuntime(keyRuntime());
+      input.frame();
+      expect([...keyTarget.listeners.keys()]).toEqual(["keydown", "keyup"]);
+      input.frame();
+      expect(keyTarget.addEventListener).toHaveBeenCalledTimes(2);
+
+      setRuntime(null);
+      input.frame();
+      expect(keyTarget.listeners.size).toBe(0);
+    });
+
+    it("removes its key listeners on detach", () => {
+      const { keyTarget, input } = setUpKeys(keyRuntime());
+
+      input.detach();
+      expect(keyTarget.removeEventListener.mock.calls.map(([type]) => type)).toEqual(["keydown", "keyup"]);
+      expect(keyTarget.listeners.size).toBe(0);
+    });
   });
 });
