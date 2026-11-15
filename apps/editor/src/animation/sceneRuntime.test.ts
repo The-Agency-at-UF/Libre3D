@@ -289,6 +289,64 @@ describe("SceneRuntime: fire, the one way in", () => {
   });
 });
 
+describe("SceneRuntime: keys", () => {
+  const grow = transition({ steps: [{ to: "big", duration: 1, easing: "linear" }] });
+  const rise = (targetId: string) => transition({ id: `rise-${targetId}`, targetId, steps: [{ to: `up-${targetId}`, duration: 1, easing: "linear" }] });
+  const twoCubes = (events: SceneEvent[]) =>
+    new SceneRuntime({
+      entities: [entity("cube"), entity("other")],
+      animation: {
+        states: byId(state("up-cube", "cube", { position: [0, 2, 0] }), state("up-other", "other", { position: [0, 3, 0] })),
+        events: byId(...events),
+      },
+    });
+
+  it("fires only the events whose key matches, whatever the pointer is on", () => {
+    const runtime = cubeScene([event("space", { trigger: "keyDown", key: "Space", actions: [grow] })], [entity("floor")]);
+
+    expect(runtime.key("keyDown", "KeyW")).toBe(false);
+    expect(runtime.poses().size).toBe(0);
+    expect(runtime.key("keyDown", "Space")).toBe(true);
+    runtime.tick(1);
+    expect(runtime.poses().get("cube")!.scale).toEqual([2, 2, 2]);
+  });
+
+  it("never fires an event with no key picked, and lists only the keys picked", () => {
+    const runtime = cubeScene([event("unset", { trigger: "keyDown" }), event("w", { trigger: "keyUp", key: "KeyW" })]);
+
+    expect(runtime.keyCodes).toEqual(new Set(["KeyW"]));
+    expect(runtime.key("keyDown", "")).toBe(false);
+    expect(runtime.fire("keyDown")).toBe(false);
+    expect(runtime.poses().size).toBe(0);
+  });
+
+  it("keeps Key Down and Key Up apart", () => {
+    const runtime = cubeScene([event("up", { trigger: "keyUp", key: "Space", actions: [grow] })]);
+
+    expect(runtime.key("keyDown", "Space")).toBe(false);
+    expect(runtime.key("keyUp", "Space")).toBe(true);
+  });
+
+  it("fires every object listening for the same key, in scene order", () => {
+    const runtime = twoCubes([
+      event("b", { ownerId: "other", trigger: "keyDown", key: "KeyA", actions: [rise("other")] }),
+      event("a", { ownerId: "cube", trigger: "keyDown", key: "KeyA", actions: [rise("cube")] }),
+    ]);
+
+    expect(runtime.key("keyDown", "KeyA")).toBe(true);
+    runtime.tick(1);
+    expect(positionOf(runtime, "cube")).toEqual([0, 2, 0]);
+    expect(positionOf(runtime, "other")).toEqual([0, 3, 0]);
+  });
+
+  it("skips a key event whose owner is gone", () => {
+    const runtime = cubeScene([event("gone", { ownerId: "deleted", trigger: "keyDown", key: "Space" })]);
+
+    expect(runtime.keyCodes.size).toBe(0);
+    expect(runtime.key("keyDown", "Space")).toBe(false);
+  });
+});
+
 describe("SceneRuntime: place", () => {
   it("starts a transition from Current where an object was placed, and from row 1 otherwise", () => {
     const runtime = cubeScene([]);

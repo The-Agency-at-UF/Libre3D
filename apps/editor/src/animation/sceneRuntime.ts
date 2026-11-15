@@ -4,7 +4,7 @@
  *
  * INPUT: A snapshot of the scene (its objects' own transforms and parents, and its animation
  *        section), taken when Play starts; its triggers (Start, and a pointer trigger on an
- *        object, through `fire`) and the passing of time.
+ *        object, through `fire`; a key, through `key`) and the passing of time.
  * OUTPUT: A pose for each object a transition has moved, to put on the Three objects each frame.
  *
  * The runtime never reads the store again and never writes it: Play moves Three objects, not
@@ -62,6 +62,11 @@ interface RunningTransition {
   elapsed: number; // seconds
 }
 
+/** The triggers fired by a key rather than the pointer or Start. */
+export type KeyTrigger = Extract<EventTrigger, "keyDown" | "keyUp">;
+
+const keySlot = (trigger: KeyTrigger, code: string) => `${trigger}:${code}`;
+
 const lerp = (from: number, to: number, progress: number) => from + (to - from) * progress;
 
 const lerpVector = (
@@ -98,6 +103,8 @@ export class SceneRuntime {
   private readonly entities = new Map<string, RuntimeEntity>();
   private readonly states: Record<string, ObjectState>;
   private readonly eventsByOwner = new Map<string, SceneEvent[]>();
+  // Key Down and Key Up events by trigger and code ("keyDown:Space"), in scene order, so a keypress is one lookup.
+  private readonly eventsByKey = new Map<string, SceneEvent[]>();
   private readonly running = new Map<string, RunningTransition>(); // by target ID
   private readonly current = new Map<string, Pose>(); // where each moved object is, by entity ID
 
@@ -107,6 +114,12 @@ export class SceneRuntime {
    * once, not on every hover frame.
    */
   readonly triggersInUse: ReadonlySet<EventTrigger>;
+
+  /**
+   * The keys (`KeyboardEvent.code`) the scene's Key Down and Key Up events listen for, so a host
+   * listens for keys only when there are some, and claims only these from the page.
+   */
+  readonly keyCodes: ReadonlySet<string>;
 
   constructor(scene: RuntimeScene) {
     for (const entity of scene.entities) {
@@ -133,6 +146,16 @@ export class SceneRuntime {
       this.eventsByOwner.set(event.ownerId, list);
     }
     this.triggersInUse = new Set(events.map((event) => event.trigger));
+
+    // An event with no key picked yet never fires, so it isn't indexed.
+    for (const event of events) {
+      if ((event.trigger !== "keyDown" && event.trigger !== "keyUp") || !event.key) continue;
+      const slot = keySlot(event.trigger, event.key);
+      const list = this.eventsByKey.get(slot) ?? [];
+      list.push(event);
+      this.eventsByKey.set(slot, list);
+    }
+    this.keyCodes = new Set([...this.eventsByKey.values()].map((list) => list[0].key!));
   }
 
   /** Whether any object has a Mouse Down event. */
@@ -148,8 +171,10 @@ export class SceneRuntime {
   /**
    * The one way in: fires the events of a trigger. With an object (a pointer trigger), its owner's
    * (`ownerOf`); without one (Start), every object's, in scene order. Returns whether any fired.
+   * Key triggers need their key, so they go through `key` and fire nothing here.
    */
   fire(trigger: EventTrigger, entityId?: string): boolean {
+    if (trigger === "keyDown" || trigger === "keyUp") return false;
     if (entityId === undefined) {
       let fired = false;
       for (const ownerId of this.eventsByOwner.keys()) fired = this.fireOwn(ownerId, trigger) || fired;
@@ -182,6 +207,17 @@ export class SceneRuntime {
   /** `fire("mouseDown", entityId)`: a click (mouse button down) on an object. */
   click(entityId: string): boolean {
     return this.fire("mouseDown", entityId);
+  }
+
+  /**
+   * A key pressed (`keyDown`) or released (`keyUp`): fires every event of that trigger listening
+   * for `code`, on whichever object it belongs to, in scene order. The pointer plays no part.
+   * Returns whether any fired.
+   */
+  key(trigger: KeyTrigger, code: string): boolean {
+    const events = this.eventsByKey.get(keySlot(trigger, code));
+    events?.forEach((event) => this.runEvent(event));
+    return events !== undefined;
   }
 
   /**
