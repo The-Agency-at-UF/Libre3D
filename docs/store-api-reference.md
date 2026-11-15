@@ -324,6 +324,9 @@ Update background color, grid, fog, lighting, physics, etc.
   - `ambientEnabled`: Enable ambient light
   - `directionalEnabled`: Enable default directional light
   - `shadow`: "Off" | "Soft" | "Hard"
+- **scroll** (nested): how Scroll events follow the share page's scroll (the Scene panel shows it only for a scene with a Scroll event). Older scenes open with the defaults (deep merge), so it needed no document bump.
+  - `length`: How much scrolling plays them from start to end, in screen heights (1-10, default 3, shown as 300%)
+  - `smooth`: Ease the shown progress toward the scrolled one (default on; skipped with reduced motion)
 - **physics** (nested):
   - `enabled`: Enable physics simulation
   - `gravityY`: Gravity vector Y component
