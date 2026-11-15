@@ -665,7 +665,7 @@ A row naming no state of the target (a deleted state, another object's, or `""` 
 Add an event to an object, last in its list, with one transition of the object from Base to its first state (none picked yet if it has none), 1 s, Ease In Out. Returns its ID (`""` if the object isn't there).
 
 #### `updateEvent(eventId: string, updates: { trigger?, key?, actions? }) → void`
-Change an event's trigger, set a Key Down or Key Up event's key (a `KeyboardEvent.code`, as the Edit Event panel's key field captures it), or replace its actions (copied in; any of the action types, `SceneAction` in `animation/actions.ts`: Transition, Open Link, Sound). One undo step.
+Change an event's trigger, set a Key Down or Key Up event's key (a `KeyboardEvent.code`, as the Edit Event panel's key field captures it), or replace its actions (copied in; any of the action types, `SceneAction` in `animation/actions.ts`: Transition, Open Link, Sound; a Sound action's `assetId` is an audio asset's content hash, its `name` the file's name when added). One undo step.
 
 #### `removeEvent(eventId: string) → void`
 Delete an event.
