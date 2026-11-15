@@ -51,6 +51,14 @@ export const EVENT_TRIGGERS: { value: EventTrigger; label: string; icon: string 
   ...TRIGGER_INFO[value],
 }));
 
+/**
+ * Whether any event is a Scroll event, so the editor shows what only those need (the Play bar's
+ * scrubber, the Scene panel's Scroll settings). A boolean, so a component selecting it re-renders
+ * only when the answer changes.
+ */
+export const hasScrollEvents = (events: Record<string, SceneEvent>): boolean =>
+  Object.values(events).some((event) => event.trigger === "scroll");
+
 export interface SceneEvent {
   id: string;
   ownerId: string; // entity ID; a pointer trigger fires when the pointer is on it (or a descendant)

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { hasScrollEvents as anyScrollEvents } from "../animation/events";
 import { useEditorStore } from "../store/useEditorStore";
 import { setPlayScrollProgress } from "../viewport/playScroll";
 
@@ -11,10 +12,7 @@ const SCRUB_STEPS = 1000;
 // starts its scrubber at 0, as the runtime does.
 export function PreviewControls() {
   const setPreviewMode = useEditorStore((state) => state.setPreviewMode);
-  // A boolean, so the bar re-renders only when a Scroll event comes or goes, not on every edit.
-  const hasScrollEvents = useEditorStore((state) =>
-    Object.values(state.animation.events).some((event) => event.trigger === "scroll"),
-  );
+  const hasScrollEvents = useEditorStore((state) => anyScrollEvents(state.animation.events));
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

@@ -375,6 +375,47 @@ describe("store → document → cloud → store", () => {
   });
 });
 
+describe("scroll settings", () => {
+  it("change one value through updateSceneSettings, keeping every other setting, in one undo step", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().updateSceneSettings({ bgColor: "#abcdef" });
+    const before = useEditorStore.getState().sceneSettings;
+
+    useEditorStore.getState().updateSceneSettings({ scroll: { length: 5 } });
+
+    expect(useEditorStore.getState().sceneSettings).toEqual({ ...before, scroll: { length: 5, smooth: true } });
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().sceneSettings.scroll).toEqual(initialSceneDefaults.scroll);
+  });
+
+  it("can't be changed in a view-only tab", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().updateSceneSettings({ scroll: { smooth: false } });
+
+    expect(useEditorStore.getState().sceneSettings.scroll.smooth).toBe(true);
+  });
+
+  it("survive a save and a reload, and an old scene without them opens with the defaults", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().updateSceneSettings({ scroll: { length: 6, smooth: false } });
+    const saved = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+
+    const parsed = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+    expect(useEditorStore.getState().sceneSettings.scroll).toEqual({ length: 6, smooth: false });
+
+    delete saved.scene.sceneSettings.scroll;
+    const old = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(old.ok ? old.content : null);
+    expect(useEditorStore.getState().sceneSettings.scroll).toEqual(initialSceneDefaults.scroll);
+  });
+});
+
 describe("object states", () => {
   // A cube at (2, 0, 0) with a child sphere, and the light.
   const storeWithCube = async () => {
