@@ -30,6 +30,7 @@ const createScene = (initial: Entity[]) => {
     isWireframe: () => wireframe,
     loadModel: async () => null,
     loadTexture,
+    loadAudio: async () => null,
     saveTexture: async () => {},
     setMaterialLayers: () => {},
   };

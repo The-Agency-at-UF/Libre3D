@@ -44,6 +44,11 @@ describe("the viewer's defaults", () => {
     });
   });
 
+  it("reads the sound button's settings over the defaults, a stored value winning", () => {
+    expect(viewerSceneSettings(undefined).audioButton).toEqual(initialSceneDefaults.audioButton);
+    expect(viewerSceneSettings({ audioButton: { visible: false } }).audioButton).toEqual({ visible: false, position: "bottomRight" });
+  });
+
   it("reads the scroll settings over the defaults, a stored value winning", () => {
     expect(viewerSceneSettings(undefined).scroll).toEqual(initialSceneDefaults.scroll);
     expect(viewerSceneSettings({ scroll: { length: 6 } }).scroll).toEqual({ length: 6, smooth: initialSceneDefaults.scroll.smooth });
@@ -90,7 +95,9 @@ describe("a published scene's source", () => {
     expect(new Uint8Array((await source.loadModel("model"))!)).toEqual(new Uint8Array([1, 2, 3]));
     expect(await source.loadTexture("expired")).toBeNull();
     expect(await source.loadModel("unknown")).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new Uint8Array((await source.loadAudio("model"))!)).toEqual(new Uint8Array([1, 2, 3]));
+    expect(await source.loadAudio("unknown")).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("keeps what's derived for imported meshes in memory, never draws wireframe, and saves nothing", () => {

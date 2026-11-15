@@ -20,6 +20,7 @@
  */
 
 import * as THREE from "three";
+import { hasSoundActions } from "../animation/events";
 import { fadingObjects } from "../animation/objectStates";
 import { SceneRuntime } from "../animation/sceneRuntime";
 import { clampProgress } from "../animation/transitions";
@@ -33,6 +34,7 @@ import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
 import { pickEntityAt } from "./pickEntity";
 import { createPlayEffects } from "./playEffects";
 import { attachPlayInput, type PlayInputKeyTarget } from "./playInput";
+import { SceneAudio } from "./sceneAudio";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
 import { easeScrollProgress } from "./scrollProgress";
@@ -56,6 +58,11 @@ export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"])
       length: stored?.scroll?.length ?? initialSceneDefaults.scroll.length,
       smooth: stored?.scroll?.smooth ?? initialSceneDefaults.scroll.smooth,
     },
+    // Read by the page, for the mute button.
+    audioButton: {
+      visible: stored?.audioButton?.visible ?? initialSceneDefaults.audioButton.visible,
+      position: initialSceneDefaults.audioButton.position,
+    },
   }) as SceneSettingsConfig;
 
 /** The camera a published scene starts from: its active profile, over the default camera's values. */
@@ -75,6 +82,8 @@ export interface SceneViewerOptions {
   keyTarget?: PlayInputKeyTarget;
   /** Given, an Open Link action calls it instead of opening the link (an embed hands links to its page). */
   onOpenLink?: (url: string, newTab: boolean) => void;
+  /** Whether sound starts muted (it does unless the page says otherwise: the visitor unmutes with the page's button). */
+  muted?: boolean;
 }
 
 export class SceneViewer {
@@ -84,12 +93,18 @@ export class SceneViewer {
   readonly hasScrollEvents: boolean;
   /** How much page scroll plays the Scroll events from start to end, in screen heights. */
   readonly scrollLength: number;
+  /** Whether the scene plays any sound, so the page knows to show the mute button. */
+  readonly hasSound: boolean;
+  /** The mute button's settings (whether the author shows it, and where). */
+  readonly audioButton: SceneSettingsConfig["audioButton"];
+  // The scene's sound; none for a scene that plays none (no audio context is ever made then).
+  private readonly audio: SceneAudio | null;
   private scrollTarget = 0; // the page's scroll progress, as last handed in
   private readonly disposers: (() => void)[] = [];
   private frameId = 0;
   private disposed = false;
 
-  constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false, keyTarget, onOpenLink }: SceneViewerOptions = {}) {
+  constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false, keyTarget, onOpenLink, muted = true }: SceneViewerOptions = {}) {
     const renderer = createSceneRenderer();
     this.renderer = renderer;
     container.appendChild(renderer.domElement);
@@ -123,7 +138,10 @@ export class SceneViewer {
 
     // The drawn entities, so a state's colour goes over an asset's layers.
     // What its actions ask of the page (open a link, play a sound), shared with the editor's Play.
-    const effects = createPlayEffects({ onOpenLink });
+    this.audio = hasSoundActions(content.animation?.events ?? {}) ? new SceneAudio({ loadAudio: (assetId) => source.loadAudio(assetId), muted }) : null;
+    this.hasSound = this.audio !== null;
+    this.audioButton = settings.audioButton;
+    const effects = createPlayEffects({ onOpenLink, audio: this.audio });
     this.disposers.push(() => effects.dispose());
     const runtime = new SceneRuntime({ entities: drawn, animation: content.animation ?? {} }, { onEffect: effects.onEffect });
     runtime.start();
@@ -180,6 +198,16 @@ export class SceneViewer {
       },
       (error) => console.error("[Libre3D] The renderer could not start:", error),
     );
+  }
+
+  /** Mutes or unmutes the scene's sound (faded). Unmuting must come from a click or key: browsers start sound only then. */
+  setMuted(muted: boolean): void {
+    this.audio?.setMuted(muted);
+  }
+
+  /** Whether the scene's sound is muted (a scene without sound counts as muted). */
+  get isMuted(): boolean {
+    return this.audio?.isMuted ?? true;
   }
 
   /**

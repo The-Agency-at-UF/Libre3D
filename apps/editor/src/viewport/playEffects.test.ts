@@ -27,3 +27,24 @@ describe("playEffects: Open Link", () => {
     expect(open).not.toHaveBeenCalled();
   });
 });
+
+describe("playEffects: Sound", () => {
+  const sound = { type: "sound" as const, assetId: "chime", volume: 0.4, loop: true };
+
+  it("plays and stops sounds through the scene's audio, and disposes it with the effects", () => {
+    const audio = { play: vi.fn(async () => {}), stop: vi.fn(), dispose: vi.fn() };
+    const effects = createPlayEffects({ audio: audio as never });
+
+    effects.onEffect({ ...sound, mode: "play" });
+    effects.onEffect({ ...sound, mode: "stop" });
+    effects.dispose();
+
+    expect(audio.play).toHaveBeenCalledWith("chime", { volume: 0.4, loop: true });
+    expect(audio.stop).toHaveBeenCalledWith("chime");
+    expect(audio.dispose).toHaveBeenCalledOnce();
+  });
+
+  it("drops sounds when the scene has no audio", () => {
+    expect(() => createPlayEffects().onEffect({ ...sound, mode: "play" })).not.toThrow();
+  });
+});

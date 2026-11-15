@@ -1,4 +1,4 @@
-import { hasScrollEvents } from "../../animation/events";
+import { hasScrollEvents, hasSoundActions } from "../../animation/events";
 import { useEditorStore } from "../../store/useEditorStore";
 import { SCROLL_LENGTH_LIMITS } from "../../viewport/scrollProgress";
 import { ColorField } from "../ui/ColorField";
@@ -13,6 +13,7 @@ export function ScenePanel() {
   const sceneSettings = useEditorStore((state) => state.sceneSettings);
   const updateSceneSettings = useEditorStore((state) => state.updateSceneSettings);
   const usesScroll = useEditorStore((state) => hasScrollEvents(state.animation.events));
+  const usesSound = useEditorStore((state) => hasSoundActions(state.animation.events));
 
   return (
     <PanelSection title="Scene Settings" defaultOpen={true}>
@@ -84,6 +85,19 @@ export function ScenePanel() {
           </>
         )}
 
+        {/* The mute/unmute button a scene with sound shows; scenes start muted either way */}
+        {usesSound && (
+          <>
+            <Switch
+              label="Sound Button"
+              checked={sceneSettings.audioButton.visible}
+              onChange={(visible) => updateSceneSettings({ audioButton: { visible } })}
+            />
+            {!sceneSettings.audioButton.visible && (
+              <p className="state-hint">Without the button the scene stays muted, unless the page it's embedded in unmutes it in code.</p>
+            )}
+          </>
+        )}
       </div>
     </PanelSection>
   );

@@ -78,6 +78,10 @@ export const initialSceneDefaults: SceneSettingsConfig = {
     length: 3,
     smooth: true,
   },
+  audioButton: {
+    visible: true,
+    position: "bottomRight",
+  },
   physics: {
     enabled: false,
     gravityY: -9.8,

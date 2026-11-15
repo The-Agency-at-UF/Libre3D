@@ -8,7 +8,7 @@
  *
  * An uploaded file is checked and kept in this browser by `importAudioFile` (utils/importAudio.ts);
  * autosave uploads it with the scene's other assets, since it's found through this action. Playback
- * is C4: until then Play ignores the action. Read-only disables everything (the row's fieldset),
+ * is viewport/sceneAudio.ts. Read-only disables everything (the row's fieldset),
  * and an upload from a view-only tab never starts.
  */
 
@@ -163,7 +163,7 @@ export function SoundActionRow({ action, isReadOnly, onChange, onRemove }: Actio
             ) : (
               <p className="state-hint">Stops this sound wherever it's playing.</p>
             )}
-            <p className="state-hint">Sounds don't play yet: playback comes in the next update.</p>
+            <p className="state-hint">Scenes start muted: visitors hear sound once they press the sound button.</p>
           </div>
         </fieldset>
       )}

@@ -3,8 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import { exposeConsoleHandle } from "../utils/consoleHandle";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { createPublishedSceneSource } from "../viewport/publishedSceneSource";
+import { sessionMuted } from "../viewport/sceneAudio";
 import { SceneViewer } from "../viewport/SceneViewer";
 import { scrollProgressOf } from "../viewport/scrollProgress";
+import { MuteButton } from "./ui/MuteButton";
 
 interface PublishedSceneViewProps {
   content: StoredSceneContent;
@@ -31,14 +33,17 @@ export default function PublishedSceneView({ content, assets }: PublishedSceneVi
   const viewerRef = useRef<SceneViewer | null>(null);
   // The scroll length (screen heights) when the scene has Scroll events, else null.
   const [scrollLength, setScrollLength] = useState<number | null>(null);
+  // Whether sound is muted, for a scene with sound and its button shown; null otherwise (no button).
+  const [muted, setMuted] = useState<boolean | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    const viewer = new SceneViewer(container, content, createPublishedSceneSource(content.entities, assets, content.materials), { reduceMotion });
+    const viewer = new SceneViewer(container, content, createPublishedSceneSource(content.entities, assets, content.materials), { reduceMotion, muted: sessionMuted.get() });
     viewerRef.current = viewer;
     setScrollLength(viewer.hasScrollEvents ? viewer.scrollLength : null);
+    setMuted(viewer.hasSound && viewer.audioButton.visible ? viewer.isMuted : null);
     // The share page's console handle, like the editor's. The page sets it, not the viewer.
     const removeHandle = exposeConsoleHandle("__libre3dRenderer", viewer.renderer);
     return () => {
@@ -68,6 +73,16 @@ export default function PublishedSceneView({ content, assets }: PublishedSceneVi
     <div ref={scrollerRef} className={`viewer-scroller${scrollLength === null ? "" : " is-scrollable"}`} tabIndex={-1}>
       <div ref={containerRef} className="viewer-canvas" />
       {scrollLength !== null && <div className="viewer-scroll-spacer" style={{ height: `${scrollLength * 100}%` }} aria-hidden="true" />}
+      {muted !== null && (
+        <MuteButton
+          muted={muted}
+          onToggle={(next) => {
+            setMuted(next);
+            sessionMuted.set(next);
+            viewerRef.current?.setMuted(next);
+          }}
+        />
+      )}
     </div>
   );
 }

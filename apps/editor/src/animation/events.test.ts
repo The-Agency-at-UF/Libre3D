@@ -5,6 +5,7 @@ import {
   duplicateEvents,
   getEventsUsingState,
   getObjectEvents,
+  hasSoundActions,
   normalizeEvents,
   removeEventsOf,
   transitionProblem,
@@ -254,3 +255,15 @@ describe("events with Open Link and Sound actions", () => {
   });
 });
 
+
+describe("hasSoundActions", () => {
+  const withActions = (actions: unknown[]) => ({ e: { id: "e", ownerId: "cube", trigger: "start", actions } }) as never;
+
+  it("is true only for an event that plays a picked sound", () => {
+    expect(hasSoundActions({})).toBe(false);
+    expect(hasSoundActions(withActions([{ id: "s", type: "sound", assetId: "abc", volume: 1, loop: false, mode: "play" }]))).toBe(true);
+    expect(hasSoundActions(withActions([{ id: "s", type: "sound", assetId: "", volume: 1, loop: false, mode: "play" }]))).toBe(false);
+    expect(hasSoundActions(withActions([{ id: "s", type: "sound", assetId: "abc", volume: 1, loop: false, mode: "stop" }]))).toBe(false);
+    expect(hasSoundActions(withActions([{ id: "l", type: "openLink", url: "https://example.com", newTab: true }]))).toBe(false);
+  });
+});

@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
-import { hasScrollEvents as anyScrollEvents } from "../animation/events";
+import { hasScrollEvents as anyScrollEvents, hasSoundActions } from "../animation/events";
 import { useEditorStore } from "../store/useEditorStore";
+import { setPlayMuted } from "../viewport/playAudio";
 import { setPlayScrollProgress } from "../viewport/playScroll";
+import { sessionMuted } from "../viewport/sceneAudio";
+import { MuteButton } from "./ui/MuteButton";
 
 // The scrubber's resolution: 1000 steps from 0 to 1, fine enough that a drag looks continuous.
 const SCRUB_STEPS = 1000;
@@ -13,6 +16,8 @@ const SCRUB_STEPS = 1000;
 export function PreviewControls() {
   const setPreviewMode = useEditorStore((state) => state.setPreviewMode);
   const hasScrollEvents = useEditorStore((state) => anyScrollEvents(state.animation.events));
+  // A scene with sound gets the mute button, unless the author hid it (then it stays muted, as on the share page).
+  const showMuteButton = useEditorStore((state) => state.sceneSettings.audioButton.visible && hasSoundActions(state.animation.events));
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -23,18 +28,37 @@ export function PreviewControls() {
   }, [setPreviewMode]);
 
   return (
-    <div className="play-bar">
-      {hasScrollEvents && <ScrollScrubber />}
-      <button
-        className="btn-chip preview-exit-btn"
-        type="button"
-        title="Stop preview (Esc)"
-        onClick={() => setPreviewMode(false)}
-      >
-        <i className="ti ti-player-stop" style={{ fontSize: "12px" }}></i>
-        <span>Stop</span>
-      </button>
-    </div>
+    <>
+      {showMuteButton && <PlayMuteButton />}
+      <div className="play-bar">
+        {hasScrollEvents && <ScrollScrubber />}
+        <button
+          className="btn-chip preview-exit-btn"
+          type="button"
+          title="Stop preview (Esc)"
+          onClick={() => setPreviewMode(false)}
+        >
+          <i className="ti ti-player-stop" style={{ fontSize: "12px" }}></i>
+          <span>Stop</span>
+        </button>
+      </div>
+    </>
+  );
+}
+
+// Starts as this session last left it (muted the first time); goes to Play's audio through
+// playAudio.ts, never the store.
+function PlayMuteButton() {
+  const [muted, setMuted] = useState(sessionMuted.get);
+  return (
+    <MuteButton
+      muted={muted}
+      onToggle={(next) => {
+        setMuted(next);
+        sessionMuted.set(next);
+        setPlayMuted(next);
+      }}
+    />
   );
 }
 

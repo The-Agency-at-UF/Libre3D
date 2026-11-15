@@ -35,3 +35,39 @@
 .play-scrubber input[type="range"] {
   width: 180px;
 }
+
+/* The mute/unmute button on a scene with sound (components/ui/MuteButton.tsx): the editor's Play
+   places it over the viewport, the share page over the pinned canvas (position: fixed there). */
+.mute-button {
+  position: absolute;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--overlay-control-border);
+  border-radius: 50%;
+  background: var(--overlay-control-bg);
+  color: var(--overlay-control-fg);
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+}
+
+.mute-button[data-position="bottomRight"] {
+  right: 24px;
+  bottom: 24px;
+}
+
+.mute-button:hover {
+  background: var(--overlay-control-bg-hover);
+}
+
+.mute-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.viewer-scroller .mute-button {
+  position: fixed;
+}

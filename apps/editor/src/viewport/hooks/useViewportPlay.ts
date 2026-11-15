@@ -11,7 +11,11 @@ import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
 import { pickEntityAt } from "../pickEntity";
 import { attachPlayInput } from "../playInput";
 import { createPlayEffects, type PlayEffects } from "../playEffects";
+import { registerPlayAudio } from "../playAudio";
 import { registerPlayScroll } from "../playScroll";
+import { editorSceneSource } from "../editorSceneSource";
+import { SceneAudio, sessionMuted } from "../sceneAudio";
+import { hasSoundActions } from "../../animation/events";
 import { isTransition } from "../../animation/actions";
 import { easeScrollProgress } from "../scrollProgress";
 import { clampProgress } from "../../animation/transitions";
@@ -22,6 +26,8 @@ interface Session {
   runtime: SceneRuntime;
   // What Play's actions ask of the page (playEffects.ts); none for the ▶ preview, which plays one transition.
   effects: PlayEffects | null;
+  // The scene's sound (disposed with `effects`), muted and unmuted by the Play bar's button through playAudio.ts.
+  audio: SceneAudio | null;
   preview: boolean;
   entities: EditorState["entities"];
   animation: EditorState["animation"];
@@ -145,10 +151,12 @@ export function useViewportPlay(
 
     const startSession = (store: EditorState, preview: boolean): SceneRuntime => {
       // The entities as they are drawn, so a state's colour goes over a material asset's layers.
-      const effects = preview ? null : createPlayEffects({ alwaysNewTab: true });
+      // Sound only for a scene that plays some (its context made on first use), muted as this session left it.
+      const audio = !preview && hasSoundActions(store.animation.events) ? new SceneAudio({ loadAudio: editorSceneSource.loadAudio, muted: sessionMuted.get() }) : null;
+      const effects = preview ? null : createPlayEffects({ alwaysNewTab: true, audio });
       const runtime = new SceneRuntime({ entities: selectDrawnEntities(store), animation: store.animation }, { onEffect: effects?.onEffect });
       const view = preview ? null : startView(store);
-      session = { runtime, effects, preview, entities: store.entities, animation: store.animation, selection: store.selectedEntityIds, view };
+      session = { runtime, effects, audio, preview, entities: store.entities, animation: store.animation, selection: store.selectedEntityIds, view };
       return runtime;
     };
 
@@ -229,6 +237,7 @@ export function useViewportPlay(
     const unregisterScroll = registerPlayScroll((progress) => {
       if (session && !session.preview) scrollTarget = clampProgress(progress);
     });
+    const unregisterAudio = registerPlayAudio((muted) => session?.audio?.setMuted(muted));
 
     // Play or the preview started or stopped: drop what was running. The next frame starts what's asked for.
     const unsubscribePlay = useEditorStore.subscribe((state) => state.isPreviewMode, endSession);
@@ -259,6 +268,7 @@ export function useViewportPlay(
       unsubscribePlay();
       unsubscribePreview();
       unregisterScroll();
+      unregisterAudio();
       input.detach();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);

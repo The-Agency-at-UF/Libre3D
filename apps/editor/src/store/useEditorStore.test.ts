@@ -380,6 +380,24 @@ describe("store → document → cloud → store", () => {
   });
 });
 
+describe("the sound button's settings", () => {
+  it("change through updateSceneSettings keeping its position and every other setting, and old scenes get the default", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    const before = useEditorStore.getState().sceneSettings;
+    expect(before.audioButton).toEqual({ visible: true, position: "bottomRight" });
+
+    useEditorStore.getState().updateSceneSettings({ audioButton: { visible: false } });
+    expect(useEditorStore.getState().sceneSettings).toEqual({ ...before, audioButton: { visible: false, position: "bottomRight" } });
+
+    const saved = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+    delete saved.scene.sceneSettings.audioButton;
+    const old = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(old.ok ? old.content : null);
+    expect(useEditorStore.getState().sceneSettings.audioButton).toEqual(initialSceneDefaults.audioButton);
+  });
+});
+
 describe("scroll settings", () => {
   it("change one value through updateSceneSettings, keeping every other setting, in one undo step", async () => {
     const { useEditorStore } = await loadStore();

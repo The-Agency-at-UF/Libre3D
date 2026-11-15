@@ -454,6 +454,13 @@ export interface SceneSettingsConfig {
     length: number;
     smooth: boolean;
   };
+  // The mute/unmute button a scene with sound shows (decision tree C4): scenes start muted and the
+  // button is how a visitor hears them. Only `visible` and `position` exist now; later looks (size,
+  // colour, icon, shape) go here too, so they need no redesign. Deep-merged like `scroll`.
+  audioButton: {
+    visible: boolean;
+    position: "bottomRight";
+  };
   // Not read yet (there is no physics), kept for the same reason as the lights' unread fields.
   physics: {
     enabled: boolean;

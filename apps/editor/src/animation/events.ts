@@ -62,6 +62,10 @@ export const EVENT_TRIGGERS: { value: EventTrigger; label: string; icon: string 
 export const hasScrollEvents = (events: Record<string, SceneEvent>): boolean =>
   Object.values(events).some((event) => event.trigger === "scroll");
 
+/** Whether any event plays a sound (a Sound action with one picked): the scene then gets the mute button. */
+export const hasSoundActions = (events: Record<string, SceneEvent>): boolean =>
+  Object.values(events).some((event) => event.actions.some((action) => action.type === "sound" && action.mode === "play" && !!action.assetId));
+
 export interface SceneEvent {
   id: string;
   ownerId: string; // entity ID; a pointer trigger fires when the pointer is on it (or a descendant)

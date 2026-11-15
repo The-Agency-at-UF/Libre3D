@@ -17,6 +17,8 @@ export interface SceneSource {
   /** An imported model's bytes by content hash (sceneAssets.ts); null when it can't be had. */
   loadModel(assetId: string): Promise<ArrayBuffer | null>;
   loadTexture(assetId: string): Promise<Blob | null>;
+  /** A Sound action's audio bytes by content hash (sceneAudio.ts); null when it can't be had. */
+  loadAudio(assetId: string): Promise<ArrayBuffer | null>;
   /**
    * Keeps a texture taken out of an imported model's own material, under its content hash, so
    * `loadTexture` can return it. The editor writes it to this browser's storage; the viewer must not.

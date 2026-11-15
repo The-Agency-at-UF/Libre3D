@@ -1,5 +1,5 @@
 import { selectDrawnEntities, useEditorStore } from "../store/useEditorStore";
-import { loadModelForScene, loadTextureForScene } from "../utils/assetTransfers";
+import { loadAudioForScene, loadModelForScene, loadTextureForScene } from "../utils/assetTransfers";
 import { saveTextureAsset } from "../utils/textureAssetStore";
 import type { SceneSource } from "./sceneSource";
 
@@ -16,6 +16,7 @@ export const editorSceneSource: SceneSource = {
   isWireframe: () => useEditorStore.getState().sceneSettings.wireframe,
   loadModel: loadModelForScene,
   loadTexture: loadTextureForScene,
+  loadAudio: loadAudioForScene,
   saveTexture: saveTextureAsset,
   setMaterialLayers: (entityId, layers, opacity) => useEditorStore.getState().setEntityMaterialLayers(entityId, layers, opacity),
 };

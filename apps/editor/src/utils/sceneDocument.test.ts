@@ -34,6 +34,7 @@ const makeContent = (): SceneContent => ({
     environment: { enabled: true, intensity: 0.8 },
     lights: { intensity: 1, color: "#ffffff", ambientEnabled: true, directionalEnabled: true, shadow: "Soft" },
     scroll: { length: 4, smooth: false },
+    audioButton: { visible: false, position: "bottomRight" },
     physics: { enabled: false, gravityY: -9.8, collisionType: "Mesh" },
   },
   postProcessing: { enabled: false } as SceneContent["postProcessing"],

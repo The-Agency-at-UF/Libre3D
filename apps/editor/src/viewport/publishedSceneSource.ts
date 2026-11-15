@@ -29,6 +29,7 @@ export const createPublishedSceneSource = (entities: Entity[], assetUrls: Record
     getEntities: () => current,
     isWireframe: () => false,
     loadModel: async (assetId) => (await download(assetId))?.arrayBuffer() ?? null,
+    loadAudio: async (assetId) => (await download(assetId))?.arrayBuffer() ?? null,
     loadTexture: async (assetId) => derivedTextures.get(assetId) ?? (await download(assetId))?.blob() ?? null,
     saveTexture: async (assetId, blob) => {
       derivedTextures.set(assetId, blob);
