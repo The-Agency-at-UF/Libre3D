@@ -1,11 +1,12 @@
 /**
  * PURPOSE: What a scene's imported assets are called, shared by the editor and the server.
  *
- * INPUT: Asset bytes (`hashAsset`), or a scene's entities (`collectAssetRefs`), typed or straight
- *        out of a request body.
+ * INPUT: Asset bytes (`hashAsset`), or a scene's content (`collectAssetRefs`: its entities,
+ *        material assets and animation), typed or straight out of a request body.
  * OUTPUT: Content addresses: the SHA-256 of an asset's bytes as 64 lowercase hex characters.
  *
- * An imported model's `assetId` and a texture layer's `textureAssetId` are the hash of the bytes
+ * An imported model's `assetId`, a texture layer's `textureAssetId` and a Sound action's `assetId`
+ * (audio, C3) are the hash of the bytes
  * stored for them, the same in this browser's storage and in the cloud
  * (`users/<sub>/assets/<hash>`). So the same file is stored and uploaded once however many entities
  * or scenes use it, an uploaded asset never changes, and the scene document needs no list of its
@@ -15,7 +16,12 @@
  * No imports, so the server modules can use this too (with a `.js` extension).
  */
 
-export type AssetKind = "model" | "texture";
+export type AssetKind = "model" | "texture" | "audio";
+
+/** Every kind, for checking one read from a request body or a file. */
+export const ASSET_KINDS: readonly AssetKind[] = ["model", "texture", "audio"];
+
+export const isAssetKind = (value: unknown): value is AssetKind => ASSET_KINDS.includes(value as AssetKind);
 
 export interface AssetRef {
   id: string;
@@ -24,6 +30,17 @@ export interface AssetRef {
 
 /** Largest asset that can be imported or uploaded: 100 MB per file. */
 export const MAX_ASSET_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Audio is smaller (approved by Emily, decision tree C4): it loads with the scene, so every megabyte
+ * slows the share link. 5 MB is about 5 minutes of 128 kbps mp3.
+ */
+export const MAX_AUDIO_BYTES = 5 * 1024 * 1024;
+/** All of a scene's audio together. */
+export const MAX_SCENE_AUDIO_BYTES = 20 * 1024 * 1024;
+
+/** The largest file of a kind. */
+export const maxAssetBytes = (kind: AssetKind): number => (kind === "audio" ? MAX_AUDIO_BYTES : MAX_ASSET_BYTES);
 
 const ASSET_HASH_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -52,12 +69,24 @@ export const assetHashToBase64 = (hash: string): string => {
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
 /**
+ * The parts of a scene that name assets (a document's `scene`, or the store's content). Each part is
+ * `unknown` (the server reads it from a request body), but the whole is an object, so passing an
+ * entities array where a scene belongs doesn't compile.
+ */
+export interface SceneAssetSources {
+  entities?: unknown;
+  materials?: unknown;
+  animation?: unknown;
+}
+
+/**
  * Every asset a scene references, once each, in order of first use: imported models (`assetId`)
  * and the pictures in layers (`textureAssetId`), the entities' own and those of the scene's
- * material assets (`materials`, by ID). Tolerates malformed input, since the server reads it from a
- * request body.
+ * material assets (`materials`, by ID), then the sounds its events play (`animation.events`, each
+ * Sound action's `assetId`). Tolerates malformed input, since the server reads it from a request body.
  */
-export const collectAssetRefs = (entities: unknown, materials?: unknown): AssetRef[] => {
+export const collectAssetRefs = (scene: SceneAssetSources | null | undefined): AssetRef[] => {
+  const { entities, materials, animation } = isObject(scene) && !Array.isArray(scene) ? scene : ({} as SceneAssetSources);
   const refs = new Map<string, AssetRef>();
   const add = (id: unknown, kind: AssetKind) => {
     if (typeof id === "string" && id && !refs.has(id)) {
@@ -95,11 +124,20 @@ export const collectAssetRefs = (entities: unknown, materials?: unknown): AssetR
     if (isObject(asset)) addLayers(asset.layers);
   }
 
+  // The sounds a Sound action plays (animation/actions.ts).
+  const events = isObject(animation) && isObject(animation.events) ? Object.values(animation.events) : [];
+  for (const event of events) {
+    if (!isObject(event) || !Array.isArray(event.actions)) continue;
+    for (const action of event.actions) {
+      if (isObject(action) && action.type === "sound") add(action.assetId, "audio");
+    }
+  }
+
   return Array.from(refs.values());
 };
 
 /** The content addresses among the assets a scene references (old random IDs left out). */
-export const collectAssetHashes = (entities: unknown, materials?: unknown): string[] =>
-  collectAssetRefs(entities, materials)
+export const collectAssetHashes = (scene: SceneAssetSources | null | undefined): string[] =>
+  collectAssetRefs(scene)
     .map((ref) => ref.id)
     .filter(isAssetHash);

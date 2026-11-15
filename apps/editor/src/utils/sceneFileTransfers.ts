@@ -15,13 +15,12 @@ import { showAlert, showConfirm } from "../components/ui/Dialog";
 import { selectSceneContent, useEditorStore } from "../store/useEditorStore";
 import { getAuthSnapshot } from "./authSession";
 import { createDownload } from "./exportScene";
-import { loadModelAsset, saveModelAsset } from "./modelAssetStore";
+import { LOCAL_ASSETS } from "./localAssets";
 import { navigate } from "./navigation";
 import { readSceneCache, writeSceneCache } from "./sceneCache";
 import { toSceneDocument, type StoredSceneContent } from "./sceneDocument";
 import { readSceneFile, sceneFileAssetRefs, sceneFileName, SCENE_FILE_EXTENSION, writeSceneFile, type SceneFileAsset } from "./sceneFile";
 import { createScene, deleteScene } from "./sceneLibrary";
-import { loadTextureAsset, saveTextureAsset } from "./textureAssetStore";
 
 /**
  * Downloads the open scene as `<name>.libre3d`, with the imported models and pictures it uses. When
@@ -32,8 +31,9 @@ export const downloadSceneFile = async (name: string): Promise<void> => {
   const assets: SceneFileAsset[] = [];
   let missing = 0;
 
-  for (const ref of sceneFileAssetRefs(document.scene.entities, document.scene.materials)) {
-    const data = ref.kind === "model" ? await loadModelAsset(ref.id) : await (await loadTextureAsset(ref.id))?.arrayBuffer();
+  for (const ref of sceneFileAssetRefs(document.scene)) {
+    const stored = await LOCAL_ASSETS[ref.kind].load(ref.id);
+    const data = stored instanceof Blob ? await stored.arrayBuffer() : stored;
     if (data) assets.push({ hash: ref.id, kind: ref.kind, bytes: new Uint8Array(data) });
     else missing += 1;
   }
@@ -41,7 +41,7 @@ export const downloadSceneFile = async (name: string): Promise<void> => {
   if (
     missing > 0 &&
     !(await showConfirm(
-      `${missing === 1 ? "One imported model or picture isn't" : `${missing} imported models or pictures aren't`} in this browser, so the file won't include ${missing === 1 ? "it" : "them"}. Download it anyway?`,
+      `${missing === 1 ? "One imported model, picture or sound isn't" : `${missing} imported models, pictures or sounds aren't`} in this browser, so the file won't include ${missing === 1 ? "it" : "them"}. Download it anyway?`,
       { title: "Download scene", confirmLabel: "Download" },
     ))
   ) {
@@ -77,7 +77,7 @@ export const readSceneFileForOpening = async (
 
   await Promise.all(
     read.assets.map((asset) =>
-      asset.kind === "model" ? saveModelAsset(asset.hash, asset.bytes.buffer) : saveTextureAsset(asset.hash, new Blob([asset.bytes])),
+      LOCAL_ASSETS[asset.kind].save(asset.hash, new Blob([asset.bytes])),
     ),
   );
 

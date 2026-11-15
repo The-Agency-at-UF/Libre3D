@@ -25,6 +25,9 @@ describe("normalizeAction", () => {
     expect(normalizeAction({ id: "s", type: "sound", assetId: "abc", volume: 3, loop: true, mode: "stop" })).toMatchObject({ volume: 1, loop: true, mode: "stop" });
     expect(normalizeAction({ id: "s", type: "sound", volume: -1 })).toMatchObject({ volume: 0 });
     expect(normalizeAction({ id: "s", type: "sound", volume: Number.NaN, mode: "shuffle" })).toMatchObject({ volume: 1, mode: "play" });
+    // The file's name is kept when it's a string, and left out otherwise.
+    expect(normalizeAction({ id: "s", type: "sound", name: "chime.ogg" })).toMatchObject({ name: "chime.ogg" });
+    expect(normalizeAction({ id: "s", type: "sound", name: 7 })).not.toHaveProperty("name");
   });
 
   it("puts a transition into shape as normalizeTransition does", () => {
@@ -77,8 +80,8 @@ describe("the other helpers", () => {
     expect(actionEffect(createAction("transition", { states, ownerId: "cube" }) as TransitionAction)).toBeNull();
   });
 
-  it("offers Transition and Open Link so far, and names every type", () => {
-    expect(OFFERED_ACTIONS).toEqual(["transition", "openLink"]);
+  it("offers every type, and names each", () => {
+    expect(OFFERED_ACTIONS).toEqual(["transition", "openLink", "sound"]);
     expect(Object.keys(ACTION_INFO)).toEqual(["transition", "openLink", "sound"]);
   });
 });

@@ -60,7 +60,7 @@ const createScene = async (as = "alice"): Promise<string> => {
 };
 
 /** A scene document, told apart by `marker`, whose objects use these imported assets. */
-const documentUsing = (marker: string, { models = [] as string[], textures = [] as string[] } = {}) => ({
+const documentUsing = (marker: string, { models = [] as string[], textures = [] as string[], sounds = [] as string[] } = {}) => ({
   format: "libre3d.scene",
   schemaVersion: 4,
   scene: {
@@ -69,12 +69,21 @@ const documentUsing = (marker: string, { models = [] as string[], textures = [] 
       ...models.map((assetId, index) => ({ id: `model-${index}`, assetId })),
       ...textures.map((textureAssetId, index) => ({ id: `mesh-${index}`, materialLayers: [{ type: "image", textureAssetId }] })),
     ],
+    ...(sounds.length > 0
+      ? {
+          animation: {
+            events: {
+              e: { id: "e", ownerId: marker, trigger: "mouseDown", actions: sounds.map((assetId, index) => ({ id: `s${index}`, type: "sound", assetId })) },
+            },
+          },
+        }
+      : {}),
   },
 });
 
 /** Saves the scene from an editor tab, as autosave does, with its assets already in the cloud. */
 const save = async (sceneId: string, document: ReturnType<typeof documentUsing>, as = "alice") => {
-  for (const hash of collectAssetHashes(document.scene.entities)) {
+  for (const hash of collectAssetHashes(document.scene)) {
     s3.upload(`users/${as}/assets/${hash}`, "bytes", { checksumSha256: assetHashToBase64(hash) });
   }
   await scenes("POST", sceneId, as, { sessionId: TAB }, "lock");
@@ -272,6 +281,16 @@ describe("the public viewer", () => {
       input: { Bucket: "bucket", Key: `users/alice/assets/${MODEL}` },
       expiresIn: 900,
     });
+  });
+
+  it("lists a presigned GET for a scene's sounds too", async () => {
+    const AUDIO = "d".repeat(64);
+    const publishId = await publishOk(await createSavedScene("first", { models: [MODEL], sounds: [AUDIO] }));
+
+    const { assets } = (await view(publishId)).body as { assets: Record<string, string> };
+
+    expect(Object.keys(assets).sort()).toEqual([MODEL, AUDIO]);
+    expect(presigner.find(assets[AUDIO])).toMatchObject({ operation: "GetObject", input: { Key: `users/alice/assets/${AUDIO}` } });
   });
 
   it("signs nothing but asset hashes the row lists", async () => {

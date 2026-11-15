@@ -654,6 +654,18 @@ describe("events", () => {
     expect(useEditorStore.getState().animation.events).toEqual({});
   });
 
+  it("puts a Sound action's audio among the saved document's assets, as autosave and opening a scene read them", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithCube();
+    const audio = "d".repeat(64);
+    const eventId = useEditorStore.getState().addEvent("cube-1", "mouseDown");
+    const sound = { id: "s1", type: "sound" as const, assetId: audio, name: "chime.ogg", volume: 0.8, loop: false, mode: "play" as const };
+    useEditorStore.getState().updateEvent(eventId, { actions: [sound] });
+
+    const document = toSceneDocument(selectSceneContent(useEditorStore.getState()));
+    expect(collectAssetRefs(document.scene)).toEqual([{ id: audio, kind: "audio" }]);
+    expect(collectAssetRefs(selectSceneContent(useEditorStore.getState()))).toEqual([{ id: audio, kind: "audio" }]);
+  });
+
   it("doesn't add an event to an object that isn't there", async () => {
     const { useEditorStore } = await storeWithCube();
 
@@ -1328,7 +1340,7 @@ describe("image planes", () => {
     ]);
     expect(added.materialLayers![0]).not.toHaveProperty("alphaMode");
     expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
-    expect(collectAssetRefs(useEditorStore.getState().entities)).toEqual([{ id: hash, kind: "texture" }]);
+    expect(collectAssetRefs({ entities: useEditorStore.getState().entities })).toEqual([{ id: hash, kind: "texture" }]);
   });
 
   it("blends a picture with see-through pixels", async () => {

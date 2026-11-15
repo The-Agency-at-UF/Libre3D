@@ -59,7 +59,7 @@ describe("collectAssetRefs", () => {
       { id: "copy", assetId: MODEL },
     ];
 
-    expect(collectAssetRefs(entities)).toEqual([
+    expect(collectAssetRefs({ entities })).toEqual([
       { id: MODEL, kind: "model" },
       { id: TEXTURE, kind: "texture" },
     ]);
@@ -68,7 +68,7 @@ describe("collectAssetRefs", () => {
   it("lists a Lighting layer's maps' pictures too", () => {
     const entities = [{ id: "mesh", materialLayers: [{ type: "lighting", maps: { normal: { textureAssetId: TEXTURE }, roughness: { textureAssetId: MODEL } } }] }];
 
-    expect(collectAssetRefs(entities)).toEqual([
+    expect(collectAssetRefs({ entities })).toEqual([
       { id: TEXTURE, kind: "texture" },
       { id: MODEL, kind: "texture" },
     ]);
@@ -81,34 +81,71 @@ describe("collectAssetRefs", () => {
       n: { id: "n", name: "Same picture", layers: [{ type: "image", textureAssetId: TEXTURE }] },
     };
 
-    expect(collectAssetRefs(entities, materials)).toEqual([
+    expect(collectAssetRefs({ entities, materials })).toEqual([
       { id: TEXTURE, kind: "texture" },
       { id: MODEL, kind: "texture" },
       { id: "c".repeat(64), kind: "texture" },
     ]);
-    expect(collectAssetHashes([], materials)).toEqual([MODEL, "c".repeat(64), TEXTURE]);
+    expect(collectAssetHashes({ materials })).toEqual([MODEL, "c".repeat(64), TEXTURE]);
     // Whatever a request body holds for `materials`.
-    expect(collectAssetRefs([], "nope")).toEqual([]);
-    expect(collectAssetRefs([], { m: null, n: { layers: "nope" }, o: { layers: [null, { type: "image" }] } })).toEqual([]);
+    expect(collectAssetRefs({ materials: "nope" })).toEqual([]);
+    expect(collectAssetRefs({ materials: { m: null, n: { layers: "nope" }, o: { layers: [null, { type: "image" }] } } })).toEqual([]);
   });
 
   it("includes the random IDs of assets imported before cloud assets", () => {
 
-    expect(collectAssetRefs([{ assetId: "asset-old" }])).toEqual([{ id: "asset-old", kind: "model" }]);
+    expect(collectAssetRefs({ entities: [{ assetId: "asset-old" }] })).toEqual([{ id: "asset-old", kind: "model" }]);
   });
 
   it("tolerates whatever a request body holds", () => {
     expect(collectAssetRefs(undefined)).toEqual([]);
-    expect(collectAssetRefs({ assetId: MODEL })).toEqual([]);
-    expect(collectAssetRefs([null, 4, "x", { assetId: 7, materialLayers: "nope" }, { materialLayers: [null, { type: "image" }] }])).toEqual(
+    // An entities array where the scene belongs: a compile error, and nothing found at run time.
+    expect(collectAssetRefs([{ assetId: MODEL }] as never)).toEqual([]);
+    expect(collectAssetRefs({ entities: { assetId: MODEL } })).toEqual([]);
+    expect(collectAssetRefs({ entities: [null, 4, "x", { assetId: 7, materialLayers: "nope" }, { materialLayers: [null, { type: "image" }] }] })).toEqual(
       [],
     );
   });
 });
 
+describe("collectAssetRefs: sounds", () => {
+  const AUDIO = "d".repeat(64);
+  const sound = (assetId: unknown) => ({ id: "s", type: "sound", assetId, volume: 1, loop: false, mode: "play" });
+
+  it("finds each Sound action's audio once, after the pictures and models", () => {
+    const scene = {
+      entities: [{ id: "cube", assetId: MODEL }],
+      animation: {
+        events: {
+          a: { id: "a", ownerId: "cube", trigger: "mouseDown", actions: [sound(AUDIO), { id: "t", type: "transition", targetId: "cube" }] },
+          b: { id: "b", ownerId: "cube", trigger: "start", actions: [sound(AUDIO), { id: "l", type: "openLink", url: "https://example.com" }] },
+        },
+      },
+    };
+
+    expect(collectAssetRefs(scene)).toEqual([
+      { id: MODEL, kind: "model" },
+      { id: AUDIO, kind: "audio" },
+    ]);
+    expect(collectAssetHashes(scene)).toEqual([MODEL, AUDIO]);
+  });
+
+  it("skips sounds with none picked, and tolerates malformed animation data", () => {
+    expect(collectAssetRefs({ animation: { events: { a: { actions: [sound(""), sound(7), sound(undefined)] } } } })).toEqual([]);
+    for (const animation of [null, "x", { events: null }, { events: [] }, { events: { a: null, b: { actions: "x" }, c: { actions: [null, 4] } } }]) {
+      expect(() => collectAssetRefs({ animation })).not.toThrow();
+      expect(collectAssetRefs({ animation })).toEqual([]);
+    }
+  });
+
+  it("still works on entities alone", () => {
+    expect(collectAssetRefs({ entities: [{ assetId: MODEL }] })).toEqual([{ id: MODEL, kind: "model" }]);
+  });
+});
+
 describe("collectAssetHashes", () => {
   it("keeps only the content addresses", () => {
-    expect(collectAssetHashes([{ assetId: "asset-old" }, { assetId: MODEL }, { materialLayers: [{ type: "image", textureAssetId: TEXTURE }] }])).toEqual([
+    expect(collectAssetHashes({ entities: [{ assetId: "asset-old" }, { assetId: MODEL }, { materialLayers: [{ type: "image", textureAssetId: TEXTURE }] }] })).toEqual([
       MODEL,
       TEXTURE,
     ]);

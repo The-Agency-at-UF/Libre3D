@@ -18,10 +18,12 @@
  * fetched then. Every download is checked against its hash before it's stored. Reading needs no
  * lock, so view-only tabs download too.
  */
-import { hasModelAsset, loadModelAsset, saveModelAsset } from "./modelAssetStore";
+import { loadAudioAsset } from "./audioAssetStore";
+import { LOCAL_ASSETS } from "./localAssets";
+import { loadModelAsset } from "./modelAssetStore";
 import { hashAsset, isAssetHash, type AssetKind, type AssetRef } from "./sceneAssets";
 import { requestAssetDownloads, requestAssetUploads, type AssetUploadTicket } from "./sceneLibrary";
-import { hasTextureAsset, loadTextureAsset, saveTextureAsset } from "./textureAssetStore";
+import { loadTextureAsset } from "./textureAssetStore";
 
 export interface TransferProgress {
   /** Bytes moved so far, across every file in the batch. */
@@ -52,7 +54,7 @@ export class AssetUnavailableError extends Error {
   readonly hashes: string[];
 
   constructor(hashes: string[]) {
-    super("An imported model or texture is missing from this browser and the cloud.");
+    super("An imported model, texture or sound is missing from this browser and the cloud.");
     this.name = "AssetUnavailableError";
     this.hashes = hashes;
   }
@@ -63,8 +65,7 @@ type AssetBody = ArrayBuffer | Blob;
 const sizeOf = (body: AssetBody): number => (body instanceof Blob ? body.size : body.byteLength);
 
 /** An asset's bytes from this browser's storage, or null if they aren't here. */
-const readLocalAsset = (ref: AssetRef): Promise<AssetBody | null> =>
-  ref.kind === "model" ? loadModelAsset(ref.id) : loadTextureAsset(ref.id);
+const readLocalAsset = (ref: AssetRef): Promise<AssetBody | null> => LOCAL_ASSETS[ref.kind].load(ref.id);
 
 /**
  * PUTs an asset to its presigned URL, sending the headers it was signed with. XMLHttpRequest rather
@@ -220,11 +221,9 @@ export class AssetUploader {
 
 // ---- Downloads ------------------------------------------------------------------------------
 
-const hasLocalAsset = (ref: AssetRef): Promise<boolean> =>
-  ref.kind === "model" ? hasModelAsset(ref.id) : hasTextureAsset(ref.id);
+const hasLocalAsset = (ref: AssetRef): Promise<boolean> => LOCAL_ASSETS[ref.kind].has(ref.id);
 
-const saveLocalAsset = async (ref: AssetRef, blob: Blob): Promise<void> =>
-  ref.kind === "model" ? saveModelAsset(ref.id, await blob.arrayBuffer()) : saveTextureAsset(ref.id, blob);
+const saveLocalAsset = (ref: AssetRef, blob: Blob): Promise<void> => LOCAL_ASSETS[ref.kind].save(ref.id, blob);
 
 /** GETs a presigned URL, reporting bytes as they arrive. */
 const fetchAssetBlob = async (url: string, onProgress: (loaded: number) => void): Promise<Blob> => {
@@ -442,3 +441,7 @@ export const loadModelForScene = (assetId: string): Promise<ArrayBuffer | null> 
 /** An imported texture: from this browser's storage, else downloaded for the open scene. */
 export const loadTextureForScene = (textureAssetId: string): Promise<Blob | null> =>
   loadForScene({ id: textureAssetId, kind: "texture" }, loadTextureAsset);
+
+/** A Sound action's audio: from this browser's storage, else downloaded for the open scene. */
+export const loadAudioForScene = (assetId: string): Promise<ArrayBuffer | null> =>
+  loadForScene({ id: assetId, kind: "audio" }, loadAudioAsset);

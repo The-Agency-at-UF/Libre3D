@@ -32,6 +32,8 @@ export interface SoundAction {
   id: string;
   type: "sound";
   assetId: string; // the audio asset's content hash
+  /** The file's name when it was added, shown in the panel (as an Image layer's `TextureRef.name`). */
+  name?: string;
   volume: number; // 0 to 1
   loop: boolean;
   mode: "play" | "stop";
@@ -52,8 +54,8 @@ export const ACTION_INFO: Record<ActionType, { label: string; icon: string }> = 
   sound: { label: "Sound", icon: "volume" },
 };
 
-/** The types the "Add action" menu offers: only those that work. Sound joins when it is built. */
-export const OFFERED_ACTIONS: readonly ActionType[] = ["transition", "openLink"];
+/** The types the "Add action" menu offers. */
+export const OFFERED_ACTIONS: readonly ActionType[] = ["transition", "openLink", "sound"];
 
 export const isTransition = (action: SceneAction): action is TransitionAction => action.type === "transition";
 
@@ -108,6 +110,7 @@ const NORMALIZE: Record<ActionType, (raw: Record<string, unknown> & { id: string
     id: raw.id,
     type: "sound",
     assetId: typeof raw.assetId === "string" ? raw.assetId : "",
+    ...(typeof raw.name === "string" ? { name: raw.name } : {}),
     volume: clamp01(raw.volume, 1),
     loop: raw.loop === true,
     mode: raw.mode === "stop" ? "stop" : "play",
