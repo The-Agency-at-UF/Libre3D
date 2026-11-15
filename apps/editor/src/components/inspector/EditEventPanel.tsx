@@ -1,7 +1,7 @@
 /**
  * PURPOSE: Inspector panel for configuring interactive animation events and transition sequences.
- * Allows users to set event triggers (Start, Mouse Down), target entities, transition sequences,
- * durations, easing curves, repeats, and loop modes.
+ * Allows users to set event triggers (Start, Mouse Down, Mouse Up, Mouse Hover), target entities,
+ * transition sequences, durations, easing curves, repeats, and loop modes.
  */
 
 import { useEffect, useState, type ReactNode } from "react";
@@ -10,6 +10,7 @@ import { getChildren } from "../../scene/entityIndex";
 import {
   createTransition,
   EVENT_TRIGGERS,
+  TRIGGER_INFO,
   isRowValid,
   stateRefLabel,
   transitionProblem,
@@ -296,7 +297,11 @@ export function EditEventPanel({ event, onClose }: EditEventPanelProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [onClose]);
 
-  const trigger = EVENT_TRIGGERS.find((option) => option.value === event.trigger);
+  const trigger = TRIGGER_INFO[event.trigger];
+  // A trigger the document knows but this build doesn't fire yet (Key, Scroll) stays pickable as itself.
+  const triggerOptions = EVENT_TRIGGERS.some((option) => option.value === event.trigger)
+    ? EVENT_TRIGGERS
+    : [...EVENT_TRIGGERS, { value: event.trigger, ...trigger }];
   const setActions = (actions: TransitionAction[]) => updateEvent(event.id, { actions });
 
   return (
@@ -311,9 +316,9 @@ export function EditEventPanel({ event, onClose }: EditEventPanelProps) {
       <div className="event-editor-body">
         <fieldset className="inspector-fieldset" disabled={isReadOnly}>
           <div className="event-trigger">
-            <i className={`ti ti-${trigger?.icon ?? "bolt"}`}></i>
+            <i className={`ti ti-${trigger.icon}`}></i>
             <Select
-              options={EVENT_TRIGGERS.map(({ value, label }) => ({ value, label }))}
+              options={triggerOptions.map(({ value, label }) => ({ value, label }))}
               value={event.trigger}
               onChange={(value) => updateEvent(event.id, { trigger: value as EventTrigger })}
             />

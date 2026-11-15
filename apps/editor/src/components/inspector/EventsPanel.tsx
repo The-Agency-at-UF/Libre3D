@@ -1,6 +1,7 @@
 import { useEditorStore, type Entity } from "../../store/useEditorStore";
 import {
   EVENT_TRIGGERS,
+  TRIGGER_INFO,
   getObjectEvents,
   stateRefLabel,
   transitionProblem,
@@ -19,7 +20,7 @@ interface EventsPanelProps {
 
 // One line for the Events list: "Start · Cube: Base State → Up", or how many actions it has.
 const describeEvent = (event: SceneEvent, entities: Entity[], states: Record<string, ObjectState>): string => {
-  const trigger = EVENT_TRIGGERS.find((option) => option.value === event.trigger)?.label ?? event.trigger;
+  const trigger = TRIGGER_INFO[event.trigger].label;
   if (event.actions.length !== 1) {
     return `${trigger} · ${event.actions.length === 0 ? "No actions" : `${event.actions.length} transitions`}`;
   }
@@ -53,13 +54,12 @@ export function EventsPanel({ entity, onEditEvent }: EventsPanelProps) {
       <div className="state-list">
         {events.map((event) => {
           const summary = describeEvent(event, entities, states);
-          const trigger = EVENT_TRIGGERS.find((option) => option.value === event.trigger);
           const hasProblem = event.actions.some((action) => transitionProblem(action, entityExists, states));
 
           return (
             <div key={event.id} className="state-row">
               <button type="button" className="state-row-select" title={summary} onClick={() => onEditEvent(event.id)}>
-                <i className={`ti ti-${trigger?.icon ?? "bolt"} event-row-icon`}></i>
+                <i className={`ti ti-${TRIGGER_INFO[event.trigger].icon} event-row-icon`}></i>
                 <span className="state-row-name">{summary}</span>
               </button>
               {hasProblem && (

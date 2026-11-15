@@ -175,7 +175,8 @@ describe("normalizeEvents", () => {
 
     expect(triggers).toEqual(["start", "mouseDown", "mouseUp", "mouseHover", "keyDown", "keyUp", "scroll"]);
     expect(normalizeEvents(events)).toEqual(events);
-    expect(EVENT_TRIGGERS.map((option) => option.value).every((value) => triggers.includes(value))).toBe(true);
+    expect(EVENT_TRIGGERS.map((option) => option.value)).toEqual(["start", "mouseDown", "mouseUp", "mouseHover"]);
+    expect(EVENT_TRIGGERS.map((option) => option.label)).toEqual(["Start", "Mouse Down", "Mouse Up", "Mouse Hover"]);
   });
 
   it("drops an unknown trigger, and a trigger that is a built-in object property", () => {

@@ -40,7 +40,7 @@ export const isEventTrigger = (value: unknown): value is EventTrigger =>
 export const POINTER_TRIGGERS: readonly EventTrigger[] = ["mouseDown", "mouseUp", "mouseHover"];
 
 /** The triggers that fire today, which is what the trigger dropdown offers. Key and Scroll join when they are built. */
-const OFFERED_TRIGGERS: readonly EventTrigger[] = ["start", "mouseDown"];
+const OFFERED_TRIGGERS: readonly EventTrigger[] = ["start", "mouseDown", "mouseUp", "mouseHover"];
 
 /** The triggers in the order the trigger dropdown lists them, with their names and icons there. */
 export const EVENT_TRIGGERS: { value: EventTrigger; label: string; icon: string }[] = OFFERED_TRIGGERS.map((value) => ({
