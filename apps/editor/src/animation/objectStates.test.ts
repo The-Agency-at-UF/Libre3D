@@ -259,6 +259,8 @@ describe("trim (paths)", () => {
   });
 
   it("survives copying, a trim of 0 included", () => {
+    expect(cloneStateValues({ fov: 35 })).toEqual({ fov: 35 });
+    expect(cloneStateValues({ fov: 1e-6 })).toEqual({ fov: 1e-6 });
     expect(cloneStateValues({ trimStart: 0, trimEnd: 0.5, position: [1, 2, 3] })).toEqual({
       trimStart: 0,
       trimEnd: 0.5,

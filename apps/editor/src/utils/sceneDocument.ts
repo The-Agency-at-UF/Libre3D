@@ -22,7 +22,7 @@
  * - Adding a section or a state value bumps `CURRENT_SCENE_SCHEMA_VERSION` and adds a migration.
  *   Old documents upgrade on read; nothing breaks. So does a new value of an existing field that
  *   an old build would drop on read (an event trigger, v6: normalizeEvents keeps only the triggers
- *   it knows).
+ *   it knows; an action type, v7: normalizeAction keeps only the types it knows).
  * - A document newer than this build is refused rather than loaded: otherwise a tab still running an
  *   old bundle would drop the parts it doesn't know about (states) on its next autosave.
  *
@@ -45,7 +45,7 @@ import type {
 } from "../scene/types";
 
 export const SCENE_DOCUMENT_FORMAT = "libre3d.scene";
-export const CURRENT_SCENE_SCHEMA_VERSION = 6;
+export const CURRENT_SCENE_SCHEMA_VERSION = 7;
 
 /** The parts of the editor state that make up a scene. */
 export interface SceneContent {
@@ -126,6 +126,12 @@ const migrations: Record<number, (document: any) => any> = {
   // Scroll later need no bump: one of them opening a document with a trigger it doesn't fire yet
   // keeps the event and simply never fires it.
   5: (document) => document,
+  // v7 is item C's vocabulary: an event's actions became a union (animation/actions.ts) with Open
+  // Link and Sound beside Transition, and a state may set a camera's `fov`. A v6 build drops an
+  // action it doesn't know (normalizeTransition) and a state value it doesn't copy, then autosaves
+  // without them, so it has to refuse v7. Nothing to fill in. As with v6, the whole vocabulary came
+  // in at once: a build that opens an action it can't edit yet keeps it and shows it by name.
+  6: (document) => document,
 };
 
 const SURFACE_KEYS = ["alphaMode", "alphaCutoff", "doubleSided"] as const;

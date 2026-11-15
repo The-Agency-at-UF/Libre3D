@@ -31,6 +31,7 @@ import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
 import { pickEntityAt } from "./pickEntity";
+import { createPlayEffects } from "./playEffects";
 import { attachPlayInput, type PlayInputKeyTarget } from "./playInput";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
@@ -119,7 +120,10 @@ export class SceneViewer {
     this.disposers.push(camera.attach(canvas));
 
     // The drawn entities, so a state's colour goes over an asset's layers.
-    const runtime = new SceneRuntime({ entities: drawn, animation: content.animation ?? {} });
+    // What its actions ask of the page (open a link, play a sound), shared with the editor's Play.
+    const effects = createPlayEffects();
+    this.disposers.push(() => effects.dispose());
+    const runtime = new SceneRuntime({ entities: drawn, animation: content.animation ?? {} }, { onEffect: effects.onEffect });
     runtime.start();
     this.hasScrollEvents = runtime.hasScrollEvents;
     this.scrollLength = settings.scroll.length;

@@ -10,7 +10,9 @@ import type { ObjectManager } from "../ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
 import { pickEntityAt } from "../pickEntity";
 import { attachPlayInput } from "../playInput";
+import { createPlayEffects, type PlayEffects } from "../playEffects";
 import { registerPlayScroll } from "../playScroll";
+import { isTransition } from "../../animation/actions";
 import { easeScrollProgress } from "../scrollProgress";
 import { clampProgress } from "../../animation/transitions";
 
@@ -18,6 +20,8 @@ import { clampProgress } from "../../animation/transitions";
 // when what it was started from changes: an edit (undo included) or another selection.
 interface Session {
   runtime: SceneRuntime;
+  // What Play's actions ask of the page (playEffects.ts); none for the ▶ preview, which plays one transition.
+  effects: PlayEffects | null;
   preview: boolean;
   entities: EditorState["entities"];
   animation: EditorState["animation"];
@@ -33,6 +37,7 @@ const findPreviewAction = (state: EditorState, actionId: string): TransitionActi
   for (const event of Object.values(state.animation.events)) {
     const action = event.actions.find((candidate) => candidate.id === actionId);
     if (!action) continue;
+    if (!isTransition(action)) return undefined; // only a transition has anything to preview
     if (event.trigger !== "scroll") return previewTiming(action);
     return { ...action, ...scrubTiming(action), from: action.from === "current" ? "base" : action.from };
   }
@@ -121,6 +126,7 @@ export function useViewportPlay(
         session.view.detach();
         if (cameraRef.current === session.view.camera.camera) cameraRef.current = session.view.editorCamera;
       }
+      session.effects?.dispose();
       session = null;
     };
 
@@ -139,9 +145,10 @@ export function useViewportPlay(
 
     const startSession = (store: EditorState, preview: boolean): SceneRuntime => {
       // The entities as they are drawn, so a state's colour goes over a material asset's layers.
-      const runtime = new SceneRuntime({ entities: selectDrawnEntities(store), animation: store.animation });
+      const effects = preview ? null : createPlayEffects();
+      const runtime = new SceneRuntime({ entities: selectDrawnEntities(store), animation: store.animation }, { onEffect: effects?.onEffect });
       const view = preview ? null : startView(store);
-      session = { runtime, preview, entities: store.entities, animation: store.animation, selection: store.selectedEntityIds, view };
+      session = { runtime, effects, preview, entities: store.entities, animation: store.animation, selection: store.selectedEntityIds, view };
       return runtime;
     };
 
@@ -247,6 +254,7 @@ export function useViewportPlay(
         session.view.detach();
         if (cameraRef.current === session.view.camera.camera) cameraRef.current = session.view.editorCamera;
       }
+      session?.effects?.dispose();
       frameRef.current = null;
       unsubscribePlay();
       unsubscribePreview();

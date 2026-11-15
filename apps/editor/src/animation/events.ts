@@ -10,8 +10,11 @@
  */
 
 import { createId } from "../utils/createId";
-import { getObjectStates, type ObjectState } from "./objectStates";
-import { normalizeTransition, type StateRef, type TransitionAction } from "./transitions";
+import type { ObjectState } from "./objectStates";
+import { actionTargetId, cloneAction, createTransition, isTransition, normalizeAction, type SceneAction } from "./actions";
+import type { StateRef, TransitionAction } from "./transitions";
+
+export { createTransition };
 
 export type EventTrigger = "start" | "mouseDown" | "mouseUp" | "mouseHover" | "keyDown" | "keyUp" | "scroll";
 
@@ -66,7 +69,7 @@ export interface SceneEvent {
   /** For Key Down and Key Up: the key, as a `KeyboardEvent.code` ("KeyW", "Space"). */
   key?: string;
   order: number; // position in the owner's Events list
-  actions: TransitionAction[];
+  actions: SceneAction[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -77,22 +80,6 @@ export const getObjectEvents = (events: Record<string, SceneEvent>, ownerId: str
   Object.values(events)
     .filter((event) => event.ownerId === ownerId)
     .sort((a, b) => a.order - b.order);
-
-/**
- * A new transition on `targetId`: from Base to its first state (no state picked yet when it has
- * none), in 1 s with Ease In Out, played once.
- */
-export const createTransition = (states: Record<string, ObjectState>, targetId: string): TransitionAction => ({
-  id: createId("action"),
-  type: "transition",
-  targetId,
-  from: "base",
-  steps: [{ to: getObjectStates(states, targetId)[0]?.id ?? "", duration: 1, easing: "easeInOut" }],
-  delay: 0,
-  delayRepeat: "none",
-  loop: 0,
-  cycle: "restart",
-});
 
 /** A new event on an object, last in its list, with one transition of the object itself. */
 export const createEvent = (
@@ -156,18 +143,17 @@ export const transitionProblem = (
 /** The events with a transition that goes through a state (deleting it leaves them a "Pick a state"). */
 export const getEventsUsingState = (events: Record<string, SceneEvent>, stateId: string): SceneEvent[] =>
   Object.values(events).filter((event) =>
-    event.actions.some((action) => action.from === stateId || action.steps.some((step) => step.to === stateId)),
+    event.actions.some(
+      (action) => isTransition(action) && (action.from === stateId || action.steps.some((step) => step.to === stateId)),
+    ),
   );
 
 /** A copy of a transition that shares nothing with it. */
-export const cloneTransition = (action: TransitionAction): TransitionAction => ({
-  ...action,
-  steps: action.steps.map((step) => ({ ...step })),
-});
+export const cloneTransition = (action: TransitionAction): TransitionAction => cloneAction(action);
 
 /**
  * Drops the events of removed objects, and the actions (on any object's events) that move a
- * removed object; an event left with no actions stays. Returns `events` itself when nothing changed.
+ * removed object (an Open Link or Sound moves none, so stays); an event left with no actions stays. Returns `events` itself when nothing changed.
  */
 export const removeEventsOf = (
   events: Record<string, SceneEvent>,
@@ -181,7 +167,10 @@ export const removeEventsOf = (
       delete next[event.id];
       continue;
     }
-    const actions = event.actions.filter((action) => !removedIds.has(action.targetId));
+    const actions = event.actions.filter((action) => {
+      const targetId = actionTargetId(action);
+      return targetId === null || !removedIds.has(targetId);
+    });
     if (actions.length !== event.actions.length) {
       next ??= { ...events };
       next[event.id] = { ...event, actions };
@@ -209,9 +198,10 @@ export const duplicateEvents = (
       ...event,
       id: createId("event"),
       ownerId: idMap.get(event.ownerId)!,
-      actions: event.actions.map((action) => {
-        const copy = { ...cloneTransition(action), id: createId("action") };
-        const targetCopy = idMap.get(action.targetId);
+      actions: event.actions.map((action): SceneAction => {
+        const copy = { ...cloneAction(action), id: createId("action") };
+        if (!isTransition(copy)) return copy;
+        const targetCopy = idMap.get(copy.targetId);
         if (!targetCopy) return copy;
 
         const mapRef = <T extends StateRef>(ref: T): T => (stateIdMap.get(ref) as T | undefined) ?? ref;
@@ -229,7 +219,7 @@ export const duplicateEvents = (
 
 /**
  * Events read from a document, in the shape everything else expects. Anything that isn't an event
- * is dropped, and so is any action that isn't a transition (see normalizeTransition). Keyed by
+ * is dropped, and so is any action of a type this build doesn't know (see normalizeAction). Keyed by
  * their own IDs.
  */
 export const normalizeEvents = (raw: unknown): Record<string, SceneEvent> => {
@@ -247,8 +237,8 @@ export const normalizeEvents = (raw: unknown): Record<string, SceneEvent> => {
       ...(typeof value.key === "string" ? { key: value.key } : {}),
       order: typeof value.order === "number" && Number.isFinite(value.order) ? value.order : 0,
       actions: (Array.isArray(value.actions) ? value.actions : [])
-        .map(normalizeTransition)
-        .filter((action): action is TransitionAction => action !== null),
+        .map(normalizeAction)
+        .filter((action): action is SceneAction => action !== null),
     };
   }
   return events;

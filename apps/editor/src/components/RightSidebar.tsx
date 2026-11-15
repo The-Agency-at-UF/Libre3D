@@ -4,7 +4,7 @@ import { useEditorStore } from "../store/useEditorStore";
 import { InspectorTopbar } from "./inspector/InspectorTopbar";
 import { StatesPanel } from "./inspector/StatesPanel";
 import { EventsPanel } from "./inspector/EventsPanel";
-import { EditEventPanel } from "./inspector/EditEventPanel";
+import { EditEventPanel } from "./inspector/events/EditEventPanel";
 import { TransformPanel } from "./inspector/TransformPanel";
 import { PathPanel } from "./inspector/PathPanel";
 import { ShapePanel } from "./inspector/ShapePanel";

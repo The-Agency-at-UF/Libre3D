@@ -43,6 +43,8 @@ export interface StateValues {
   trimEnd?: number;
   color?: string;
   opacity?: number;
+  /** A camera's vertical field of view, in degrees (item C: camera entities). */
+  fov?: number;
 }
 
 export type StateValueKey = keyof StateValues;
@@ -97,6 +99,7 @@ export const cloneStateValues = (values: StateValues): StateValues => ({
   ...(typeof values.trimEnd === "number" ? { trimEnd: values.trimEnd } : null),
   ...(typeof values.color === "string" ? { color: values.color } : null),
   ...(typeof values.opacity === "number" ? { opacity: values.opacity } : null),
+  ...(typeof values.fov === "number" ? { fov: values.fov } : null),
 });
 
 const cloneObjectState = (state: ObjectState): ObjectState => ({

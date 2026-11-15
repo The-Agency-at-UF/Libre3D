@@ -12,6 +12,7 @@ import {
 import type { ObjectState } from "../../animation/objectStates";
 import { transitionRows } from "../../animation/transitions";
 import { keyLabel } from "../../animation/keys";
+import { ACTION_INFO, isTransition } from "../../animation/actions";
 import { PanelSection } from "../ui/PanelSection";
 
 interface EventsPanelProps {
@@ -27,10 +28,11 @@ const describeEvent = (event: SceneEvent, entities: Entity[], states: Record<str
   if (isKeyTrigger(event.trigger) && !event.key) return `${label} · Pick a key`;
   const trigger = isKeyTrigger(event.trigger) ? `${label} ${keyLabel(event.key!)}` : label;
   if (event.actions.length !== 1) {
-    return `${trigger} · ${event.actions.length === 0 ? "No actions" : `${event.actions.length} transitions`}`;
+    return `${trigger} · ${event.actions.length === 0 ? "No actions" : `${event.actions.length} actions`}`;
   }
 
   const [action] = event.actions;
+  if (!isTransition(action)) return `${trigger} · ${ACTION_INFO[action.type].label}`;
   const target = entities.find((entity) => entity.id === action.targetId)?.name ?? "Pick a target";
   const rows = transitionRows(action).map((ref) => stateRefLabel(ref, action.targetId, states));
   return `${trigger} · ${target}: ${rows.join(" → ")}`;
@@ -60,7 +62,7 @@ export function EventsPanel({ entity, onEditEvent }: EventsPanelProps) {
         {events.map((event) => {
           const summary = describeEvent(event, entities, states);
           const missingKey = isKeyTrigger(event.trigger) && !event.key;
-          const hasProblem = missingKey || event.actions.some((action) => transitionProblem(action, entityExists, states));
+          const hasProblem = missingKey || event.actions.some((action) => isTransition(action) && transitionProblem(action, entityExists, states));
 
           return (
             <div key={event.id} className="state-row">

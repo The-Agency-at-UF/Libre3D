@@ -231,7 +231,7 @@ describe("toSceneDocument / parseSceneDocument", () => {
     const document = { ...toSceneDocument(makeContent()), schemaVersion: CURRENT_SCENE_SCHEMA_VERSION + 1 };
 
     expect(parseSceneDocument(document)).toEqual({ ok: false, reason: "newer" });
-    expect(parseSceneDocument({ ...document, schemaVersion: 7 })).toEqual({ ok: false, reason: "newer" });
+    expect(parseSceneDocument({ ...document, schemaVersion: 8 })).toEqual({ ok: false, reason: "newer" });
   });
 
   it.each([
@@ -385,8 +385,29 @@ describe("schema v5: the material layer stack", () => {
     const content = makeContent();
     const v5 = { ...toSceneDocument(content), schemaVersion: 5 };
 
-    expect(CURRENT_SCENE_SCHEMA_VERSION).toBe(6);
     expect(parseSceneDocument(JSON.parse(JSON.stringify(v5)))).toEqual({ ok: true, content });
+  });
+
+  it("opens a v6 document (from before item C's actions) unchanged as v7", () => {
+    const content = makeContent();
+    const v6 = { ...toSceneDocument(content), schemaVersion: 6 };
+
+    expect(CURRENT_SCENE_SCHEMA_VERSION).toBe(7);
+    expect(parseSceneDocument(JSON.parse(JSON.stringify(v6)))).toEqual({ ok: true, content });
+  });
+
+  it("round-trips a v7 document with all three kinds of action and a fov state value", () => {
+    const content = makeContent();
+    const grow = content.animation.events.grow;
+    grow.actions = [
+      ...grow.actions,
+      { id: "link", type: "openLink", url: "https://example.com", newTab: false },
+      { id: "sound", type: "sound", assetId: "abc", volume: 0.25, loop: true, mode: "stop" },
+    ];
+    content.animation.states.up.values = { ...content.animation.states.up.values, fov: 35 };
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    expect(parsed).toEqual({ ok: true, content });
   });
 
   it("round-trips a v6 document with every trigger, and a key event's key", () => {

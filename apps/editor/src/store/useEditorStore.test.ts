@@ -5,11 +5,16 @@ import { initialFrameDefaults, initialPostProcessingDefaults, initialSceneDefaul
 import { createDepthLayer } from "../scene/entityFactories";
 import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
 import { collectAssetRefs } from "../utils/sceneAssets";
-import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
+import { CURRENT_SCENE_SCHEMA_VERSION, parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
+import type { SceneAction } from "../animation/actions";
+import type { TransitionAction } from "../animation/transitions";
 import type { PathData, PathPoint } from "../paths/pathGeometry";
 import type { ImportedPath, ImportedSvgItem } from "../paths/svgImport";
 import type { ShapeData } from "../paths/shapeGeometry";
 import type { Entity } from "./useEditorStore";
+
+/** An event's actions, as the transitions these tests give it. */
+const transitionsOf = (actions: SceneAction[]) => actions as TransitionAction[];
 
 const EDITOR_KEY = "libre3d-scene-state";
 const PREFERENCE_KEYS = ["activeTransformTool", "hudOverlay", "projectionMode", "transformSpace", "viewportZoom"];
@@ -659,7 +664,7 @@ describe("events", () => {
   it("changes the trigger and replaces the actions without sharing them, one undo step each", async () => {
     const { useEditorStore } = await storeWithCube();
     const eventId = useEditorStore.getState().addEvent("cube-1", "start");
-    const actions = useEditorStore.getState().animation.events[eventId].actions.map((action) => ({
+    const actions = transitionsOf(useEditorStore.getState().animation.events[eventId].actions).map((action) => ({
       ...action,
       loop: "infinite" as const,
       steps: action.steps.map((step) => ({ ...step, duration: 2 })),
@@ -689,7 +694,7 @@ describe("events", () => {
     useEditorStore.getState().loadScene(null);
     useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
 
-    expect(saved.schemaVersion).toBe(6);
+    expect(saved.schemaVersion).toBe(CURRENT_SCENE_SCHEMA_VERSION);
     expect(Object.keys(useEditorStore.getState().animation.events)).toEqual([hover, other]);
     expect(useEditorStore.getState().animation.events[other].trigger).toBe("mouseUp");
   });
@@ -735,19 +740,19 @@ describe("events", () => {
     const { useEditorStore } = await storeWithCube();
     const own = useEditorStore.getState().addEvent("sphere-1", "start");
     const click = useEditorStore.getState().addEvent("button-1", "mouseDown");
-    const clickActions = useEditorStore.getState().animation.events[click].actions;
+    const clickActions = transitionsOf(useEditorStore.getState().animation.events[click].actions);
     useEditorStore.getState().updateEvent(click, { actions: [{ ...clickActions[0], targetId: "sphere-1" }, clickActions[0]] });
 
     // Deleting the cube deletes its child sphere too.
     useEditorStore.getState().removeEntity(["cube-1"]);
     const { events } = useEditorStore.getState().animation;
     expect(Object.keys(events)).toEqual([click]);
-    expect(events[click].actions.map((action) => action.targetId)).toEqual(["button-1"]);
+    expect(transitionsOf(events[click].actions).map((action) => action.targetId)).toEqual(["button-1"]);
 
     useEditorStore.temporal.getState().undo();
     const restored = useEditorStore.getState().animation.events;
     expect(Object.keys(restored).sort()).toEqual([own, click].sort());
-    expect(restored[click].actions.map((action) => action.targetId)).toEqual(["sphere-1", "button-1"]);
+    expect(transitionsOf(restored[click].actions).map((action) => action.targetId)).toEqual(["sphere-1", "button-1"]);
   });
 
   it("gives a duplicate copies of the events, moving the copy through its own states", async () => {

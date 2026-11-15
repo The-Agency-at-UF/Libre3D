@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SceneEvent } from "./events";
 import type { ObjectState } from "./objectStates";
 import { SceneRuntime, type RuntimeEntity } from "./sceneRuntime";
@@ -504,6 +504,60 @@ describe("SceneRuntime: scroll", () => {
       runtime.setScrollProgress(0.5);
     }).not.toThrow();
     expect(runtime.poses().size).toBe(0);
+  });
+});
+
+describe("SceneRuntime: effects", () => {
+  const link = { id: "link", type: "openLink" as const, url: "https://example.com", newTab: true };
+  const withLink = (trigger: SceneEvent["trigger"], onEffect?: (effect: unknown) => void) =>
+    new SceneRuntime(
+      {
+        entities: [entity("cube")],
+        animation: { states: byId(state("up", "cube", { position: [0, 2, 0] })), events: byId(event("e", { trigger, actions: [transition(), link] })) },
+      },
+      { onEffect },
+    );
+
+  it("runs the transition and hands the effect over once, inside the trigger", () => {
+    const effects: unknown[] = [];
+    const runtime = withLink("mouseDown", (effect) => effects.push(effect));
+
+    runtime.click("cube");
+    expect(effects).toEqual([{ type: "openLink", url: "https://example.com", newTab: true }]);
+    runtime.tick(1);
+    expect(positionOf(runtime)).toEqual([0, 2, 0]);
+    expect(effects).toHaveLength(1);
+  });
+
+  it("hands over Start events' effects too", () => {
+    const effects: unknown[] = [];
+    withLink("start", (effect) => effects.push(effect)).start();
+    expect(effects).toHaveLength(1);
+  });
+
+  it("carries on without a host, or past a host that throws", () => {
+    const quiet = withLink("start");
+    expect(() => quiet.start()).not.toThrow();
+
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failing = withLink("start", () => {
+      throw new Error("popup blocked");
+    });
+    failing.start();
+    failing.tick(1);
+    expect(positionOf(failing)).toEqual([0, 2, 0]);
+    expect(error).toHaveBeenCalledOnce();
+    error.mockRestore();
+  });
+
+  it("hands over nothing for an action with bad data", () => {
+    const effects: unknown[] = [];
+    const runtime = new SceneRuntime(
+      { entities: [entity("cube")], animation: { events: byId(event("e", { actions: [{ ...link, url: "" }] })) } },
+      { onEffect: (effect) => effects.push(effect) },
+    );
+    runtime.start();
+    expect(effects).toEqual([]);
   });
 });
 

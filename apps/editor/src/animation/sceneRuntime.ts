@@ -30,12 +30,15 @@
  *   Base. The newest writer wins an object both drive: a clocked transition (a click) started on a
  *   scroll-driven object takes it from where it is, and the next change of scroll progress takes it
  *   back, stopping that transition.
+ * - An Open Link or Sound action isn't run here: it becomes an effect (actions.ts) handed to the
+ *   host's `onEffect` at once, while the trigger is still being handled.
  * - A missing owner, target, or state (a deleted object or state, a damaged file) skips that action
  *   instead of throwing.
  */
 
 import type { MaterialLayer } from "../scene/types";
 import { mixHexLinear } from "../utils/colorSpaces";
+import { actionEffect, isTransition, type SceneAction, type SceneEffect } from "./actions";
 import { normalizeEvents, type EventTrigger, type SceneEvent } from "./events";
 import { resolveState, withoutLook, type ObjectState, type Pose, type SceneAnimation } from "./objectStates";
 import {
@@ -68,6 +71,15 @@ export interface RuntimeEntity {
   materialLayers?: MaterialLayer[];
   materialAssetId?: string;
   opacity?: number;
+}
+
+export interface RuntimeOptions {
+  /**
+   * Carries out what an action asks of the host (open a link, play a sound): the runtime never
+   * touches the DOM. Called synchronously inside the trigger that fired it, so a link opened from
+   * a click is still inside that click's handler (browsers block it as a popup otherwise).
+   */
+  onEffect?: (effect: SceneEffect) => void;
 }
 
 export interface RuntimeScene {
@@ -150,7 +162,10 @@ export class SceneRuntime {
    */
   readonly keyCodes: ReadonlySet<string>;
 
-  constructor(scene: RuntimeScene) {
+  private readonly onEffect: RuntimeOptions["onEffect"];
+
+  constructor(scene: RuntimeScene, { onEffect }: RuntimeOptions = {}) {
+    this.onEffect = onEffect;
     for (const entity of scene.entities) {
       this.entities.set(entity.id, {
         id: entity.id,
@@ -189,6 +204,8 @@ export class SceneRuntime {
     for (const event of events) {
       if (event.trigger !== "scroll") continue;
       for (const action of event.actions) {
+        // Only transitions follow scroll: an Open Link or Sound has no moment to happen.
+        if (!isTransition(action)) continue;
         const entity = this.entities.get(action.targetId);
         // Row 1 can't be Current without a moment it starts from: it reads as Base.
         const first = entity && action.from === "current" ? resolveState(entity) : null;
@@ -341,8 +358,24 @@ export class SceneRuntime {
     return fired;
   }
 
+  /** Runs an event's actions in order: transitions here, the rest as effects for the host. */
   private runEvent(event: SceneEvent): void {
-    event.actions.forEach((action) => this.run(action));
+    for (const action of event.actions) {
+      if (isTransition(action)) this.run(action);
+      else this.emit(action);
+    }
+  }
+
+  // A host's handler that throws (a blocked popup, a sound that won't decode) mustn't stop the rest
+  // of the event, or Play.
+  private emit(action: SceneAction): void {
+    const effect = actionEffect(action);
+    if (!effect || !this.onEffect) return;
+    try {
+      this.onEffect(effect);
+    } catch (error) {
+      console.error("[Libre3D] An event's action failed:", error);
+    }
   }
 
   /**

@@ -1,26 +1,18 @@
 /**
- * PURPOSE: Inspector panel for configuring interactive animation events and transition sequences.
- * Allows users to set event triggers (Start, Mouse Down, Mouse Up, Mouse Hover, Key Down, Key Up, Scroll)
- * and a key trigger's key, target entities, transition sequences, durations, easing curves,
- * repeats, and loop modes.
+ * PURPOSE: One Transition action in the Edit Event panel (EditEventPanel.tsx): its target, the
+ * states it goes through with a duration and easing between each, and the Sequence settings that
+ * repeat it (hidden for a Scroll event's, which scrolling plays).
+ *
+ * INPUT: The action, the scene's objects and states, and whether its event is a Scroll event.
+ * OUTPUT: `onChange(next)` with the whole edited action (one undo step in the store), `onRemove()`.
  */
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { useEditorStore, type Entity } from "../../store/useEditorStore";
-import { getChildren } from "../../scene/entityIndex";
-import {
-  createTransition,
-  EVENT_TRIGGERS,
-  TRIGGER_INFO,
-  isKeyTrigger,
-  isRowValid,
-  stateRefLabel,
-  transitionProblem,
-  type EventTrigger,
-  type SceneEvent,
-} from "../../animation/events";
-import { EASINGS, type Easing } from "../../animation/easing";
-import { getObjectStates, type ObjectState } from "../../animation/objectStates";
+import { useState, type ReactNode } from "react";
+import { useEditorStore, type Entity } from "../../../store/useEditorStore";
+import { getChildren } from "../../../scene/entityIndex";
+import { isRowValid, stateRefLabel, transitionProblem } from "../../../animation/events";
+import { EASINGS, type Easing } from "../../../animation/easing";
+import { getObjectStates, type ObjectState } from "../../../animation/objectStates";
 import {
   transitionRows,
   type Cycle,
@@ -28,10 +20,10 @@ import {
   type StateRef,
   type TransitionAction,
   type TransitionStep,
-} from "../../animation/transitions";
-import { NumberField } from "../ui/NumberField";
-import { KeyCaptureField } from "./KeyCaptureField";
-import { Select } from "../ui/Select";
+} from "../../../animation/transitions";
+import { NumberField } from "../../ui/NumberField";
+import { Select } from "../../ui/Select";
+import type { ActionEditorProps } from "./actionEditors";
 
 const DELAY_REPEATS: { value: DelayRepeat; label: string }[] = [
   { value: "none", label: "None" },
@@ -114,23 +106,12 @@ function SequenceSettings({ action, rowCount, onChange }: { action: TransitionAc
   );
 }
 
-interface TransitionEditorProps {
-  action: TransitionAction;
-  entities: Entity[];
-  states: Record<string, ObjectState>;
-  isReadOnly: boolean;
-  /** A Scroll event's: driven by scroll progress, so it has no Delay, Loop, or Cycle, and row 1 is never Current. */
-  isScrubbed: boolean;
-  onChange: (action: TransitionAction) => void;
-  onRemove: () => void;
-}
-
 // One Transition action: its target, the states it goes through with a duration and easing between
 // each, and the Sequence settings that repeat it. Collapsible, like a material layer. The header
 // stays usable in a view-only scene (collapsing and ▶ are looking); the rest is disabled there. A
 // Scroll event's hides the Sequence settings and Current, which scrolling has no use for; their
 // values stay in the action, so switching the trigger back brings them back.
-function TransitionEditor({ action, entities, states, isReadOnly, isScrubbed, onChange, onRemove }: TransitionEditorProps) {
+export function TransitionActionEditor({ action, entities, states, isReadOnly, isScrubbed, onChange, onRemove }: ActionEditorProps<TransitionAction>) {
   const [open, setOpen] = useState(true);
   const isPreviewing = useEditorStore((state) => state.previewingActionId === action.id);
   const setPreviewingAction = useEditorStore((state) => state.setPreviewingAction);
@@ -293,99 +274,6 @@ function TransitionEditor({ action, entities, states, isReadOnly, isScrubbed, on
           </div>
         </fieldset>
       )}
-    </div>
-  );
-}
-
-interface EditEventPanelProps {
-  event: SceneEvent;
-  onClose: () => void;
-}
-
-/**
- * BLOCK: EditEventPanel (React Component)
- * PURPOSE: Edits one event (notes/animation-plan.md, A3), in place of the inspector's panels: its
- *          trigger and its actions. Every change is one undo step (updateEvent). In a view-only
- *          scene everything shows but nothing can be changed. Closes on × or Escape.
- */
-export function EditEventPanel({ event, onClose }: EditEventPanelProps) {
-  const entities = useEditorStore((state) => state.entities);
-  const states = useEditorStore((state) => state.animation.states);
-  const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
-  const updateEvent = useEditorStore((state) => state.updateEvent);
-
-  // Escape closes, unless it's putting back a field being typed in. (An open dropdown takes its own
-  // Escape before the page sees it.)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const tag = (document.activeElement as HTMLElement | null)?.tagName;
-      if (e.key === "Escape" && tag !== "INPUT" && tag !== "TEXTAREA") onClose();
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
-
-  const trigger = TRIGGER_INFO[event.trigger];
-  const setActions = (actions: TransitionAction[]) => updateEvent(event.id, { actions });
-  const setKey = useCallback((key: string) => updateEvent(event.id, { key }), [updateEvent, event.id]);
-
-  return (
-    <div className="event-editor" role="dialog" aria-label="Edit Event">
-      <div className="event-editor-header">
-        <span>Edit Event</span>
-        <button type="button" className="mat-icon-btn" title="Close (Esc)" aria-label="Close" onClick={onClose}>
-          <i className="ti ti-x"></i>
-        </button>
-      </div>
-
-      <div className="event-editor-body">
-        <fieldset className="inspector-fieldset" disabled={isReadOnly}>
-          <div className="event-trigger">
-            <i className={`ti ti-${trigger.icon}`}></i>
-            <Select
-              options={EVENT_TRIGGERS.map(({ value, label }) => ({ value, label }))}
-              value={event.trigger}
-              onChange={(value) => updateEvent(event.id, { trigger: value as EventTrigger })}
-            />
-          </div>
-
-          {isKeyTrigger(event.trigger) && (
-            <div className="prop event-key-row">
-              <span className="prop-label">Key</span>
-              <KeyCaptureField value={event.key} onChange={setKey} disabled={isReadOnly} />
-            </div>
-          )}
-
-          <div className="event-editor-heading">
-            <span>Actions</span>
-            <button
-              type="button"
-              className="mat-icon-btn"
-              title="Add a transition"
-              aria-label="Add a transition"
-              onClick={() => setActions([...event.actions, createTransition(states, event.ownerId)])}
-            >
-              <i className="ti ti-plus"></i>
-            </button>
-          </div>
-        </fieldset>
-
-        {event.actions.length === 0 && <p className="state-hint">No actions yet: + adds a transition.</p>}
-        {event.actions.map((action, index) => (
-          <TransitionEditor
-            key={action.id}
-            action={action}
-            entities={entities}
-            states={states}
-            isReadOnly={isReadOnly}
-            isScrubbed={event.trigger === "scroll"}
-            onChange={(next) => setActions(event.actions.map((other, i) => (i === index ? next : other)))}
-            onRemove={() => setActions(event.actions.filter((_, i) => i !== index))}
-          />
-        ))}
-
-        {isReadOnly && <p className="state-hint">This scene is open for editing elsewhere, so its events can't be changed here.</p>}
-      </div>
     </div>
   );
 }

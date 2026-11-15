@@ -38,14 +38,13 @@ import {
 } from "../animation/objectStates";
 import { reparentStates, type ParentChange } from "../animation/reparentStates";
 import {
-  cloneTransition,
   createEvent,
   duplicateEvents,
   removeEventsOf,
   type EventTrigger,
   type SceneEvent,
 } from "../animation/events";
-import type { TransitionAction } from "../animation/transitions";
+import { cloneAction, type SceneAction } from "../animation/actions";
 import { clonePath, DEFAULT_STROKE, pathsCenter, type PathData, type PathStroke } from "../paths/pathGeometry";
 import { shiftPoints } from "../paths/pathEditing";
 import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
@@ -326,7 +325,7 @@ export interface EditorState {
   addEvent: (ownerId: string, trigger: EventTrigger) => string;
   /** Changes an event's trigger or replaces its actions (a list edited as a whole). */
   /** Changes an event's trigger, its key (Key Down, Key Up: a `KeyboardEvent.code`), or its actions. One undo step. */
-  updateEvent: (eventId: string, updates: { trigger?: EventTrigger; key?: string; actions?: TransitionAction[] }) => void;
+  updateEvent: (eventId: string, updates: { trigger?: EventTrigger; key?: string; actions?: SceneAction[] }) => void;
   removeEvent: (eventId: string) => void;
 
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
@@ -1356,7 +1355,7 @@ export const useEditorStore = create<EditorState>()(
                 ...event,
                 ...(updates.trigger ? { trigger: updates.trigger } : null),
                 ...(updates.key ? { key: updates.key } : null),
-                ...(updates.actions ? { actions: updates.actions.map(cloneTransition) } : null),
+                ...(updates.actions ? { actions: updates.actions.map(cloneAction) } : null),
               })),
             ),
           removeEvent: (eventId) =>
