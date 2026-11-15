@@ -347,6 +347,162 @@ describe("SceneRuntime: keys", () => {
   });
 });
 
+describe("SceneRuntime: scroll", () => {
+  // Base → up (y 2, 1 s) → big (scale 2, 3 s): a quarter of the way is "up".
+  const scrubbed = transition({
+    from: "base",
+    steps: [
+      { to: "up", duration: 1, easing: "linear" },
+      { to: "big", duration: 3, easing: "linear" },
+    ],
+    delay: 5,
+    loop: "infinite",
+    cycle: "pingPong",
+  });
+  const scrollScene = (events: SceneEvent[] = [event("scroll", { trigger: "scroll", actions: [scrubbed] })], extra: RuntimeEntity[] = []) =>
+    new SceneRuntime({
+      entities: [entity("cube"), ...extra],
+      animation: {
+        states: byId(
+          state("up", "cube", { position: [0, 2, 0] }),
+          state("big", "cube", { scale: [2, 2, 2] }),
+          state("tall", "pole", { scale: [1, 3, 1] }),
+        ),
+        events: byId(...events),
+      },
+    });
+
+  it("puts a scroll transition at progress 0 before the first frame, its Delay ignored", () => {
+    const runtime = scrollScene();
+    expect(runtime.hasScrollEvents).toBe(true);
+    runtime.start();
+    expect(runtime.poses().get("cube")).toMatchObject({ position: [0, 0, 0], scale: [1, 1, 1] });
+  });
+
+  it("is paced by the step durations and retraces exactly going back", () => {
+    const runtime = scrollScene();
+    runtime.start();
+
+    runtime.setScrollProgress(0.125);
+    expect(positionOf(runtime)).toEqual([0, 1, 0]);
+    runtime.setScrollProgress(0.25);
+    expect(positionOf(runtime)).toEqual([0, 2, 0]);
+    runtime.setScrollProgress(0.625);
+    const midway = runtime.poses().get("cube")!;
+    expect(midway.scale).toEqual([1.5, 1.5, 1.5]);
+    runtime.setScrollProgress(1);
+    expect(runtime.poses().get("cube")!.scale).toEqual([2, 2, 2]);
+
+    runtime.setScrollProgress(0.625);
+    expect(runtime.poses().get("cube")).toEqual(midway);
+    runtime.setScrollProgress(0);
+    expect(runtime.poses().get("cube")).toMatchObject({ position: [0, 0, 0], scale: [1, 1, 1] });
+  });
+
+  it("isn't moved by time, and is idle meanwhile", () => {
+    const runtime = scrollScene();
+    runtime.start();
+    runtime.setScrollProgress(0.25);
+    runtime.tick(10);
+    expect(positionOf(runtime)).toEqual([0, 2, 0]);
+    expect(runtime.isIdle).toBe(true);
+  });
+
+  it("drives every scroll event from the one progress", () => {
+    const runtime = scrollScene(
+      [
+        event("scroll", { trigger: "scroll", actions: [scrubbed] }),
+        event("pole", { ownerId: "pole", trigger: "scroll", actions: [transition({ id: "grow-pole", targetId: "pole", steps: [{ to: "tall", duration: 2, easing: "linear" }] })] }),
+      ],
+      [entity("pole")],
+    );
+    runtime.start();
+    runtime.setScrollProgress(0.5);
+    expect(runtime.poses().get("pole")!.scale).toEqual([1, 2, 1]);
+    expect(runtime.poses().get("cube")!.scale).toEqual([1 + 1 / 3, 1 + 1 / 3, 1 + 1 / 3]);
+  });
+
+  it("clamps out-of-range progress and reads NaN as 0", () => {
+    const runtime = scrollScene();
+    runtime.start();
+    runtime.setScrollProgress(4);
+    expect(runtime.poses().get("cube")!.scale).toEqual([2, 2, 2]);
+    runtime.setScrollProgress(-1);
+    expect(positionOf(runtime)).toEqual([0, 0, 0]);
+    runtime.setScrollProgress(0.25);
+    runtime.setScrollProgress(Number.NaN);
+    expect(positionOf(runtime)).toEqual([0, 0, 0]);
+  });
+
+  it("writes nothing when the progress hasn't changed", () => {
+    const runtime = scrollScene();
+    runtime.start();
+    runtime.setScrollProgress(0.25);
+    const pose = runtime.poses().get("cube");
+    runtime.setScrollProgress(0.25);
+    expect(runtime.poses().get("cube")).toBe(pose);
+  });
+
+  it("lets the newest writer win: a click takes over, and the next scroll takes the object back", () => {
+    const grow = event("grow", { trigger: "mouseDown", actions: [transition({ id: "grow", from: "current", steps: [{ to: "big", duration: 1, easing: "linear" }] })] });
+    const runtime = scrollScene([event("scroll", { trigger: "scroll", actions: [scrubbed] }), grow]);
+    runtime.start();
+    runtime.setScrollProgress(0.25); // at "up": y 2, scale 1
+
+    runtime.click("cube");
+    runtime.tick(0.5);
+    expect(runtime.poses().get("cube")).toMatchObject({ position: [0, 1, 0], scale: [1.5, 1.5, 1.5] });
+
+    runtime.setScrollProgress(0.25 + 1e-9);
+    expect(runtime.isIdle).toBe(true);
+    runtime.tick(1);
+    expect(positionOf(runtime)![1]).toBeCloseTo(2, 6);
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(1, 6);
+  });
+
+  it("never fires a scroll event's transition by time", () => {
+    const runtime = scrollScene();
+    expect(runtime.fire("scroll")).toBe(false);
+    expect(runtime.fire("scroll", "cube")).toBe(false);
+    expect(runtime.isIdle).toBe(true);
+  });
+
+  it("reads Current in row 1 as Base", () => {
+    const runtime = scrollScene([event("scroll", { trigger: "scroll", actions: [{ ...scrubbed, from: "current" }] })]);
+    runtime.start();
+    runtime.setScrollProgress(0.125);
+    expect(positionOf(runtime)).toEqual([0, 1, 0]);
+  });
+
+  it("scrubs a path's trim", () => {
+    const runtime = new SceneRuntime({
+      entities: [entity("path", { trimStart: 0, trimEnd: 1 })],
+      animation: {
+        states: byId(state("hidden", "path", { trimEnd: 0 })),
+        events: byId(event("write", { ownerId: "path", trigger: "scroll", actions: [transition({ targetId: "path", from: "hidden", steps: [{ to: "base", duration: 2, easing: "linear" }] })] })),
+      },
+    });
+    runtime.start();
+    expect(runtime.poses().get("path")!.trimEnd).toBe(0);
+    runtime.setScrollProgress(0.75);
+    expect(runtime.poses().get("path")!.trimEnd).toBeCloseTo(0.75, 6);
+  });
+
+  it("skips a scroll action whose target or state is missing, or whose owner is gone", () => {
+    const runtime = scrollScene([
+      event("gone", { ownerId: "deleted", trigger: "scroll", actions: [scrubbed] }),
+      event("target", { trigger: "scroll", actions: [{ ...scrubbed, targetId: "deleted" }] }),
+      event("state", { trigger: "scroll", actions: [{ ...scrubbed, steps: [{ to: "nope", duration: 1, easing: "linear" }] }] }),
+    ]);
+    expect(runtime.hasScrollEvents).toBe(false);
+    expect(() => {
+      runtime.start();
+      runtime.setScrollProgress(0.5);
+    }).not.toThrow();
+    expect(runtime.poses().size).toBe(0);
+  });
+});
+
 describe("SceneRuntime: place", () => {
   it("starts a transition from Current where an object was placed, and from row 1 otherwise", () => {
     const runtime = cubeScene([]);

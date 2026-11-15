@@ -4,7 +4,8 @@
  *
  * INPUT: A snapshot of the scene (its objects' own transforms and parents, and its animation
  *        section), taken when Play starts; its triggers (Start, and a pointer trigger on an
- *        object, through `fire`; a key, through `key`) and the passing of time.
+ *        object, through `fire`; a key, through `key`), the passing of time, and the scroll
+ *        progress the host reads from the page (`setScrollProgress`).
  * OUTPUT: A pose for each object a transition has moved, to put on the Three objects each frame.
  *
  * The runtime never reads the store again and never writes it: Play moves Three objects, not
@@ -21,6 +22,14 @@
  *   opacity too). Colour is mixed in linear light (utils/colorSpaces.ts), as THREE.Color.lerp would.
  *   Rotation changes per Euler component, so a state turned +360° about Y spins once, where the
  *   shortest way round (slerp) wouldn't move at all.
+ * - A Scroll event's transitions have no clock (decision tree B4): where each is is the scene's one
+ *   scroll progress (0 to 1) times its length, through its steps and easings, without its Delay,
+ *   Loop, or Cycle, so scrolling back retraces it. They are set up once, put at progress 0 by
+ *   `start()` (no flash of Base before the first frame), and moved only by `setScrollProgress`,
+ *   never by `tick`. Row 1 is never Current there (there is no moment it starts from): it reads as
+ *   Base. The newest writer wins an object both drive: a clocked transition (a click) started on a
+ *   scroll-driven object takes it from where it is, and the next change of scroll progress takes it
+ *   back, stopping that transition.
  * - A missing owner, target, or state (a deleted object or state, a damaged file) skips that action
  *   instead of throwing.
  */
@@ -29,7 +38,17 @@ import type { MaterialLayer } from "../scene/types";
 import { mixHexLinear } from "../utils/colorSpaces";
 import { normalizeEvents, type EventTrigger, type SceneEvent } from "./events";
 import { resolveState, withoutLook, type ObjectState, type Pose, type SceneAnimation } from "./objectStates";
-import { sampleTransition, type StateRef, type TransitionAction } from "./transitions";
+import {
+  clampProgress,
+  sampleTransition,
+  sampleTransitionAt,
+  scrubTiming,
+  transitionLength,
+  type StateRef,
+  type TransitionAction,
+  type TransitionSample,
+  type TransitionTiming,
+} from "./transitions";
 
 /**
  * What the runtime needs of an object: where it is in Base (and a path's trim), its parent (for
@@ -64,6 +83,14 @@ interface RunningTransition {
 
 /** The triggers fired by a key rather than the pointer or Start. */
 export type KeyTrigger = Extract<EventTrigger, "keyDown" | "keyUp">;
+
+/** A Scroll event's transition, ready to be put anywhere along its sequence. */
+interface ScrubbedTransition {
+  targetId: string;
+  timing: TransitionTiming; // its steps, without Delay, Loop, or Cycle
+  length: number; // seconds, so progress paces the steps as time would
+  rows: Pose[];
+}
 
 const keySlot = (trigger: KeyTrigger, code: string) => `${trigger}:${code}`;
 
@@ -107,6 +134,8 @@ export class SceneRuntime {
   private readonly eventsByKey = new Map<string, SceneEvent[]>();
   private readonly running = new Map<string, RunningTransition>(); // by target ID
   private readonly current = new Map<string, Pose>(); // where each moved object is, by entity ID
+  private readonly scrubbed: ScrubbedTransition[] = []; // Scroll events' transitions, in scene order
+  private scrollProgress = Number.NaN; // none put on yet
 
   /**
    * The triggers the scene's events use, so a host can skip what the scene can't need (no pick on
@@ -156,6 +185,19 @@ export class SceneRuntime {
       this.eventsByKey.set(slot, list);
     }
     this.keyCodes = new Set([...this.eventsByKey.values()].map((list) => list[0].key!));
+
+    for (const event of events) {
+      if (event.trigger !== "scroll") continue;
+      for (const action of event.actions) {
+        const entity = this.entities.get(action.targetId);
+        // Row 1 can't be Current without a moment it starts from: it reads as Base.
+        const first = entity && action.from === "current" ? resolveState(entity) : null;
+        const rows = entity && action.type === "transition" && action.steps.length > 0 ? this.resolveRows(entity, action, first) : null;
+        if (!rows) continue;
+        const timing = scrubTiming(action);
+        this.scrubbed.push({ targetId: entity!.id, timing, length: transitionLength(timing), rows });
+      }
+    }
   }
 
   /** Whether any object has a Mouse Down event. */
@@ -163,18 +205,40 @@ export class SceneRuntime {
     return this.triggersInUse.has("mouseDown");
   }
 
-  /** Fires every Start event. */
+  /** Fires every Start event, and puts every Scroll event's transition at progress 0. */
   start(): void {
     this.fire("start");
+    this.setScrollProgress(0);
+  }
+
+  /** Whether any Scroll event has a transition that can run, so a host knows to supply progress. */
+  get hasScrollEvents(): boolean {
+    return this.scrubbed.length > 0;
+  }
+
+  /**
+   * Puts every Scroll event's transition at `progress` (0 to 1, clamped; NaN is 0) of its sequence:
+   * the host's scroll position, read from the page (or the editor's scrubber). Writes nothing when
+   * the progress hasn't changed, so a host may call it every frame.
+   */
+  setScrollProgress(progress: number): void {
+    const next = clampProgress(progress);
+    if (next === this.scrollProgress) return;
+    this.scrollProgress = next;
+    for (const scrub of this.scrubbed) {
+      this.running.delete(scrub.targetId); // newest writer wins: a clocked transition here stops
+      this.putAt(scrub.targetId, scrub.rows, sampleTransitionAt(scrub.timing, scrub.length, next));
+    }
   }
 
   /**
    * The one way in: fires the events of a trigger. With an object (a pointer trigger), its owner's
    * (`ownerOf`); without one (Start), every object's, in scene order. Returns whether any fired.
-   * Key triggers need their key, so they go through `key` and fire nothing here.
+   * Key triggers need their key, so they go through `key`, and Scroll has no moment it fires (it
+   * goes through `setScrollProgress`): neither fires anything here.
    */
   fire(trigger: EventTrigger, entityId?: string): boolean {
-    if (trigger === "keyDown" || trigger === "keyUp") return false;
+    if (trigger === "keyDown" || trigger === "keyUp" || trigger === "scroll") return false;
     if (entityId === undefined) {
       let fired = false;
       for (const ownerId of this.eventsByOwner.keys()) fired = this.fireOwn(ownerId, trigger) || fired;
@@ -228,18 +292,11 @@ export class SceneRuntime {
     const entity = this.entities.get(action.targetId);
     if (!entity || action.type !== "transition" || action.steps.length === 0) return false;
 
-    const resolveRow = (ref: StateRef): Pose | null => {
-      if (ref === "base") return resolveState(entity);
-      const state = this.states[ref];
-      return state && state.targetId === entity.id ? resolveState(entity, state) : null;
-    };
-
-    const rest = action.steps.map((step) => resolveRow(step.to));
     const isMoving = this.running.has(entity.id);
-    const first = action.from === "current" || isMoving ? this.poseOf(entity) : resolveRow(action.from);
-    if (!first || rest.some((pose) => !pose)) return false;
+    const rows = this.resolveRows(entity, action, action.from === "current" || isMoving ? this.poseOf(entity) : null);
+    if (!rows) return false;
 
-    const transition: RunningTransition = { action, rows: [first, ...(rest as Pose[])], elapsed: 0 };
+    const transition: RunningTransition = { action, rows, elapsed: 0 };
     this.running.set(entity.id, transition);
     this.advance(entity.id, transition);
     return true;
@@ -288,6 +345,20 @@ export class SceneRuntime {
     event.actions.forEach((action) => this.run(action));
   }
 
+  /**
+   * The pose at each row of a transition on `entity`, or null when a row names no state of it. Row 1
+   * is `first` when given (where the object is), else the state it names.
+   */
+  private resolveRows(entity: RuntimeEntity, action: TransitionAction, first: Pose | null): Pose[] | null {
+    const resolveRow = (ref: StateRef): Pose | null => {
+      if (ref === "base") return resolveState(entity);
+      const state = this.states[ref];
+      return state && state.targetId === entity.id ? resolveState(entity, state) : null;
+    };
+    const rows = [first ?? resolveRow(action.from), ...action.steps.map((step) => resolveRow(step.to))];
+    return rows.every((pose) => pose !== null) ? (rows as Pose[]) : null;
+  }
+
   private poseOf(entity: RuntimeEntity): Pose {
     const pose = this.current.get(entity.id);
     return pose ? lerpPose(pose, pose, 0) : resolveState(entity);
@@ -295,8 +366,12 @@ export class SceneRuntime {
 
   private advance(targetId: string, transition: RunningTransition): void {
     const sample = sampleTransition(transition.action, transition.elapsed);
-    // Always a new pose object, never one of the rows, so whoever applies it can't change a row.
-    this.current.set(targetId, lerpPose(transition.rows[sample.from], transition.rows[sample.to], sample.progress));
+    this.putAt(targetId, transition.rows, sample);
     if (sample.finished) this.running.delete(targetId);
+  }
+
+  private putAt(targetId: string, rows: Pose[], sample: TransitionSample): void {
+    // Always a new pose object, never one of the rows, so whoever applies it can't change a row.
+    this.current.set(targetId, lerpPose(rows[sample.from], rows[sample.to], sample.progress));
   }
 }
