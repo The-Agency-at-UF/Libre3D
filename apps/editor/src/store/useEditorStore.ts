@@ -325,7 +325,8 @@ export interface EditorState {
   /** Adds an event to an object, last in its list, with one transition of the object. Returns its ID. */
   addEvent: (ownerId: string, trigger: EventTrigger) => string;
   /** Changes an event's trigger or replaces its actions (a list edited as a whole). */
-  updateEvent: (eventId: string, updates: { trigger?: EventTrigger; actions?: TransitionAction[] }) => void;
+  /** Changes an event's trigger, its key (Key Down, Key Up: a `KeyboardEvent.code`), or its actions. One undo step. */
+  updateEvent: (eventId: string, updates: { trigger?: EventTrigger; key?: string; actions?: TransitionAction[] }) => void;
   removeEvent: (eventId: string) => void;
 
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
@@ -1354,6 +1355,7 @@ export const useEditorStore = create<EditorState>()(
               updatingEvent(state, eventId, (event) => ({
                 ...event,
                 ...(updates.trigger ? { trigger: updates.trigger } : null),
+                ...(updates.key ? { key: updates.key } : null),
                 ...(updates.actions ? { actions: updates.actions.map(cloneTransition) } : null),
               })),
             ),

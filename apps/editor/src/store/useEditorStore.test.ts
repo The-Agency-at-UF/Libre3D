@@ -653,6 +653,22 @@ describe("events", () => {
     expect(useEditorStore.getState().animation.events[other].trigger).toBe("mouseUp");
   });
 
+  it("sets a key event's key, one undo step per key, and keeps it through a save and a reload", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithCube();
+    const eventId = useEditorStore.getState().addEvent("cube-1", "keyDown");
+    expect(useEditorStore.getState().animation.events[eventId].key).toBeUndefined();
+
+    useEditorStore.getState().updateEvent(eventId, { key: "Space" });
+    useEditorStore.getState().updateEvent(eventId, { key: "KeyW" });
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().animation.events[eventId].key).toBe("Space");
+
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState())))));
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+    expect(useEditorStore.getState().animation.events[eventId]).toMatchObject({ trigger: "keyDown", key: "Space" });
+  });
+
   it("removes an event", async () => {
     const { useEditorStore } = await storeWithCube();
     const eventId = useEditorStore.getState().addEvent("cube-1", "start");

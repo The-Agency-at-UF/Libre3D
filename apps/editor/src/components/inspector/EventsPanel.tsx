@@ -3,6 +3,7 @@ import {
   EVENT_TRIGGERS,
   TRIGGER_INFO,
   getObjectEvents,
+  isKeyTrigger,
   stateRefLabel,
   transitionProblem,
   type EventTrigger,
@@ -10,6 +11,7 @@ import {
 } from "../../animation/events";
 import type { ObjectState } from "../../animation/objectStates";
 import { transitionRows } from "../../animation/transitions";
+import { keyLabel } from "../../animation/keys";
 import { PanelSection } from "../ui/PanelSection";
 
 interface EventsPanelProps {
@@ -18,9 +20,12 @@ interface EventsPanelProps {
   onEditEvent: (eventId: string) => void;
 }
 
-// One line for the Events list: "Start · Cube: Base State → Up", or how many actions it has.
+// One line for the Events list: "Start · Cube: Base State → Up", or how many actions it has. A key
+// trigger says its key ("Key Down Space"), or "Pick a key" before one is picked: it never fires till then.
 const describeEvent = (event: SceneEvent, entities: Entity[], states: Record<string, ObjectState>): string => {
-  const trigger = TRIGGER_INFO[event.trigger].label;
+  const { label } = TRIGGER_INFO[event.trigger];
+  if (isKeyTrigger(event.trigger) && !event.key) return `${label} · Pick a key`;
+  const trigger = isKeyTrigger(event.trigger) ? `${label} ${keyLabel(event.key!)}` : label;
   if (event.actions.length !== 1) {
     return `${trigger} · ${event.actions.length === 0 ? "No actions" : `${event.actions.length} transitions`}`;
   }
@@ -54,7 +59,8 @@ export function EventsPanel({ entity, onEditEvent }: EventsPanelProps) {
       <div className="state-list">
         {events.map((event) => {
           const summary = describeEvent(event, entities, states);
-          const hasProblem = event.actions.some((action) => transitionProblem(action, entityExists, states));
+          const missingKey = isKeyTrigger(event.trigger) && !event.key;
+          const hasProblem = missingKey || event.actions.some((action) => transitionProblem(action, entityExists, states));
 
           return (
             <div key={event.id} className="state-row">
@@ -65,7 +71,11 @@ export function EventsPanel({ entity, onEditEvent }: EventsPanelProps) {
               {hasProblem && (
                 <i
                   className="ti ti-alert-triangle event-row-warning"
-                  title="Something this event moves is missing, so Play skips it. Open it to pick a target or state."
+                  title={
+                    missingKey
+                      ? "This event has no key yet, so it never fires. Open it to pick one."
+                      : "Something this event moves is missing, so Play skips it. Open it to pick a target or state."
+                  }
                 ></i>
               )}
               <button
@@ -99,7 +109,10 @@ export function EventsPanel({ entity, onEditEvent }: EventsPanelProps) {
         </div>
 
         {events.length === 0 && (
-          <p className="state-hint">Events run in Play: Start when it begins, Mouse Down when this object is clicked.</p>
+          <p className="state-hint">
+            Events run in Play: Start when it begins, the mouse ones when the pointer is on this object, the key ones
+            when a key is pressed or let go.
+          </p>
         )}
       </div>
     </PanelSection>

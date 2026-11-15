@@ -1,16 +1,18 @@
 /**
  * PURPOSE: Inspector panel for configuring interactive animation events and transition sequences.
- * Allows users to set event triggers (Start, Mouse Down, Mouse Up, Mouse Hover), target entities,
- * transition sequences, durations, easing curves, repeats, and loop modes.
+ * Allows users to set event triggers (Start, Mouse Down, Mouse Up, Mouse Hover, Key Down, Key Up)
+ * and a key trigger's key, target entities, transition sequences, durations, easing curves,
+ * repeats, and loop modes.
  */
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useEditorStore, type Entity } from "../../store/useEditorStore";
 import { getChildren } from "../../scene/entityIndex";
 import {
   createTransition,
   EVENT_TRIGGERS,
   TRIGGER_INFO,
+  isKeyTrigger,
   isRowValid,
   stateRefLabel,
   transitionProblem,
@@ -28,6 +30,7 @@ import {
   type TransitionStep,
 } from "../../animation/transitions";
 import { NumberField } from "../ui/NumberField";
+import { KeyCaptureField } from "./KeyCaptureField";
 import { Select } from "../ui/Select";
 
 const DELAY_REPEATS: { value: DelayRepeat; label: string }[] = [
@@ -303,6 +306,7 @@ export function EditEventPanel({ event, onClose }: EditEventPanelProps) {
     ? EVENT_TRIGGERS
     : [...EVENT_TRIGGERS, { value: event.trigger, ...trigger }];
   const setActions = (actions: TransitionAction[]) => updateEvent(event.id, { actions });
+  const setKey = useCallback((key: string) => updateEvent(event.id, { key }), [updateEvent, event.id]);
 
   return (
     <div className="event-editor" role="dialog" aria-label="Edit Event">
@@ -323,6 +327,13 @@ export function EditEventPanel({ event, onClose }: EditEventPanelProps) {
               onChange={(value) => updateEvent(event.id, { trigger: value as EventTrigger })}
             />
           </div>
+
+          {isKeyTrigger(event.trigger) && (
+            <div className="prop event-key-row">
+              <span className="prop-label">Key</span>
+              <KeyCaptureField value={event.key} onChange={setKey} disabled={isReadOnly} />
+            </div>
+          )}
 
           <div className="event-editor-heading">
             <span>Actions</span>
