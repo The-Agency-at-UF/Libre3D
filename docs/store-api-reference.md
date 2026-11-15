@@ -661,8 +661,8 @@ A row naming no state of the target (a deleted state, another object's, or `""` 
 #### `addEvent(ownerId: string, trigger: EventTrigger) → string`
 Add an event to an object, last in its list, with one transition of the object from Base to its first state (none picked yet if it has none), 1 s, Ease In Out. Returns its ID (`""` if the object isn't there).
 
-#### `updateEvent(eventId: string, updates: { trigger?, actions? }) → void`
-Change an event's trigger, or replace its actions (copied in). One undo step.
+#### `updateEvent(eventId: string, updates: { trigger?, key?, actions? }) → void`
+Change an event's trigger, set a Key Down or Key Up event's key (a `KeyboardEvent.code`, as the Edit Event panel's key field captures it), or replace its actions (copied in). One undo step.
 
 #### `removeEvent(eventId: string) → void`
 Delete an event.
