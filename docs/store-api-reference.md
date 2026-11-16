@@ -122,8 +122,8 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, or group). A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), unlit (Lighting `none`) and shown from both sides (`doubleSided: true` on its Lighting layer), like the other flat objects; the 3D primitives start with Phong lighting over a white Color layer. A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
-- **Signature**: `(type: "cube" | "sphere" | "torus" | "plane" | "path" | "directionalLight" | "group") => string`
+Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, group, or camera). A camera captures the current view (`createSceneCamera` in `scene/entityFactories.ts`): it is placed where the active camera profile is, turned to look at its target (down its own -Z), with the profile's field of view, near and far, and the viewport's projection (an orthographic size of 5 at the profile's zoom); it has no material. A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), unlit (Lighting `none`) and shown from both sides (`doubleSided: true` on its Lighting layer), like the other flat objects; the 3D primitives start with Phong lighting over a white Color layer. A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
+- **Signature**: `(type: "cube" | "sphere" | "torus" | "plane" | "path" | "directionalLight" | "group" | "camera") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
 - **Example**:
@@ -150,6 +150,9 @@ Adds the shapes and paths of an imported SVG (made by `svgShapesToItems` in `pat
 Adds an imported picture (`importImageFile` in `utils/importImage.ts`) as an `"image"` entity named `name` at the origin: a flat plane `aspect` (width / height) wide, its longer side 2 units (`utils/imagePlane.ts`), stored as `imageAspect`. Its layers are an unlit Lighting layer (`model: "none"`) shown from both sides (`alphaMode: "BLEND"` when `transparent`, the picture having see-through pixels), a white Color layer, and a Base Color Image layer pointing at `textureAssetId` (the file's SHA-256 in the texture store), clamped at the edges. One undo step; refused in view only; puts the pen down.
 - **Returns**: New entity ID
 - **Auto-selects**: The new plane becomes selected
+
+#### `updateSceneCameras(ids: string[], updates: Partial<SceneCameraSettings>) → void`
+Sets lens fields (`projection`, `fov`, `orthoSize`, `near`, `far`) on every camera among `ids`, in one `set`, so a multi-selection is one undo step (the Camera panel). Other entity types are skipped; a size or distance that isn't a positive finite number makes it ignore the whole update. Refused in view only (the content guard).
 
 #### `updateShapeSolids(ids: string[], updates: Partial<ShapeSolid>) → void`
 Sets the `extrusion` (depth) or `bevel` of every shape among `ids`, one undo step. Other entity types are skipped; a negative value is ignored.
