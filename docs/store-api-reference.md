@@ -101,7 +101,7 @@ Named camera positions (viewport bookmarks). Default profile is always "personal
 #### `loadScene(content: StoredSceneContent | null) → void`
 Replaces the whole scene with a saved one, or with a new scene's starting content (a cube and the default light) when `content` is `null`. Called by `useOpenScene` when `/edit/:sceneId` opens.
 - **Deep merge**: `sceneSettings`, `postProcessing`, and `frame` are merged over the current defaults, so settings added since the scene was saved keep their defaults
-- **Camera profiles**: the "personal" profile is always present; an unknown `activeProfileId` falls back to it
+- **Camera profiles**: the "personal" profile is always present; an `activeProfileId` that names neither a profile nor a scene camera falls back to it
 - **Resets** selection and preview mode
 - **Clears undo history**: the editor no longer reloads the page between scenes, so Ctrl+Z must not reach into the previous one, and the load itself isn't an undoable step
 - **Works while read-only**: it writes past the read-only guard, so a view-only tab can show the latest saved scene. It leaves `readOnlyReason` as it is
@@ -122,7 +122,7 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, group, or camera). A camera captures the current view (`createSceneCamera` in `scene/entityFactories.ts`): it is placed where the active camera profile is, turned to look at its target (down its own -Z), with the profile's field of view, near and far, and the viewport's projection (an orthographic size of 5 at the profile's zoom); it has no material. A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), unlit (Lighting `none`) and shown from both sides (`doubleSided: true` on its Lighting layer), like the other flat objects; the 3D primitives start with Phong lighting over a white Color layer. A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
+Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, group, or camera). A camera captures the current view (`createSceneCamera` in `scene/entityFactories.ts`): it is placed where the active camera profile is (the personal camera while looking through a scene camera), turned to look at its target (down its own -Z), with the profile's field of view, near and far, and the viewport's projection (an orthographic size of 5 at the profile's zoom); it has no material. A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), unlit (Lighting `none`) and shown from both sides (`doubleSided: true` on its Lighting layer), like the other flat objects; the 3D primitives start with Phong lighting over a white Color layer. A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
 - **Signature**: `(type: "cube" | "sphere" | "torus" | "plane" | "path" | "directionalLight" | "group" | "camera") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
@@ -152,7 +152,7 @@ Adds an imported picture (`importImageFile` in `utils/importImage.ts`) as an `"i
 - **Auto-selects**: The new plane becomes selected
 
 #### `updateSceneCameras(ids: string[], updates: Partial<SceneCameraSettings>) → void`
-Sets lens fields (`projection`, `fov`, `orthoSize`, `near`, `far`) on every camera among `ids`, in one `set`, so a multi-selection is one undo step (the Camera panel). Other entity types are skipped; a size or distance that isn't a positive finite number makes it ignore the whole update. Refused in view only (the content guard).
+Sets lens fields (`projection`, `fov`, `orthoSize`, `near`, `far`) on every camera among `ids`, in one `set`, so a multi-selection is one undo step (the Camera panel). Other entity types are skipped; a size or distance that isn't a positive finite number makes it ignore the whole update. `fov` is a state value (C6): it goes to the state each camera is shown in (`selectViewedObjectState`), or the lens in Base, in the same `set`. Refused in view only (the content guard).
 
 #### `updateShapeSolids(ids: string[], updates: Partial<ShapeSolid>) → void`
 Sets the `extrusion` (depth) or `bevel` of every shape among `ids`, one undo step. Other entity types are skipped; a negative value is ignored.
@@ -687,7 +687,7 @@ Camera profiles are named bookmarks of camera position, target, and FOV.
 ### Selecting Profiles
 
 #### `setActiveProfile(id: string) → void`
-Switch to a camera profile by ID. Instantly updates viewport camera.
+Switch to a camera profile, or to a scene camera entity to look through it (C6), by ID. Instantly updates the viewport camera. What the ID resolves to is `resolveActiveCamera` (`scene/activeCamera.ts`): a scene camera deleted while active leaves its ID in place and the view falls back to the personal camera, so undoing the deletion looks through it again. Not in undo history.
 
 ### Creating Profiles
 
