@@ -27,6 +27,15 @@ import { whenRendererReady } from "../viewport/rendererSettings";
 import { createRoomEnvironment } from "../viewport/sceneEnvironment";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
+import { SceneCameraObject } from "../viewport/sceneCameraObject";
+import { followSceneCamera } from "../viewport/sceneCameraView";
+import { DEFAULT_CAMERA_PROFILE_ID, DEFAULT_SCENE_CAMERA } from "../scene/defaults";
+import { sceneCameraEntity } from "../scene/activeCamera";
+import type { EditorState } from "../store/useEditorStore";
+
+// The scene camera entity the editor looks through, or null: allocation-free, as it runs every frame.
+const lookedThroughCamera = (state: EditorState) =>
+  state.cameraProfiles[state.activeProfileId] ? null : (sceneCameraEntity(state.entities, state.activeProfileId) ?? null);
 import { editorSceneSource } from "../viewport/editorSceneSource";
 import { getLiveRenderer, setLiveScene } from "../viewport/liveViewport";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
@@ -49,6 +58,11 @@ export function ViewportCanvas() {
   const frame           = useEditorStore((state) => state.frame);
   const activeProfileId = useEditorStore((state) => state.activeProfileId);
   const activeProfile   = useEditorStore((state) => state.cameraProfiles[activeProfileId] ?? state.cameraProfiles.personal);
+  // The scene camera the editor looks through (C6, scene/activeCamera.ts), its projection and name;
+  // null when it's a camera profile. The personal profile above stays where you left it meanwhile.
+  const lookThrough     = useEditorStore((state) => lookedThroughCamera(state));
+  const lookProjection  = lookThrough ? (lookThrough.camera?.projection ?? DEFAULT_SCENE_CAMERA.projection) : null;
+  const setActiveProfile = useEditorStore((state) => state.setActiveProfile);
   const isPreviewMode   = useEditorStore((state) => state.isPreviewMode);
   const isPreviewingAction = useEditorStore((state) => state.previewingActionId !== null);
   const isReadOnly      = useEditorStore((state) => state.readOnlyReason !== null);
@@ -112,12 +126,33 @@ export function ViewportCanvas() {
   // Filled by useViewportDepthGizmo: places the selected object's Depth layer handles.
   const depthFrameRef = useRef<(() => void) | null>(null);
 
+  // Looking through a scene camera: the editor's camera follows it each frame, after the ▶
+  // preview's poses (so a previewed camera transition plays through it). Not in Play, whose camera
+  // follows it itself (PlayCamera). Its frustum, around the eye, is hidden meanwhile.
+  const lookedRef = useRef<SceneCameraObject | null>(null);
+  const lookFrame = () => {
+    const state = useEditorStore.getState();
+    const entity = state.isPreviewMode ? null : lookedThroughCamera(state);
+    const object = entity ? objectManager.getObject(entity.id) : undefined;
+    const looked = object instanceof SceneCameraObject ? object : null;
+    if (lookedRef.current !== looked) {
+      lookedRef.current?.setLookedThrough(false);
+      looked?.setLookedThrough(true);
+      lookedRef.current = looked;
+    }
+    const camera = cameraRef.current;
+    if (looked && (camera instanceof THREE.PerspectiveCamera || camera instanceof THREE.OrthographicCamera)) {
+      followSceneCamera(camera, looked);
+    }
+  };
+
   const rendererRef = useViewportRenderer(
     containerRef,
     scene,
     cameraRef,
     () => {
       playFrameRef.current?.();
+      lookFrame();
       penFrameRef.current?.();
       depthFrameRef.current?.();
     },
@@ -208,7 +243,9 @@ export function ViewportCanvas() {
 
     // Update the manager and write the new active camera into the shared ref
     // BEFORE anything reads from cameraRef this frame.
-    cameraManager.setActiveMode(projectionMode);
+    // A scene camera's projection while looking through it. Leaving it puts the personal view back
+    // as it was: the profile was never written meanwhile (orbiting is off, useViewportControls).
+    cameraManager.setActiveMode(lookProjection ?? projectionMode);
     cameraManager.syncWithProfile(activeProfile, orbitControlsRef.current.target);
 
     const nextCamera = cameraManager.activeCamera;
@@ -227,7 +264,8 @@ export function ViewportCanvas() {
       gizmoRef.current.camera = nextCamera as THREE.PerspectiveCamera | THREE.OrthographicCamera;
       gizmoRef.current.update();
     }
-  }, [cameraManager, activeProfile, projectionMode, orbitControlsRef, cameraRef, gizmoRef]);
+    // lookThrough's id: a different camera, or none, re-syncs (not every edit of the same camera).
+  }, [cameraManager, activeProfile, projectionMode, lookProjection, lookThrough?.id, orbitControlsRef, cameraRef, gizmoRef]);
 
   // -- Sync Entities --
   useEffect(() => {
@@ -324,6 +362,7 @@ export function ViewportCanvas() {
         // Hidden while a Depth layer is edited (as Spline does), so the box doesn't hide the gradient.
         (obj.userData.selectionOutline as THREE.LineSegments).visible = isSelected && !isEditingDepth && (entity?.visible ?? true);
       }
+      if (obj instanceof SceneCameraObject) obj.setSelected(isSelected);
       if (obj.userData.helper) {
         const helper = obj.userData.helper as THREE.DirectionalLightHelper;
         if (entity?.visible) {
@@ -389,6 +428,15 @@ export function ViewportCanvas() {
         className={`viewport-sandbox-container${frame.mode === "fixed" ? " fixed-bounds" : ""}`}
         style={{ width: "100%", height: "100%" }}
       />
+      {lookThrough && !isPreviewMode && (
+        <div className="viewport-look-badge" role="status">
+          <i className="ti ti-video" aria-hidden="true"></i>
+          <span>Looking through {lookThrough.name}</span>
+          <button type="button" onClick={() => setActiveProfile(DEFAULT_CAMERA_PROFILE_ID)} title="Back to the personal camera, where you left it">
+            Exit
+          </button>
+        </div>
+      )}
       {frame.mode === "fixed" && !isPreviewMode && (
         <div className="badge green viewport-sandbox-badge">
           {frame.width.toLocaleString()} × {frame.height.toLocaleString()} ({frameScaleLabel})

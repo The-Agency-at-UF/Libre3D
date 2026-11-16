@@ -11,7 +11,7 @@
 import type { PathData, PathStroke } from "../paths/pathGeometry";
 import type { ShapeData } from "../paths/shapeGeometry";
 
-export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
+export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group" | "camera";
 
 export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow" | "glass" | "displace";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
@@ -332,6 +332,22 @@ export interface Entity {
   // Images (type "image", see utils/imagePlane.ts): a flat plane as wide for its height as the picture
   // (width / height), which its Image layer shows.
   imageAspect?: number;
+  // Cameras (type "camera", see viewport/sceneCameraObject.ts): how the camera projects. Where it is
+  // and which way it looks are the ordinary transform: it looks down its own -Z, like a Three camera.
+  camera?: SceneCameraSettings;
+}
+
+/**
+ * A scene camera's lens (decision tree §C3). `fov` is the vertical field of view in degrees
+ * (perspective); `orthoSize` is half the view's height in world units (orthographic), as the
+ * personal camera's is at zoom 1 (viewport/CameraManager.ts). Defaults: DEFAULT_SCENE_CAMERA.
+ */
+export interface SceneCameraSettings {
+  projection: "perspective" | "orthographic";
+  fov: number;
+  orthoSize: number;
+  near: number;
+  far: number;
 }
 
 export interface ImportNodeSpec {
@@ -364,7 +380,9 @@ export interface CameraProfile {
   near: number;
   far: number;
   zoom: number;
-  // Missing (cameras from before it) or partly missing fields are defaults: resolvePlayCamera.
+  // How Play moved the camera before it was a scene setting (C7): still read for scenes whose
+  // `sceneSettings.play` is unset (resolveScenePlay), never written now. Missing or partly missing
+  // fields are defaults: resolvePlayCamera.
   play?: Partial<PlayCameraSettings>;
 }
 
@@ -446,6 +464,26 @@ export interface SceneSettingsConfig {
     directionalEnabled: boolean;
     shadow: string;
   };
+  // How a scene's Scroll events follow the share page's scroll (decision tree B4): `length` is how
+  // much scrolling plays them from start to end, in screen heights (3 = 300%), and `smooth` eases the
+  // shown progress toward the scrolled one so wheel steps don't jump. Older scenes get the defaults
+  // when they open (settings are deep-merged), so this needed no document bump.
+  scroll: {
+    length: number;
+    smooth: boolean;
+  };
+  // The mute/unmute button a scene with sound shows (decision tree C4): scenes start muted and the
+  // button is how a visitor hears them. Only `visible` and `position` exist now; later looks (size,
+  // colour, icon, shape) go here too, so they need no redesign. Deep-merged like `scroll`.
+  audioButton: {
+    visible: boolean;
+    position: "bottomRight";
+  };
+  // What the visitor can do in Play and on the share page (decision tree §C3, §G6): one set per
+  // scene, edited in the Export dialog (PlaySettingsPanel). Unset in scenes from before it, which
+  // keep playing with their active camera profile's `play` (resolveScenePlay), so it isn't in the
+  // defaults and needed no document bump. Later Play settings (§G6) go in this object too.
+  play?: Partial<PlayCameraSettings>;
   // Not read yet (there is no physics), kept for the same reason as the lights' unread fields.
   physics: {
     enabled: boolean;

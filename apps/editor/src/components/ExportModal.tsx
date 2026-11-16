@@ -1,4 +1,5 @@
 import { shareUrlFor } from "../utils/navigation";
+import { PlaySettingsPanel } from "./PlaySettingsPanel";
 
 export interface ExportModalProps {
   isModalOpen: boolean;
@@ -139,6 +140,9 @@ export function ExportModal({
             </div>
           </div>
         )}
+
+        {/* Under both tabs: it goes with the share link and the .libre3d file alike. */}
+        <PlaySettingsPanel />
 
         <div className="editor-modal-actions">
           <button

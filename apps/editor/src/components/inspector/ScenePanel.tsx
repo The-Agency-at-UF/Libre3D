@@ -1,4 +1,6 @@
+import { hasScrollEvents, hasSoundActions } from "../../animation/events";
 import { useEditorStore } from "../../store/useEditorStore";
+import { SCROLL_LENGTH_LIMITS } from "../../viewport/scrollProgress";
 import { ColorField } from "../ui/ColorField";
 import { PanelSection } from "../ui/PanelSection";
 import { Switch } from "../ui/Switch";
@@ -10,6 +12,8 @@ const DEFAULT_BACKGROUND = "#0b1020";
 export function ScenePanel() {
   const sceneSettings = useEditorStore((state) => state.sceneSettings);
   const updateSceneSettings = useEditorStore((state) => state.updateSceneSettings);
+  const usesScroll = useEditorStore((state) => hasScrollEvents(state.animation.events));
+  const usesSound = useEditorStore((state) => hasSoundActions(state.animation.events));
 
   return (
     <PanelSection title="Scene Settings" defaultOpen={true}>
@@ -62,6 +66,38 @@ export function ScenePanel() {
           onChange={(val) => updateSceneSettings({ fogEnabled: val })}
         />
 
+        {/* How Scroll events follow the share page's scroll; only scenes with one have any use for it */}
+        {usesScroll && (
+          <>
+            <Slider
+              label="Scroll Length %"
+              min={SCROLL_LENGTH_LIMITS.min * 100}
+              max={SCROLL_LENGTH_LIMITS.max * 100}
+              step={10}
+              value={Math.round(sceneSettings.scroll.length * 100)}
+              onChange={(percent) => updateSceneSettings({ scroll: { length: percent / 100 } })}
+            />
+            <Switch
+              label="Smooth Scrolling"
+              checked={sceneSettings.scroll.smooth}
+              onChange={(val) => updateSceneSettings({ scroll: { smooth: val } })}
+            />
+          </>
+        )}
+
+        {/* The mute/unmute button a scene with sound shows; scenes start muted either way */}
+        {usesSound && (
+          <>
+            <Switch
+              label="Sound Button"
+              checked={sceneSettings.audioButton.visible}
+              onChange={(visible) => updateSceneSettings({ audioButton: { visible } })}
+            />
+            {!sceneSettings.audioButton.visible && (
+              <p className="state-hint">Without the button the scene stays muted, unless the page it's embedded in unmutes it in code.</p>
+            )}
+          </>
+        )}
       </div>
     </PanelSection>
   );

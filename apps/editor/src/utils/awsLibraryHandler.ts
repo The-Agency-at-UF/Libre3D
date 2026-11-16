@@ -113,7 +113,7 @@ const addMaterial = async (config: LibraryConfig, body: Record<string, unknown>)
     return errorResponse(413, "This material is too large for the library.");
   }
 
-  if (collectAssetHashes([], { material: { layers } }).length > 0) {
+  if (collectAssetHashes({ materials: { material: { layers } } }).length > 0) {
     return errorResponse(422, "A material with pictures can't be added to the library yet.");
   }
 

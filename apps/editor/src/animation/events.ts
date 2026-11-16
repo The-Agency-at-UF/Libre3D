@@ -1,7 +1,7 @@
 /**
  * PURPOSE: Events, the second part of state-based animation (notes/animation-plan.md, A3): on an
- * object, a trigger (Start, Mouse Down) and the actions it runs, which for now are transitions
- * (transitions.ts).
+ * object, a trigger (Start, a pointer on the object, a key, the page's scroll) and the actions it
+ * runs, which for now are transitions (transitions.ts).
  *
  * Events live in the scene's `animation` section next to the states, keyed by ID, and point at
  * their object (the owner) by entity ID. Their actions are a small ordered list inside the event,
@@ -10,23 +10,70 @@
  */
 
 import { createId } from "../utils/createId";
-import { getObjectStates, type ObjectState } from "./objectStates";
-import { normalizeTransition, type StateRef, type TransitionAction } from "./transitions";
+import type { ObjectState } from "./objectStates";
+import { actionTargetId, cloneAction, createTransition, isTransition, normalizeAction, type SceneAction } from "./actions";
+import type { StateRef, TransitionAction } from "./transitions";
 
-export type EventTrigger = "start" | "mouseDown";
+export { createTransition };
+
+export type EventTrigger = "start" | "mouseDown" | "mouseUp" | "mouseHover" | "keyDown" | "keyUp" | "scroll";
+
+/**
+ * Every trigger a document may hold (schema v6 taught the document all of them at once, so adding
+ * the ones that fire later needs no further bump), with its name and icon. What normalizeEvents
+ * keeps. A trigger added here before it is built stays out of EVENT_TRIGGERS until it fires.
+ */
+export const TRIGGER_INFO: Record<EventTrigger, { label: string; icon: string }> = {
+  start: { label: "Start", icon: "flag" },
+  mouseDown: { label: "Mouse Down", icon: "pointer" },
+  mouseUp: { label: "Mouse Up", icon: "pointer-up" },
+  mouseHover: { label: "Mouse Hover", icon: "hand-finger" },
+  keyDown: { label: "Key Down", icon: "keyboard" },
+  keyUp: { label: "Key Up", icon: "keyboard" },
+  scroll: { label: "Scroll", icon: "mouse" },
+};
+
+export const isEventTrigger = (value: unknown): value is EventTrigger =>
+  typeof value === "string" && Object.hasOwn(TRIGGER_INFO, value);
+
+/**
+ * The triggers fired on the object under the pointer (or its nearest ancestor with one): the ones
+ * Play's pointer input picks for, and the ones the pointer cursor shows over.
+ */
+export const POINTER_TRIGGERS: readonly EventTrigger[] = ["mouseDown", "mouseUp", "mouseHover"];
+
+/** The triggers that fire today, which is what the trigger dropdown offers: every one the document knows. */
+const OFFERED_TRIGGERS: readonly EventTrigger[] = ["start", "mouseDown", "mouseUp", "mouseHover", "keyDown", "keyUp", "scroll"];
+
+/** Whether a trigger is set off by a key, so its event has a key to pick (`SceneEvent.key`). */
+export const isKeyTrigger = (trigger: EventTrigger): trigger is "keyDown" | "keyUp" => trigger === "keyDown" || trigger === "keyUp";
 
 /** The triggers in the order the trigger dropdown lists them, with their names and icons there. */
-export const EVENT_TRIGGERS: { value: EventTrigger; label: string; icon: string }[] = [
-  { value: "start", label: "Start", icon: "flag" },
-  { value: "mouseDown", label: "Mouse Down", icon: "pointer" },
-];
+export const EVENT_TRIGGERS: { value: EventTrigger; label: string; icon: string }[] = OFFERED_TRIGGERS.map((value) => ({
+  value,
+  ...TRIGGER_INFO[value],
+}));
+
+/**
+ * Whether any event is a Scroll event, so the editor shows what only those need (the Play bar's
+ * scrubber, the Scene panel's Scroll settings). A boolean, so a component selecting it re-renders
+ * only when the answer changes.
+ */
+export const hasScrollEvents = (events: Record<string, SceneEvent>): boolean =>
+  Object.values(events).some((event) => event.trigger === "scroll");
+
+/** Whether any event plays a sound (a Sound action with one picked): the scene then gets the mute button. */
+export const hasSoundActions = (events: Record<string, SceneEvent>): boolean =>
+  Object.values(events).some((event) => event.actions.some((action) => action.type === "sound" && action.mode === "play" && !!action.assetId));
 
 export interface SceneEvent {
   id: string;
-  ownerId: string; // entity ID; Mouse Down fires when it's clicked
+  ownerId: string; // entity ID; a pointer trigger fires when the pointer is on it (or a descendant)
   trigger: EventTrigger;
+  /** For Key Down and Key Up: the key, as a `KeyboardEvent.code` ("KeyW", "Space"). */
+  key?: string;
   order: number; // position in the owner's Events list
-  actions: TransitionAction[];
+  actions: SceneAction[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -37,22 +84,6 @@ export const getObjectEvents = (events: Record<string, SceneEvent>, ownerId: str
   Object.values(events)
     .filter((event) => event.ownerId === ownerId)
     .sort((a, b) => a.order - b.order);
-
-/**
- * A new transition on `targetId`: from Base to its first state (no state picked yet when it has
- * none), in 1 s with Ease In Out, played once.
- */
-export const createTransition = (states: Record<string, ObjectState>, targetId: string): TransitionAction => ({
-  id: createId("action"),
-  type: "transition",
-  targetId,
-  from: "base",
-  steps: [{ to: getObjectStates(states, targetId)[0]?.id ?? "", duration: 1, easing: "easeInOut" }],
-  delay: 0,
-  delayRepeat: "none",
-  loop: 0,
-  cycle: "restart",
-});
 
 /** A new event on an object, last in its list, with one transition of the object itself. */
 export const createEvent = (
@@ -116,18 +147,17 @@ export const transitionProblem = (
 /** The events with a transition that goes through a state (deleting it leaves them a "Pick a state"). */
 export const getEventsUsingState = (events: Record<string, SceneEvent>, stateId: string): SceneEvent[] =>
   Object.values(events).filter((event) =>
-    event.actions.some((action) => action.from === stateId || action.steps.some((step) => step.to === stateId)),
+    event.actions.some(
+      (action) => isTransition(action) && (action.from === stateId || action.steps.some((step) => step.to === stateId)),
+    ),
   );
 
 /** A copy of a transition that shares nothing with it. */
-export const cloneTransition = (action: TransitionAction): TransitionAction => ({
-  ...action,
-  steps: action.steps.map((step) => ({ ...step })),
-});
+export const cloneTransition = (action: TransitionAction): TransitionAction => cloneAction(action);
 
 /**
  * Drops the events of removed objects, and the actions (on any object's events) that move a
- * removed object; an event left with no actions stays. Returns `events` itself when nothing changed.
+ * removed object (an Open Link or Sound moves none, so stays); an event left with no actions stays. Returns `events` itself when nothing changed.
  */
 export const removeEventsOf = (
   events: Record<string, SceneEvent>,
@@ -141,7 +171,10 @@ export const removeEventsOf = (
       delete next[event.id];
       continue;
     }
-    const actions = event.actions.filter((action) => !removedIds.has(action.targetId));
+    const actions = event.actions.filter((action) => {
+      const targetId = actionTargetId(action);
+      return targetId === null || !removedIds.has(targetId);
+    });
     if (actions.length !== event.actions.length) {
       next ??= { ...events };
       next[event.id] = { ...event, actions };
@@ -169,9 +202,10 @@ export const duplicateEvents = (
       ...event,
       id: createId("event"),
       ownerId: idMap.get(event.ownerId)!,
-      actions: event.actions.map((action) => {
-        const copy = { ...cloneTransition(action), id: createId("action") };
-        const targetCopy = idMap.get(action.targetId);
+      actions: event.actions.map((action): SceneAction => {
+        const copy = { ...cloneAction(action), id: createId("action") };
+        if (!isTransition(copy)) return copy;
+        const targetCopy = idMap.get(copy.targetId);
         if (!targetCopy) return copy;
 
         const mapRef = <T extends StateRef>(ref: T): T => (stateIdMap.get(ref) as T | undefined) ?? ref;
@@ -189,7 +223,7 @@ export const duplicateEvents = (
 
 /**
  * Events read from a document, in the shape everything else expects. Anything that isn't an event
- * is dropped, and so is any action that isn't a transition (see normalizeTransition). Keyed by
+ * is dropped, and so is any action of a type this build doesn't know (see normalizeAction). Keyed by
  * their own IDs.
  */
 export const normalizeEvents = (raw: unknown): Record<string, SceneEvent> => {
@@ -198,16 +232,17 @@ export const normalizeEvents = (raw: unknown): Record<string, SceneEvent> => {
   const events: Record<string, SceneEvent> = {};
   for (const value of Object.values(raw)) {
     if (!isRecord(value) || typeof value.id !== "string" || typeof value.ownerId !== "string") continue;
-    if (!EVENT_TRIGGERS.some((trigger) => trigger.value === value.trigger)) continue;
+    if (!isEventTrigger(value.trigger)) continue;
 
     events[value.id] = {
       id: value.id,
       ownerId: value.ownerId,
-      trigger: value.trigger as EventTrigger,
+      trigger: value.trigger,
+      ...(typeof value.key === "string" ? { key: value.key } : {}),
       order: typeof value.order === "number" && Number.isFinite(value.order) ? value.order : 0,
       actions: (Array.isArray(value.actions) ? value.actions : [])
-        .map(normalizeTransition)
-        .filter((action): action is TransitionAction => action !== null),
+        .map(normalizeAction)
+        .filter((action): action is SceneAction => action !== null),
     };
   }
   return events;

@@ -1,0 +1,73 @@
+/*
+ * The Play bar (PreviewControls): the floating Stop chip, and the scroll scrubber beside it when
+ * the scene has a Scroll event. Imported after components.css (index.css), whose .btn-chip and
+ * .preview-exit-btn look these keep.
+ */
+
+/* The bar takes the spot the Stop chip had alone; the chip sits in it. */
+.play-bar {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.play-bar .btn-chip.preview-exit-btn {
+  position: static;
+}
+
+.play-scrubber {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  backdrop-filter: blur(12px);
+}
+
+.play-scrubber input[type="range"] {
+  width: 180px;
+}
+
+/* The mute/unmute button on a scene with sound (components/ui/MuteButton.tsx): the editor's Play
+   places it over the viewport, the share page over the pinned canvas (position: fixed there). */
+.mute-button {
+  position: absolute;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--overlay-control-border);
+  border-radius: 50%;
+  background: var(--overlay-control-bg);
+  color: var(--overlay-control-fg);
+  backdrop-filter: blur(12px);
+  cursor: pointer;
+}
+
+.mute-button[data-position="bottomRight"] {
+  right: 24px;
+  bottom: 24px;
+}
+
+.mute-button:hover {
+  background: var(--overlay-control-bg-hover);
+}
+
+.mute-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.viewer-scroller .mute-button {
+  position: fixed;
+}

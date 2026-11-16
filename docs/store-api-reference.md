@@ -101,7 +101,7 @@ Named camera positions (viewport bookmarks). Default profile is always "personal
 #### `loadScene(content: StoredSceneContent | null) → void`
 Replaces the whole scene with a saved one, or with a new scene's starting content (a cube and the default light) when `content` is `null`. Called by `useOpenScene` when `/edit/:sceneId` opens.
 - **Deep merge**: `sceneSettings`, `postProcessing`, and `frame` are merged over the current defaults, so settings added since the scene was saved keep their defaults
-- **Camera profiles**: the "personal" profile is always present; an unknown `activeProfileId` falls back to it
+- **Camera profiles**: the "personal" profile is always present; an `activeProfileId` that names neither a profile nor a scene camera falls back to it
 - **Resets** selection and preview mode
 - **Clears undo history**: the editor no longer reloads the page between scenes, so Ctrl+Z must not reach into the previous one, and the load itself isn't an undoable step
 - **Works while read-only**: it writes past the read-only guard, so a view-only tab can show the latest saved scene. It leaves `readOnlyReason` as it is
@@ -122,8 +122,8 @@ Not an action: a selector (exported from the store module) returning the parts o
 ### Adding Entities
 
 #### `addEntity(type: EntityType) → string`
-Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, or group). A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), unlit (Lighting `none`) and shown from both sides (`doubleSided: true` on its Lighting layer), like the other flat objects; the 3D primitives start with Phong lighting over a white Color layer. A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
-- **Signature**: `(type: "cube" | "sphere" | "torus" | "plane" | "path" | "directionalLight" | "group") => string`
+Creates a single primitive entity (cube, sphere, torus, plane, path, directional light, group, or camera). A camera captures the current view (`createSceneCamera` in `scene/entityFactories.ts`): it is placed where the active camera profile is (the personal camera while looking through a scene camera), turned to look at its target (down its own -Z), with the profile's field of view, near and far, and the viewport's projection (an orthographic size of 5 at the profile's zoom); it has no material. A plane is a 1×1 square in its own XY plane, facing +Z (the default camera), unlit (Lighting `none`) and shown from both sides (`doubleSided: true` on its Lighting layer), like the other flat objects; the 3D primitives start with Phong lighting over a white Color layer. A path from here is a sample curve, radius 0.12 with round caps, drawn in full (trim 0–1).
+- **Signature**: `(type: "cube" | "sphere" | "torus" | "plane" | "path" | "directionalLight" | "group" | "camera") => string`
 - **Returns**: New entity ID
 - **Auto-selects**: The new entity becomes selected
 - **Example**:
@@ -150,6 +150,9 @@ Adds the shapes and paths of an imported SVG (made by `svgShapesToItems` in `pat
 Adds an imported picture (`importImageFile` in `utils/importImage.ts`) as an `"image"` entity named `name` at the origin: a flat plane `aspect` (width / height) wide, its longer side 2 units (`utils/imagePlane.ts`), stored as `imageAspect`. Its layers are an unlit Lighting layer (`model: "none"`) shown from both sides (`alphaMode: "BLEND"` when `transparent`, the picture having see-through pixels), a white Color layer, and a Base Color Image layer pointing at `textureAssetId` (the file's SHA-256 in the texture store), clamped at the edges. One undo step; refused in view only; puts the pen down.
 - **Returns**: New entity ID
 - **Auto-selects**: The new plane becomes selected
+
+#### `updateSceneCameras(ids: string[], updates: Partial<SceneCameraSettings>) → void`
+Sets lens fields (`projection`, `fov`, `orthoSize`, `near`, `far`) on every camera among `ids`, in one `set`, so a multi-selection is one undo step (the Camera panel). Other entity types are skipped; a size or distance that isn't a positive finite number makes it ignore the whole update. `fov` is a state value (C6): it goes to the state each camera is shown in (`selectViewedObjectState`), or the lens in Base, in the same `set`. Refused in view only (the content guard).
 
 #### `updateShapeSolids(ids: string[], updates: Partial<ShapeSolid>) → void`
 Sets the `extrusion` (depth) or `bevel` of every shape among `ids`, one undo step. Other entity types are skipped; a negative value is ignored.
@@ -324,6 +327,13 @@ Update background color, grid, fog, lighting, physics, etc.
   - `ambientEnabled`: Enable ambient light
   - `directionalEnabled`: Enable default directional light
   - `shadow`: "Off" | "Soft" | "Hard"
+- **scroll** (nested): how Scroll events follow the share page's scroll (the Scene panel shows it only for a scene with a Scroll event). Older scenes open with the defaults (deep merge), so it needed no document bump.
+  - `length`: How much scrolling plays them from start to end, in screen heights (1-10, default 3, shown as 300%)
+  - `smooth`: Ease the shown progress toward the scrolled one (default on; skipped with reduced motion)
+- **audioButton** (nested): the mute/unmute button a scene with sound shows in Play and on the share page (the Scene panel shows it only for a scene with sound). Scenes start muted either way. Deep-merged like `scroll`, so older scenes get the defaults.
+  - `visible`: Show the button (default on). Off, the scene stays muted unless the page it's embedded in unmutes it in code (`SceneViewer.setMuted(false)`)
+  - `position`: Where it sits; only `"bottomRight"` for now (later looks will be added to this object)
+- **play** (nested, optional, C7): how the camera moves in Play and on the share page, one set per scene (`PlayCameraSettings`: `mode` `"fixed" | "softOrbit" | "orbit" | "autoRotate"`, `range`, `smoothness`, `speed`), edited in the Export dialog (`PlaySettingsPanel`). Not in the defaults: a scene without it plays with its active camera profile's `play`, as before (`resolveScenePlay` in `viewport/PlayCamera.ts`), so it needed no document bump. The panel writes the whole setting on its first change. A published page takes a change only after Update Published Scene. Later Play settings (decision tree §G6) go in this object.
 - **physics** (nested):
   - `enabled`: Enable physics simulation
   - `gravityY`: Gravity vector Y component
@@ -631,13 +641,14 @@ Not an action: the state an object is shown in, or `null` for Base. Read it thro
 
 ## Events
 
-The second part of state-based animation. An event is a trigger on an object (its owner: `start` when Play begins, `mouseDown` when the owner or one of its descendants is clicked in Play) and the transitions it runs. Events live in `animation.events`, keyed by ID. A transition's actions and steps are small ordered lists inside the event, always replaced whole. The logic is in `animation/events.ts`, `animation/transitions.ts`, and `animation/sceneRuntime.ts` (what Play runs), none of which depend on the store, React, or the DOM.
+The second part of state-based animation. An event is a trigger on an object (its owner) and the transitions it runs: `start` when Play begins; the pointer triggers `mouseDown` (a press), `mouseUp` (a release) and `mouseHover` (the pointer entering it, once per entry, no hover-out) when the pointer is on the owner or one of its descendants in Play. The document also knows `keyDown`, `keyUp` (with the event's `key`, a `KeyboardEvent.code`) and `scroll` since schema v6, kept but not fired until they are built; the trigger dropdown offers only what fires (`EVENT_TRIGGERS`), the full table is `TRIGGER_INFO`. Events live in `animation.events`, keyed by ID. A transition's actions and steps are small ordered lists inside the event, always replaced whole. The logic is in `animation/events.ts`, `animation/transitions.ts`, and `animation/sceneRuntime.ts` (what Play runs), none of which depend on the store, React, or the DOM.
 
 ```typescript
 interface SceneEvent {
   id: string;
   ownerId: string;                  // entity ID
-  trigger: "start" | "mouseDown";
+  trigger: "start" | "mouseDown" | "mouseUp" | "mouseHover" | "keyDown" | "keyUp" | "scroll";
+  key?: string;                     // Key Down / Key Up: a KeyboardEvent.code ("KeyW", "Space")
   order: number;                    // position in the object's Events list
   actions: TransitionAction[];
 }
@@ -657,11 +668,11 @@ interface TransitionAction {
 
 A row naming no state of the target (a deleted state, another object's, or `""` for none picked) or a missing target makes Play skip that transition, and the inspector says "Pick a state" / "Pick a target".
 
-#### `addEvent(ownerId: string, trigger: "start" | "mouseDown") → string`
+#### `addEvent(ownerId: string, trigger: EventTrigger) → string`
 Add an event to an object, last in its list, with one transition of the object from Base to its first state (none picked yet if it has none), 1 s, Ease In Out. Returns its ID (`""` if the object isn't there).
 
-#### `updateEvent(eventId: string, updates: { trigger?, actions? }) → void`
-Change an event's trigger, or replace its actions (copied in). One undo step.
+#### `updateEvent(eventId: string, updates: { trigger?, key?, actions? }) → void`
+Change an event's trigger, set a Key Down or Key Up event's key (a `KeyboardEvent.code`, as the Edit Event panel's key field captures it), or replace its actions (copied in; any of the action types, `SceneAction` in `animation/actions.ts`: Transition, Open Link, Sound; a Sound action's `assetId` is an audio asset's content hash, its `name` the file's name when added). One undo step.
 
 #### `removeEvent(eventId: string) → void`
 Delete an event.
@@ -677,7 +688,7 @@ Camera profiles are named bookmarks of camera position, target, and FOV.
 ### Selecting Profiles
 
 #### `setActiveProfile(id: string) → void`
-Switch to a camera profile by ID. Instantly updates viewport camera.
+Switch to a camera profile, or to a scene camera entity to look through it (C6), by ID. Instantly updates the viewport camera. What the ID resolves to is `resolveActiveCamera` (`scene/activeCamera.ts`): a scene camera deleted while active leaves its ID in place and the view falls back to the personal camera, so undoing the deletion looks through it again. Not in undo history.
 
 ### Creating Profiles
 
@@ -721,7 +732,7 @@ Delete a profile by ID.
 #### `updateProfileData(id: string, updates: Partial<CameraProfile>) → void`
 Update an existing profile's data.
 - **Clones vectors**: Position and target are cloned (never hand out references)
-- **Partial updates**: Only provided fields are changed; `play` is replaced as a whole, so pass it merged (`PlayCameraPanel` does)
+- **Partial updates**: Only provided fields are changed; `play` is replaced as a whole. A profile's `play` is no longer written by the editor (C7): it is read only for a scene without `sceneSettings.play`
 
 ---
 

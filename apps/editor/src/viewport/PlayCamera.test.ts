@@ -1,7 +1,9 @@
 import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import type { PlayCameraSettings } from "../store/useEditorStore";
+import type { SceneCameraSettings } from "../scene/types";
 import { DEFAULT_PLAY_CAMERA, PlayCamera, resolvePlayCamera } from "./PlayCamera";
+import { SceneCameraObject } from "./sceneCameraObject";
 
 // The scene camera: 10 in front of a target at (0, 1, 0), level with it.
 const start = { position: [0, 1, 10] as [number, number, number], target: [0, 1, 0] as [number, number, number], fov: 45, near: 0.1, far: 1000 };
@@ -133,6 +135,72 @@ describe("PlayCamera", () => {
     const camera = make({ mode: "fixed" });
     camera.setAspect(1);
 
-    expect(camera.camera.aspect).toBe(1);
+    expect((camera.camera as THREE.PerspectiveCamera).aspect).toBe(1);
+  });
+});
+
+describe("PlayCamera following a scene camera (C6)", () => {
+  const lens: SceneCameraSettings = { projection: "perspective", fov: 50, orthoSize: 4, near: 0.2, far: 300 };
+  const start = { position: [0, 5, 10] as [number, number, number], target: [0, 0, 0] as [number, number, number], fov: 45, near: 0.1, far: 1000 };
+
+  // A scene camera in a group moved and turned, itself turned: its world transform is what's followed.
+  const parented = (settings = lens) => {
+    const group = new THREE.Group();
+    group.position.set(4, 0, 0);
+    group.rotation.set(0, Math.PI / 2, 0);
+    const camera = new SceneCameraObject(settings, false);
+    camera.position.set(0, 2, 3);
+    camera.rotation.set(-0.3, 0, 0);
+    group.add(camera);
+    return { group, camera };
+  };
+
+  it("is where the scene camera is in the world, looking its way, with its lens, as Fixed", () => {
+    const { camera } = parented();
+    const play = new PlayCamera(start, { mode: "orbit", range: 8, smoothness: 0.5, speed: 6 }, 2, { follow: camera });
+    camera.updateWorldMatrix(true, false);
+    const world = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+    const looks = new THREE.Vector3(0, 0, -1).transformDirection(camera.matrixWorld);
+
+    expect(play.isFollowing).toBe(true);
+    expect(play.mode).toBe("fixed");
+    expect(play.beginDrag(10, 10)).toBe(false);
+    expect(play.camera.position.distanceTo(world)).toBeLessThan(1e-9);
+    expect(play.camera.getWorldDirection(new THREE.Vector3()).distanceTo(looks)).toBeLessThan(1e-9);
+    expect(play.camera).toBeInstanceOf(THREE.PerspectiveCamera);
+    expect(play.camera).toMatchObject({ fov: 50, near: 0.2, far: 300, aspect: 2 });
+  });
+
+  it("moves with the object and its posed field of view on each update", () => {
+    const { group, camera } = parented();
+    const play = new PlayCamera(start, resolvePlayCamera(undefined), 1, { follow: camera });
+
+    group.position.set(0, 7, 0);
+    camera.setPosedFov(80);
+    play.update(0.016);
+
+    camera.updateWorldMatrix(true, false);
+    expect(play.camera.position.distanceTo(new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld))).toBeLessThan(1e-9);
+    expect((play.camera as THREE.PerspectiveCamera).fov).toBe(80);
+  });
+
+  it("is orthographic for an orthographic scene camera, as tall as its size, as wide as the canvas", () => {
+    const { camera } = parented({ ...lens, projection: "orthographic" });
+    const play = new PlayCamera(start, resolvePlayCamera(undefined), 2, { follow: camera });
+    const ortho = play.camera as THREE.OrthographicCamera;
+
+    expect(ortho).toBeInstanceOf(THREE.OrthographicCamera);
+    expect((ortho.top - ortho.bottom) / ortho.zoom).toBeCloseTo(8);
+    expect((ortho.right - ortho.left) / ortho.zoom).toBeCloseTo(16);
+    play.setAspect(0.5);
+    expect((ortho.right - ortho.left) / ortho.zoom).toBeCloseTo(4);
+    expect((ortho.top - ortho.bottom) / ortho.zoom).toBeCloseTo(8);
+  });
+
+  it("keeps a profile's camera as before when it follows nothing", () => {
+    const play = new PlayCamera(start, resolvePlayCamera({ mode: "orbit" }), 1.5);
+    expect(play.isFollowing).toBe(false);
+    expect(play.mode).toBe("orbit");
+    expect((play.camera as THREE.PerspectiveCamera).aspect).toBe(1.5);
   });
 });

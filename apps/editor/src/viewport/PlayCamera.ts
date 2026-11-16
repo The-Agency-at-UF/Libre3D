@@ -20,13 +20,20 @@
  * `smoothness` is how slowly it eases (soft orbit and orbit). With the system's reduce-motion
  * setting on, soft orbit and auto-rotate keep still; dragging still works.
  *
+ * Looking through a scene camera (C6, `follow`), it is that camera each frame instead: where its
+ * object is (states and transitions move it), with its lens, perspective or orthographic. It plays
+ * as Fixed whatever the setting: turning around a target on top of an animated camera isn't built.
+ * Call `update` after the frame's poses are applied, so it shows where the camera is this frame.
+ *
  * Nothing here depends on the store or React; the DOM only in `attach`.
  */
 
 import * as THREE from "three";
 import type { CameraProfile, PlayCameraMode, PlayCameraSettings } from "../scene/types";
+import type { SceneCameraObject } from "./sceneCameraObject";
+import { followSceneCamera, type ViewCamera } from "./sceneCameraView";
 
-/** The modes in the order the Play Camera panel lists them. */
+/** The modes in the order the Export dialog's Play settings list them. */
 export const PLAY_CAMERA_MODES: { value: PlayCameraMode; label: string }[] = [
   { value: "fixed", label: "Fixed" },
   { value: "softOrbit", label: "Soft Orbit" },
@@ -56,12 +63,24 @@ export const resolvePlayCamera = (settings: Partial<PlayCameraSettings> | undefi
   speed: numberIn(settings?.speed, PLAY_CAMERA_LIMITS.speed, DEFAULT_PLAY_CAMERA.speed),
 });
 
+/**
+ * The Play setting a scene plays with (C7): the scene's own (`sceneSettings.play`), else, for a
+ * scene from before it, the active camera profile's `play`, else the defaults; filled and clamped.
+ * The one place this order is written: editor Play and the share-link viewer both call it. A scene
+ * camera that is looked through plays Fixed whatever this says (`follow`).
+ */
+export const resolveScenePlay = (
+  scenePlay: Partial<PlayCameraSettings> | undefined,
+  profilePlay: Partial<PlayCameraSettings> | undefined,
+): PlayCameraSettings => resolvePlayCamera(scenePlay ?? profilePlay);
+
 const DEGREES = Math.PI / 180;
 const PITCH_SHARE = 0.6; // soft orbit turns this much less up and down than sideways
 const POLE_MARGIN = 0.05; // radians kept from straight up and down
 
 export class PlayCamera {
-  readonly camera: THREE.PerspectiveCamera;
+  /** Perspective, but for an orthographic scene camera it follows. */
+  readonly camera: ViewCamera;
   private readonly settings: PlayCameraSettings;
   private readonly target: THREE.Vector3;
   private readonly rest: THREE.Spherical; // the scene camera around its target
@@ -71,19 +90,30 @@ export class PlayCamera {
   private goalYaw = 0;
   private goalPitch = 0;
   private dragFrom: { x: number; y: number } | null = null;
+  private readonly follow: SceneCameraObject | null; // the scene camera it looks through, if any
 
   constructor(
     start: Pick<CameraProfile, "position" | "target" | "fov" | "near" | "far">,
     settings: PlayCameraSettings,
     aspect: number,
-    { reduceMotion = false }: { reduceMotion?: boolean } = {},
+    { reduceMotion = false, follow = null }: { reduceMotion?: boolean; follow?: SceneCameraObject | null } = {},
   ) {
-    this.settings = settings;
+    this.follow = follow;
+    this.settings = follow ? { ...settings, mode: "fixed" } : settings;
     this.still = reduceMotion;
     this.target = new THREE.Vector3(...start.target);
     this.rest = new THREE.Spherical().setFromVector3(new THREE.Vector3(...start.position).sub(this.target));
-    this.camera = new THREE.PerspectiveCamera(start.fov, aspect, start.near, start.far);
+    // An orthographic camera one unit tall each way of its middle: following zooms it to the scene camera's size.
+    this.camera =
+      follow?.lens.projection === "orthographic"
+        ? new THREE.OrthographicCamera(-aspect, aspect, 1, -1, follow.lens.near, follow.lens.far)
+        : new THREE.PerspectiveCamera(start.fov, aspect, start.near, start.far);
     this.pose();
+  }
+
+  /** Whether it looks through a scene camera. */
+  get isFollowing(): boolean {
+    return this.follow !== null;
   }
 
   get mode(): PlayCameraMode {
@@ -91,9 +121,18 @@ export class PlayCamera {
   }
 
   setAspect(aspect: number): void {
-    if (!(aspect > 0) || this.camera.aspect === aspect) return;
-    this.camera.aspect = aspect;
-    this.camera.updateProjectionMatrix();
+    if (!(aspect > 0)) return;
+    const camera = this.camera;
+    if (camera instanceof THREE.PerspectiveCamera) {
+      if (camera.aspect === aspect) return;
+      camera.aspect = aspect;
+    } else {
+      // The height stays; the width follows the canvas, as the editor's orthographic camera does.
+      if (camera.right === aspect * camera.top) return;
+      camera.left = -aspect * camera.top;
+      camera.right = aspect * camera.top;
+    }
+    camera.updateProjectionMatrix();
   }
 
   /** Where the pointer is over the canvas, -1 to 1 each way with y up; null once it has left. */
@@ -129,6 +168,8 @@ export class PlayCamera {
 
   /** Moves time on by `dt` seconds and poses the camera. */
   update(dt: number): void {
+    // A followed camera is wherever its object is this frame, whatever time did.
+    if (this.follow) return this.pose();
     if (!(dt > 0)) return;
     const { mode, smoothness, speed } = this.settings;
     if (mode === "autoRotate") {
@@ -200,6 +241,10 @@ export class PlayCamera {
   }
 
   private pose(): void {
+    if (this.follow) {
+      followSceneCamera(this.camera, this.follow);
+      return;
+    }
     const phi = clamp(this.rest.phi - this.pitch, POLE_MARGIN, Math.PI - POLE_MARGIN);
     const offset = new THREE.Vector3().setFromSphericalCoords(this.rest.radius, phi, this.rest.theta + this.yaw);
     this.camera.position.copy(this.target).add(offset);

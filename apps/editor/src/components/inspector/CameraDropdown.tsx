@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 
 export interface CameraDropdownProps {
   value: string;
-  options: Array<{ id: string; name: string }>;
+  /** The profiles, then the scene cameras (`deletable: false`: they're deleted from the hierarchy). */
+  options: Array<{ id: string; name: string; deletable?: boolean }>;
   onSelect: (id: string) => void;
   onAddNew: () => void;
   onDelete: (id: string) => void;
@@ -62,7 +63,7 @@ export function CameraDropdown({ value, options, onSelect, onAddNew, onDelete }:
               >
                 {option.name}
               </button>
-              {option.id !== "personal" ? (
+              {option.id !== "personal" && option.deletable !== false ? (
                 <button
                   type="button"
                   className="camera-dropdown-delete"

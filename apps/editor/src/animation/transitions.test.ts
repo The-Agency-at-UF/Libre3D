@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { applyEasing } from "./easing";
-import { previewTiming, sampleTransition, transitionRows, type TransitionTiming } from "./transitions";
+import {
+  clampProgress,
+  previewTiming,
+  sampleTransition,
+  sampleTransitionAt,
+  scrubTiming,
+  transitionLength,
+  transitionRows,
+  type TransitionTiming,
+} from "./transitions";
 
 const timing = (overrides: Partial<TransitionTiming> = {}): TransitionTiming => ({
   steps: [{ to: "up", duration: 1, easing: "linear" }],
@@ -177,5 +186,48 @@ describe("transitionRows and previewTiming", () => {
     expect(previewTiming(timing({ delay: 2, loop: "infinite" }))).toMatchObject({ delay: 0, loop: 0 });
     expect(previewTiming(timing({ loop: 5, cycle: "pingPong" }))).toMatchObject({ delay: 0, loop: 1 });
     expect(previewTiming(timing({ loop: 0, cycle: "pingPong" }))).toMatchObject({ loop: 0 });
+  });
+});
+
+describe("scrubbing by progress", () => {
+  // Three steps of 1 s, 2 s and 1 s: 4 s in all.
+  const steps: TransitionTiming["steps"] = [
+    { to: "a", duration: 1, easing: "linear" },
+    { to: "b", duration: 2, easing: "easeIn" },
+    { to: "c", duration: 1, easing: "linear" },
+  ];
+  const looping: TransitionTiming = { steps, delay: 3, delayRepeat: "startEnd", loop: "infinite", cycle: "pingPong" };
+  const timing = scrubTiming(looping);
+  const length = transitionLength(timing);
+
+  it("adds up the step durations, a bad one as 0", () => {
+    expect(length).toBe(4);
+    expect(transitionLength({ steps: [...steps, { to: "d", duration: Number.NaN, easing: "linear" }, { to: "e", duration: -2, easing: "linear" }] })).toBe(4);
+  });
+
+  it("drops the Delay, Loop and Cycle, keeping the steps", () => {
+    expect(timing).toEqual({ steps, delay: 0, delayRepeat: "none", loop: 0, cycle: "restart" });
+  });
+
+  it("lands on the right step and eased amount, paced by the durations", () => {
+    expect(sampleTransitionAt(timing, length, 0)).toEqual({ from: 0, to: 1, progress: 0, finished: false });
+    expect(sampleTransitionAt(timing, length, 0.125)).toEqual({ from: 0, to: 1, progress: 0.5, finished: false });
+    // 0.5 is 2 s in: halfway through the 2 s step, eased in.
+    expect(sampleTransitionAt(timing, length, 0.5)).toEqual({ from: 1, to: 2, progress: applyEasing("easeIn", 0.5), finished: false });
+    expect(sampleTransitionAt(timing, length, 0.875)).toEqual({ from: 2, to: 3, progress: 0.5, finished: false });
+    expect(sampleTransitionAt(timing, length, 1)).toMatchObject({ from: 3, to: 3 });
+  });
+
+  it("clamps out-of-range progress, and reads NaN as 0", () => {
+    expect(sampleTransitionAt(timing, length, -1)).toEqual(sampleTransitionAt(timing, length, 0));
+    expect(sampleTransitionAt(timing, length, 7)).toEqual(sampleTransitionAt(timing, length, 1));
+    expect(sampleTransitionAt(timing, length, Number.NaN)).toEqual(sampleTransitionAt(timing, length, 0));
+    expect([clampProgress(-0.5), clampProgress(0.25), clampProgress(2), clampProgress(Number.NaN)]).toEqual([0, 0.25, 1, 0]);
+  });
+
+  it("puts a sequence that takes no time at its end, without dividing by zero", () => {
+    const instant = scrubTiming({ steps: [{ to: "a", duration: 0, easing: "linear" }] });
+    expect(transitionLength(instant)).toBe(0);
+    expect(sampleTransitionAt(instant, 0, 0.5)).toEqual({ from: 1, to: 1, progress: 0, finished: true });
   });
 });

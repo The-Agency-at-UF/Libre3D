@@ -7,7 +7,7 @@
  * same values without loading the store.
  */
 
-import type { CameraProfile, FrameSettingsConfig, PostProcessingConfig, SceneSettingsConfig } from "./types";
+import type { CameraProfile, FrameSettingsConfig, PostProcessingConfig, SceneCameraSettings, SceneSettingsConfig } from "./types";
 
 export const initialPostProcessingDefaults: PostProcessingConfig = {
   enabled: true,
@@ -74,6 +74,14 @@ export const initialSceneDefaults: SceneSettingsConfig = {
     directionalEnabled: true,
     shadow: "Soft",
   },
+  scroll: {
+    length: 3,
+    smooth: true,
+  },
+  audioButton: {
+    visible: true,
+    position: "bottomRight",
+  },
   physics: {
     enabled: false,
     gravityY: -9.8,
@@ -100,4 +108,13 @@ export const DEFAULT_CAMERA_PROFILE: CameraProfile = {
   near: 0.1,
   far: 1000,
   zoom: 1,
+};
+
+/** A new scene camera's lens: the personal camera's (orthoSize is its half-height at zoom 1). */
+export const DEFAULT_SCENE_CAMERA: SceneCameraSettings = {
+  projection: "perspective",
+  fov: DEFAULT_CAMERA_PROFILE.fov,
+  orthoSize: 5,
+  near: DEFAULT_CAMERA_PROFILE.near,
+  far: DEFAULT_CAMERA_PROFILE.far,
 };

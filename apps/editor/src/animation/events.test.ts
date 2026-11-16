@@ -5,13 +5,21 @@ import {
   duplicateEvents,
   getEventsUsingState,
   getObjectEvents,
+  hasSoundActions,
   normalizeEvents,
   removeEventsOf,
   transitionProblem,
+  EVENT_TRIGGERS,
+  TRIGGER_INFO,
+  type EventTrigger,
   type SceneEvent,
 } from "./events";
 import type { ObjectState } from "./objectStates";
 import type { TransitionAction } from "./transitions";
+import type { OpenLinkAction, SoundAction } from "./actions";
+
+/** An event's actions, as the transitions these tests give it. */
+const transitions = (event: SceneEvent) => event.actions as TransitionAction[];
 
 const state = (id: string, targetId: string, order = 0): ObjectState => ({ id, targetId, name: id, order, values: {} });
 
@@ -116,7 +124,7 @@ describe("removeEventsOf", () => {
     const next = removeEventsOf(events, new Set(["sphere"]));
 
     expect(Object.keys(next).sort()).toEqual(["click", "only", "untouched"]);
-    expect(next.click.actions.map((a) => a.targetId)).toEqual(["cube"]);
+    expect(transitions(next.click).map((a) => a.targetId)).toEqual(["cube"]);
     expect(next.only.actions).toEqual([]);
     expect(next.untouched).toBe(events.untouched);
     expect(events.click.actions).toHaveLength(2);
@@ -144,14 +152,14 @@ describe("duplicateEvents", () => {
     expect(copies).toHaveLength(2);
     expect(copies.every((copy) => !(copy.id in events))).toBe(true);
 
-    const self = copies.find((copy) => copy.actions[0].targetId === "cube-copy")!;
-    expect(self.actions[0].from).toBe("down-copy");
-    expect(self.actions[0].steps.map((step) => step.to)).toEqual(["up-copy", "base"]);
-    expect(self.actions[0].id).not.toBe(events.self.actions[0].id);
+    const self = copies.find((copy) => transitions(copy)[0].targetId === "cube-copy")!;
+    expect(transitions(self)[0].from).toBe("down-copy");
+    expect(transitions(self)[0].steps.map((step) => step.to)).toEqual(["up-copy", "base"]);
+    expect(transitions(self)[0].id).not.toBe(transitions(events.self)[0].id);
 
     // An action moving an object that wasn't duplicated still moves it.
-    const other = copies.find((copy) => copy.actions[0].targetId === "ball")!;
-    expect(other.actions[0].steps[0].to).toBe("ballUp");
+    const other = copies.find((copy) => transitions(copy)[0].targetId === "ball")!;
+    expect(transitions(other)[0].steps[0].to).toBe("ballUp");
   });
 
   it("shares nothing with the originals, and returns the same events when there's nothing to copy", () => {
@@ -159,13 +167,35 @@ describe("duplicateEvents", () => {
     const next = duplicateEvents(events, new Map([["cube", "copy"]]), new Map());
     const copy = Object.values(next).find((e) => e.ownerId === "copy")!;
 
-    copy.actions[0].steps[0].duration = 99;
-    expect(events.e.actions[0].steps[0].duration).toBe(1);
+    transitions(copy)[0].steps[0].duration = 99;
+    expect(transitions(events.e)[0].steps[0].duration).toBe(1);
     expect(duplicateEvents(events, new Map([["ball", "copy"]]), new Map())).toBe(events);
   });
 });
 
 describe("normalizeEvents", () => {
+  it("keeps every trigger the document may hold, offered in the dropdown or not", () => {
+    const triggers = Object.keys(TRIGGER_INFO) as EventTrigger[];
+    const events = byId(...triggers.map((trigger) => event(trigger, { trigger })));
+
+    expect(triggers).toEqual(["start", "mouseDown", "mouseUp", "mouseHover", "keyDown", "keyUp", "scroll"]);
+    expect(normalizeEvents(events)).toEqual(events);
+    expect(EVENT_TRIGGERS.map((option) => option.value)).toEqual(["start", "mouseDown", "mouseUp", "mouseHover", "keyDown", "keyUp", "scroll"]);
+    expect(EVENT_TRIGGERS.map((option) => option.label)).toEqual(["Start", "Mouse Down", "Mouse Up", "Mouse Hover", "Key Down", "Key Up", "Scroll"]);
+  });
+
+  it("drops an unknown trigger, and a trigger that is a built-in object property", () => {
+    expect(normalizeEvents(byId(event("e", { trigger: "hover" as EventTrigger }), event("f", { trigger: "constructor" as EventTrigger })))).toEqual({});
+  });
+
+  it("keeps an event's key when it's a string and drops it otherwise", () => {
+    const keyed = event("k", { trigger: "keyDown", key: "KeyW" });
+
+    expect(normalizeEvents(byId(keyed))).toEqual(byId(keyed));
+    expect(normalizeEvents({ k: { ...keyed, key: 87 } })).toEqual(byId(event("k", { trigger: "keyDown" })));
+    expect(normalizeEvents(byId(keyed)).k).not.toHaveProperty("key", undefined);
+  });
+
   it("keeps well-formed events as they are", () => {
     const events = byId(event("e", { trigger: "mouseDown", order: 2 }));
 
@@ -173,13 +203,13 @@ describe("normalizeEvents", () => {
     expect(normalizeEvents(events).e).not.toBe(events.e);
   });
 
-  it("drops what isn't an event or a transition and fills in missing settings", () => {
+  it("drops what isn't an event or an action this build knows, and fills in missing settings", () => {
     expect(normalizeEvents(null)).toEqual({});
     expect(normalizeEvents([event("e")])).toEqual({});
     expect(
       normalizeEvents({
         bad: { id: "bad", ownerId: "cube", trigger: "hover", actions: [] },
-        ok: { id: "ok", ownerId: "cube", trigger: "start", actions: [{ type: "sound", id: "s" }, { id: "t", type: "transition", targetId: "cube", from: "base", steps: [{ to: "up", duration: -2, easing: "bounce" }], loop: 2.7 }] },
+        ok: { id: "ok", ownerId: "cube", trigger: "start", actions: [{ type: "teleport", id: "s" }, { id: "t", type: "transition", targetId: "cube", from: "base", steps: [{ to: "up", duration: -2, easing: "bounce" }], loop: 2.7 }] },
       }),
     ).toEqual({
       ok: {
@@ -192,5 +222,48 @@ describe("normalizeEvents", () => {
         ],
       },
     });
+  });
+
+  it("keeps a mixed list of actions in order", () => {
+    const link = { id: "l", type: "openLink", url: "https://example.com", newTab: false };
+    const sound = { id: "s", type: "sound", assetId: "abc", volume: 0.5, loop: true, mode: "stop" };
+    const events = normalizeEvents({ e: { ...event("e"), actions: [link, transition({ id: "t" }), sound] } });
+
+    expect(events.e.actions).toEqual([link, transition({ id: "t" }), sound]);
+  });
+});
+
+describe("events with Open Link and Sound actions", () => {
+  const link: OpenLinkAction = { id: "link", type: "openLink", url: "https://example.com", newTab: true };
+  const sound: SoundAction = { id: "sound", type: "sound", assetId: "abc", volume: 1, loop: false, mode: "play" };
+
+  it("keeps link and sound actions when a deleted object's transitions go", () => {
+    const events = byId(event("click", { ownerId: "button", actions: [link, transition({ targetId: "sphere" }), sound] }));
+
+    expect(removeEventsOf(events, new Set(["sphere"])).click.actions).toEqual([link, sound]);
+  });
+
+  it("copies all three kinds onto a duplicate, each with a new ID", () => {
+    const events = byId(event("e", { actions: [transition(), link, sound] }));
+    const next = duplicateEvents(events, new Map([["cube", "cube-copy"]]), new Map());
+    const copy = Object.values(next).find((e) => e.ownerId === "cube-copy")!;
+
+    expect(copy.actions.map((action) => action.type)).toEqual(["transition", "openLink", "sound"]);
+    expect(copy.actions.every((action, i) => action.id !== events.e.actions[i].id)).toBe(true);
+    expect(copy.actions[1]).toMatchObject({ url: "https://example.com", newTab: true });
+    expect(copy.actions[1]).not.toBe(link);
+  });
+});
+
+
+describe("hasSoundActions", () => {
+  const withActions = (actions: unknown[]) => ({ e: { id: "e", ownerId: "cube", trigger: "start", actions } }) as never;
+
+  it("is true only for an event that plays a picked sound", () => {
+    expect(hasSoundActions({})).toBe(false);
+    expect(hasSoundActions(withActions([{ id: "s", type: "sound", assetId: "abc", volume: 1, loop: false, mode: "play" }]))).toBe(true);
+    expect(hasSoundActions(withActions([{ id: "s", type: "sound", assetId: "", volume: 1, loop: false, mode: "play" }]))).toBe(false);
+    expect(hasSoundActions(withActions([{ id: "s", type: "sound", assetId: "abc", volume: 1, loop: false, mode: "stop" }]))).toBe(false);
+    expect(hasSoundActions(withActions([{ id: "l", type: "openLink", url: "https://example.com", newTab: true }]))).toBe(false);
   });
 });

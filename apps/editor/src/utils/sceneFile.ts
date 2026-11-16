@@ -18,7 +18,7 @@
  * for changes to the layout itself. Store-free and DOM-free, so it's tested in Node.
  */
 
-import { collectAssetRefs, hashAsset, isAssetHash, MAX_ASSET_BYTES, type AssetKind } from "./sceneAssets";
+import { collectAssetRefs, hashAsset, isAssetHash, isAssetKind, MAX_ASSET_BYTES, type AssetKind, type SceneAssetSources } from "./sceneAssets";
 import { parseSceneDocument, type SceneDocument, type StoredSceneContent } from "./sceneDocument";
 
 export const SCENE_FILE_EXTENSION = ".libre3d";
@@ -146,7 +146,7 @@ export const readSceneFile = async (data: ArrayBuffer): Promise<ReadSceneFile> =
   const assets: SceneFileAsset[] = [];
 
   for (const entry of parsed.assets) {
-    if (!isPlainObject(entry) || !isAssetHash(entry.hash) || (entry.kind !== "model" && entry.kind !== "texture")) return invalid;
+    if (!isPlainObject(entry) || !isAssetHash(entry.hash) || !isAssetKind(entry.kind)) return invalid;
     if (!isByteCount(entry.byteOffset) || !isByteCount(entry.byteLength) || entry.byteLength > MAX_ASSET_BYTES) return invalid;
     if (!bin || entry.byteOffset + entry.byteLength > bin.byteLength) return invalid;
     // A copy, so each asset can be stored on its own rather than keeping the whole file alive.
@@ -165,5 +165,5 @@ export const readSceneFile = async (data: ArrayBuffer): Promise<ReadSceneFile> =
 };
 
 /** The imported assets a scene's entities and material assets use that are content-addressed (the ones a file can carry). */
-export const sceneFileAssetRefs = (entities: unknown, materials?: unknown) => collectAssetRefs(entities, materials).filter((ref) => isAssetHash(ref.id));
+export const sceneFileAssetRefs = (scene: SceneAssetSources) => collectAssetRefs(scene).filter((ref) => isAssetHash(ref.id));
 

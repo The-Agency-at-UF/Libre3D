@@ -8,9 +8,11 @@
  *
  * Built from the editor's own pieces, not copies of them, so a published scene looks and behaves
  * as it did in Play: the same renderer settings (rendererSettings.ts), scene (SceneManager, with its
- * environment light), objects (ObjectManager), events (SceneRuntime: Start events on load, Mouse
- * Down on a click, a pointer cursor over what can be clicked) and camera (PlayCamera, with the
- * scene camera's Play setting). The editor's own objects (grid, light helpers, outlines) are never
+ * environment light), objects (ObjectManager), events (SceneRuntime: Start events on load), pointer
+ * input (playInput.ts: the pointer and key triggers, a pointer cursor over what can be clicked) and camera
+ * (PlayCamera, with the scene camera's Play setting, or following the scene camera picked in the
+ * editor, C6). Scroll events follow `setScrollProgress`,
+ * which the page calls from its scroll (eased by the scene's smoothing setting, scrollProgress.ts). The editor's own objects (grid, light helpers, outlines) are never
  * built (`editorHelpers: false`), so there is nothing to hide. Nothing here loads the editor's
  * store: the published scene is the only state, and nothing is ever saved.
  *
@@ -19,24 +21,32 @@
  */
 
 import * as THREE from "three";
+import { hasSoundActions } from "../animation/events";
 import { fadingObjects } from "../animation/objectStates";
 import { SceneRuntime } from "../animation/sceneRuntime";
+import { clampProgress } from "../animation/transitions";
 import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialSceneDefaults } from "../scene/defaults";
 import { resolveEntities } from "../scene/materialAssets";
 
 import type { CameraProfile, SceneSettingsConfig } from "../scene/types";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
-import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
+import { PlayCamera, resolveScenePlay } from "./PlayCamera";
+import { SceneCameraObject } from "./sceneCameraObject";
+import { resolveActiveCamera } from "../scene/activeCamera";
 import { pickEntityAt } from "./pickEntity";
+import { createPlayEffects } from "./playEffects";
+import { attachPlayInput, type PlayInputKeyTarget } from "./playInput";
+import { SceneAudio } from "./sceneAudio";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
+import { easeScrollProgress } from "./scrollProgress";
 import { SceneManager } from "./SceneManager";
 import type { SceneSource } from "./sceneSource";
 
 /** The scene settings SceneManager draws with, the stored ones over the defaults. */
 export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"]): SceneSettingsConfig =>
-  // SceneManager reads only these; the rest of the settings are the editor's.
+  // SceneManager reads these, and the viewer the scroll settings; the rest are the editor's.
   ({
     bgColor: stored?.bgColor ?? initialSceneDefaults.bgColor,
     fogEnabled: stored?.fogEnabled ?? initialSceneDefaults.fogEnabled,
@@ -46,33 +56,70 @@ export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"])
       intensity: stored?.environment?.intensity ?? initialSceneDefaults.environment.intensity,
     },
     lights: { intensity: stored?.lights?.intensity ?? initialSceneDefaults.lights.intensity },
+    // Read by the viewer itself, for Scroll events.
+    scroll: {
+      length: stored?.scroll?.length ?? initialSceneDefaults.scroll.length,
+      smooth: stored?.scroll?.smooth ?? initialSceneDefaults.scroll.smooth,
+    },
+    // Read by the page, for the mute button.
+    audioButton: {
+      visible: stored?.audioButton?.visible ?? initialSceneDefaults.audioButton.visible,
+      position: initialSceneDefaults.audioButton.position,
+    },
+    // Read by the viewer's camera, through resolveScenePlay (unset in scenes from before C7).
+    ...(stored?.play ? { play: { ...stored.play } } : null),
   }) as SceneSettingsConfig;
 
-/** The camera a published scene starts from: its active profile, over the default camera's values. */
+/**
+ * The camera profile a published scene starts from, over the default camera's values: the active
+ * one (scene/activeCamera.ts), or the personal one when a scene camera is active. Its `play` is
+ * read only for a scene without `sceneSettings.play` (resolveScenePlay).
+ */
 export const viewerCamera = (content: StoredSceneContent): Pick<CameraProfile, "position" | "target" | "fov" | "near" | "far" | "play"> => {
-  const profiles = content.cameraProfiles ?? {};
-  const profile = profiles[content.activeProfileId ?? DEFAULT_CAMERA_PROFILE_ID] ?? profiles[DEFAULT_CAMERA_PROFILE_ID];
-  const { position, target, fov, near, far } = DEFAULT_CAMERA_PROFILE;
-  // A profile read from a document may be missing (or missing values): the defaults stay under it.
-  const defaults = { position, target, fov, near, far };
-  return { ...defaults, ...profile };
+  const active = resolveActiveCamera({ ...content, entities: content.entities ?? [] });
+  const profile = active.kind === "profile" ? active.profile : { ...DEFAULT_CAMERA_PROFILE, ...content.cameraProfiles?.[DEFAULT_CAMERA_PROFILE_ID] };
+  const { position, target, fov, near, far, play } = profile;
+  return { position, target, fov, near, far, ...(play ? { play } : null) };
 };
+
+export interface SceneViewerOptions {
+  /** Plays without camera movement the visitor didn't ask for (prefers-reduced-motion). */
+  reduceMotion?: boolean;
+  /** Where Key Down and Key Up are listened for: the window unless given (an embed scopes keys to its element). */
+  keyTarget?: PlayInputKeyTarget;
+  /** Given, an Open Link action calls it instead of opening the link (an embed hands links to its page). */
+  onOpenLink?: (url: string, newTab: boolean) => void;
+  /** Whether sound starts muted (it does unless the page says otherwise: the visitor unmutes with the page's button). */
+  muted?: boolean;
+}
 
 export class SceneViewer {
   /** The viewer's own renderer. Handed to what needs it here; the viewer never puts it on `window`. */
   readonly renderer: SceneRenderer;
+  /** Whether the scene has a Scroll event that can run, so the page knows to make itself scrollable. */
+  readonly hasScrollEvents: boolean;
+  /** How much page scroll plays the Scroll events from start to end, in screen heights. */
+  readonly scrollLength: number;
+  /** Whether the scene plays any sound, so the page knows to show the mute button. */
+  readonly hasSound: boolean;
+  /** The mute button's settings (whether the author shows it, and where). */
+  readonly audioButton: SceneSettingsConfig["audioButton"];
+  // The scene's sound; none for a scene that plays none (no audio context is ever made then).
+  private readonly audio: SceneAudio | null;
+  private scrollTarget = 0; // the page's scroll progress, as last handed in
   private readonly disposers: (() => void)[] = [];
   private frameId = 0;
   private disposed = false;
 
-  constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false } = {}) {
+  constructor(container: HTMLElement, content: StoredSceneContent, source: SceneSource, { reduceMotion = false, keyTarget, onOpenLink, muted = true }: SceneViewerOptions = {}) {
     const renderer = createSceneRenderer();
     this.renderer = renderer;
     container.appendChild(renderer.domElement);
     this.disposers.push(() => disposeSceneRenderer(renderer));
     const canvas = renderer.domElement;
 
-    const sceneManager = new SceneManager(viewerSceneSettings(content.sceneSettings), { editorHelpers: false });
+    const settings = viewerSceneSettings(content.sceneSettings);
+    const sceneManager = new SceneManager(settings, { editorHelpers: false });
     const scene = sceneManager.scene;
     // Made once the renderer has started, below.
     let environment: THREE.RenderTarget | null = null;
@@ -91,14 +138,31 @@ export class SceneViewer {
       sceneManager.dispose();
     });
 
+    // The camera picked in the editor (scene/activeCamera.ts): a profile, or a scene camera followed as Fixed.
+    const active = resolveActiveCamera({ ...content, entities: drawn });
     const start = viewerCamera(content);
+    const followed = active.kind === "entity" ? objects.getObject(active.id) : undefined;
     const aspect = () => container.clientWidth / Math.max(1, container.clientHeight);
-    const camera = new PlayCamera(start, resolvePlayCamera(start.play), aspect(), { reduceMotion });
+    const camera = new PlayCamera(start, resolveScenePlay(settings.play, start.play), aspect(), {
+      reduceMotion,
+      follow: followed instanceof SceneCameraObject ? followed : null,
+    });
     this.disposers.push(camera.attach(canvas));
 
     // The drawn entities, so a state's colour goes over an asset's layers.
-    const runtime = new SceneRuntime({ entities: drawn, animation: content.animation ?? {} });
+    // What its actions ask of the page (open a link, play a sound), shared with the editor's Play.
+    this.audio = hasSoundActions(content.animation?.events ?? {}) ? new SceneAudio({ loadAudio: (assetId) => source.loadAudio(assetId), muted }) : null;
+    this.hasSound = this.audio !== null;
+    this.audioButton = settings.audioButton;
+    const effects = createPlayEffects({ onOpenLink, audio: this.audio });
+    this.disposers.push(() => effects.dispose());
+    const runtime = new SceneRuntime({ entities: drawn, animation: content.animation ?? {} }, { onEffect: effects.onEffect });
     runtime.start();
+    this.hasScrollEvents = runtime.hasScrollEvents;
+    this.scrollLength = settings.scroll.length;
+    // Smoothing eases the shown progress toward the page's; reduced motion follows the page exactly.
+    const smoothScroll = settings.scroll.smooth && !reduceMotion;
+    let scrollShown = 0;
 
     const resize = () => {
       renderer.setSize(container.clientWidth, container.clientHeight, false);
@@ -109,31 +173,12 @@ export class SceneViewer {
     observer.observe(container);
     this.disposers.push(() => observer.disconnect());
 
-    // Clicks fire Mouse Down events; the cursor is a pointer over what has one (one test a frame).
+    // The pointer and key triggers; the cursor is a pointer over what has a pointer trigger (one test a frame).
     const raycaster = new THREE.Raycaster();
     const pick = (x: number, y: number) =>
       pickEntityAt(raycaster, camera.camera, canvas, [...objects.getMeshes().values()].filter((object) => object.visible), x, y, true);
-    let hoverPoint: { x: number; y: number } | null = null;
-    const onPointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      const entityId = pick(event.clientX, event.clientY);
-      if (entityId) runtime.click(entityId);
-    };
-    const onPointerMove = (event: PointerEvent) => {
-      hoverPoint = { x: event.clientX, y: event.clientY };
-    };
-    const onPointerLeave = () => {
-      hoverPoint = null;
-      container.style.cursor = "";
-    };
-    canvas.addEventListener("pointerdown", onPointerDown);
-    canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerleave", onPointerLeave);
-    this.disposers.push(() => {
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerleave", onPointerLeave);
-    });
+    const input = attachPlayInput({ canvas, cursorElement: container, pick, getRuntime: () => runtime, keyTarget });
+    this.disposers.push(() => input.detach());
 
     let lastTime = 0;
     const animate = () => {
@@ -142,15 +187,15 @@ export class SceneViewer {
       const dt = (now - lastTime) / 1000;
       lastTime = now;
 
-      camera.update(dt);
       runtime.tick(dt);
-      runtime.poses().forEach((pose, entityId) => objects.applyPose(entityId, pose));
-
-      if (hoverPoint) {
-        const entityId = runtime.hasClickEvents ? pick(hoverPoint.x, hoverPoint.y) : null;
-        container.style.cursor = entityId && runtime.clickOwnerOf(entityId) ? "pointer" : "";
-        hoverPoint = null;
+      if (scrollShown !== this.scrollTarget) {
+        scrollShown = easeScrollProgress(scrollShown, this.scrollTarget, dt, smoothScroll);
+        runtime.setScrollProgress(scrollShown);
       }
+      runtime.poses().forEach((pose, entityId) => objects.applyPose(entityId, pose));
+      // After the poses, so a followed scene camera is shown where this frame put it.
+      camera.update(dt);
+      input.frame();
 
       renderer.render(scene, camera.camera);
     };
@@ -167,6 +212,25 @@ export class SceneViewer {
       },
       (error) => console.error("[Libre3D] The renderer could not start:", error),
     );
+  }
+
+  /** Mutes or unmutes the scene's sound (faded). Unmuting must come from a click or key: browsers start sound only then. */
+  setMuted(muted: boolean): void {
+    this.audio?.setMuted(muted);
+  }
+
+  /** Whether the scene's sound is muted (a scene without sound counts as muted). */
+  get isMuted(): boolean {
+    return this.audio?.isMuted ?? true;
+  }
+
+  /**
+   * The page's scroll progress, 0 to 1 (the share page's scroller; an embed's host may call this
+   * itself). Only stored: the frame loop eases toward it and moves the Scroll events, and stops once
+   * it has arrived, so calling this on every scroll event costs nothing more.
+   */
+  setScrollProgress(progress: number): void {
+    this.scrollTarget = clampProgress(progress);
   }
 
   dispose(): void {
