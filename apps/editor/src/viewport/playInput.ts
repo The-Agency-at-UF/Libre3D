@@ -13,9 +13,10 @@
  * It never picks on a move itself: a hover is noted and tested at most once, on the next frame, so
  * dragging across the canvas costs one raycast a frame however many move events arrive, and none
  * when the scene has no pointer trigger. Mouse Hover is enter-only (decision tree B2): it fires
- * when the hover's owner (the object, or its nearest ancestor with a Mouse Hover event) becomes a
- * different one, so sliding between two parts of one model is not a re-entry, leaving and coming
- * back is, and there is no hover-out. Touch has no hover; a tap is a press and a release. It knows
+ * when the hover's region (the object, or its nearest ancestor with a Mouse Hover or Mouse Leave event)
+ * becomes a different one, so sliding between two parts of one model is not a re-entry, and leaving and
+ * coming back is. Mouse Leave (its counterpart) fires on the region the pointer left: when it moves onto
+ * another region (before that region's Mouse Hover), onto nothing, or off the canvas. Touch has no hover; a tap is a press and a release. It knows
  * nothing of when Play starts or stops: `getRuntime` returns null when nothing is playing, and
  * then input does nothing. Nothing here loads the store, React, or the editor's UI
  * (runtimeBoundary.test.ts checks).
@@ -74,6 +75,9 @@ export const attachPlayInput = ({ canvas, cursorElement, pick, getRuntime, shoul
     if (cursorElement && cursorElement.style.cursor !== cursor) cursorElement.style.cursor = cursor;
   };
 
+  const hoverRegionOf = (runtime: PlayInputRuntime, entityId: string) =>
+    runtime.ownerOf("mouseHover", entityId) ?? runtime.ownerOf("mouseLeave", entityId);
+
   const usesPointerTriggers = (runtime: PlayInputRuntime) => POINTER_TRIGGERS.some((trigger) => runtime.triggersInUse.has(trigger));
 
   /** Whether the pointer is over something with a pointer trigger: when the cursor is a pointer. */
@@ -98,10 +102,14 @@ export const attachPlayInput = ({ canvas, cursorElement, pick, getRuntime, shoul
     hoverY = event.clientY;
   };
 
+  // The pointer left the canvas: whatever it was over is left too.
   const onPointerLeave = () => {
+    const runtime = getRuntime();
+    const left = hoverOwner;
     hoverPending = false;
     hoverOwner = null;
     setCursor("");
+    if (runtime && left && runtime.triggersInUse.has("mouseLeave")) runtime.fire("mouseLeave", left);
   };
 
   canvas.addEventListener("pointerdown", onPointerDown);
@@ -124,10 +132,13 @@ export const attachPlayInput = ({ canvas, cursorElement, pick, getRuntime, shoul
       const entityId = usesPointerTriggers(runtime) ? pick(hoverX, hoverY) : null;
       setCursor(entityId && hasPointerOwner(runtime, entityId) ? "pointer" : "");
 
-      if (!runtime.triggersInUse.has("mouseHover")) return;
-      const owner = entityId ? runtime.ownerOf("mouseHover", entityId) : null;
+      if (!runtime.triggersInUse.has("mouseHover") && !runtime.triggersInUse.has("mouseLeave")) return;
+      // A region is an object with a hover or leave event (or its nearest ancestor with one).
+      const owner = entityId ? hoverRegionOf(runtime, entityId) : null;
       if (owner === hoverOwner) return;
+      const left = hoverOwner;
       hoverOwner = owner;
+      if (left && runtime.triggersInUse.has("mouseLeave")) runtime.fire("mouseLeave", left);
       if (owner) runtime.fire("mouseHover", owner);
     },
     detach() {

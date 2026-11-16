@@ -13,7 +13,7 @@ import { createId } from "../utils/createId";
 import { getObjectStates, type ObjectState } from "./objectStates";
 import { normalizeTransition, type StateRef, type TransitionAction } from "./transitions";
 
-export type EventTrigger = "start" | "mouseDown" | "mouseUp" | "mouseHover" | "keyDown" | "keyUp" | "scroll";
+export type EventTrigger = "start" | "mouseDown" | "mouseUp" | "mouseHover" | "mouseLeave" | "keyDown" | "keyUp" | "scroll";
 
 /**
  * Every trigger a document may hold (schema v6 taught the document all of them at once, so adding
@@ -25,6 +25,7 @@ export const TRIGGER_INFO: Record<EventTrigger, { label: string; icon: string }>
   mouseDown: { label: "Mouse Down", icon: "pointer" },
   mouseUp: { label: "Mouse Up", icon: "pointer-up" },
   mouseHover: { label: "Mouse Hover", icon: "hand-finger" },
+  mouseLeave: { label: "Mouse Leave", icon: "hand-off" },
   keyDown: { label: "Key Down", icon: "keyboard" },
   keyUp: { label: "Key Up", icon: "keyboard" },
   scroll: { label: "Scroll", icon: "mouse" },
@@ -37,10 +38,10 @@ export const isEventTrigger = (value: unknown): value is EventTrigger =>
  * The triggers fired on the object under the pointer (or its nearest ancestor with one): the ones
  * Play's pointer input picks for, and the ones the pointer cursor shows over.
  */
-export const POINTER_TRIGGERS: readonly EventTrigger[] = ["mouseDown", "mouseUp", "mouseHover"];
+export const POINTER_TRIGGERS: readonly EventTrigger[] = ["mouseDown", "mouseUp", "mouseHover", "mouseLeave"];
 
 /** The triggers that fire today, which is what the trigger dropdown offers. Key and Scroll join when they are built. */
-const OFFERED_TRIGGERS: readonly EventTrigger[] = ["start", "mouseDown", "mouseUp", "mouseHover"];
+const OFFERED_TRIGGERS: readonly EventTrigger[] = ["start", "mouseDown", "mouseUp", "mouseHover", "mouseLeave"];
 
 /** The triggers in the order the trigger dropdown lists them, with their names and icons there. */
 export const EVENT_TRIGGERS: { value: EventTrigger; label: string; icon: string }[] = OFFERED_TRIGGERS.map((value) => ({

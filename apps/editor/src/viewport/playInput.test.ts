@@ -155,6 +155,68 @@ describe("attachPlayInput", () => {
     }
   });
 
+  describe("Mouse Leave", () => {
+    const leaveScene = () => fakeRuntime(["mouseHover", "mouseLeave"], null, { handle: "cube", arm: "cube", cube: "cube", floor: "ground", ground: "ground" });
+
+    it("fires on the object it left when the pointer moves onto nothing", async () => {
+      const runtime = leaveScene();
+      const { canvas, pick, input } = setUp(runtime);
+
+      await hoverOver(canvas, pick, input, "handle");
+      expect(runtime.fire).toHaveBeenLastCalledWith("mouseHover", "cube");
+      await hoverOver(canvas, pick, input, null);
+      expect(runtime.fire).toHaveBeenLastCalledWith("mouseLeave", "cube");
+      expect(runtime.fire).toHaveBeenCalledTimes(2);
+    });
+
+    it("fires Mouse Leave before Mouse Hover when the pointer moves straight onto another object", async () => {
+      const runtime = leaveScene();
+      const { canvas, pick, input } = setUp(runtime);
+
+      await hoverOver(canvas, pick, input, "handle");
+      await hoverOver(canvas, pick, input, "floor");
+      const calls = (runtime.fire as ReturnType<typeof vi.fn>).mock.calls.slice(1);
+      expect(calls).toEqual([["mouseLeave", "cube"], ["mouseHover", "ground"]]);
+    });
+
+    it("is not fired again while the pointer stays within one object", async () => {
+      const runtime = leaveScene();
+      const { canvas, pick, input } = setUp(runtime);
+
+      await hoverOver(canvas, pick, input, "handle");
+      await hoverOver(canvas, pick, input, "arm");
+      expect(runtime.fire).toHaveBeenCalledTimes(1);
+    });
+
+    it("fires when the pointer leaves the canvas over an object", async () => {
+      const runtime = leaveScene();
+      const { canvas, pick, input } = setUp(runtime);
+
+      await hoverOver(canvas, pick, input, "cube");
+      canvas.fire("pointerleave");
+      expect(runtime.fire).toHaveBeenLastCalledWith("mouseLeave", "cube");
+    });
+
+    it("works for a scene that only has Mouse Leave, over the same region", async () => {
+      const runtime = fakeRuntime(["mouseLeave"], null, { handle: "cube", cube: "cube", floor: null });
+      const { canvas, pick, input } = setUp(runtime);
+
+      await hoverOver(canvas, pick, input, "handle");
+      await hoverOver(canvas, pick, input, null);
+      expect(runtime.fire).toHaveBeenCalledWith("mouseLeave", "cube");
+    });
+
+    it("never fires Mouse Leave when the scene has none", async () => {
+      const runtime = fakeRuntime(["mouseHover"], null, { handle: "cube", floor: null });
+      const { canvas, pick, input } = setUp(runtime);
+
+      await hoverOver(canvas, pick, input, "handle");
+      canvas.fire("pointerleave");
+      await hoverOver(canvas, pick, input, null);
+      expect(runtime.fire).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("Mouse Hover, enter only", () => {
     const hoverScene = () => fakeRuntime(["mouseHover"], null, { handle: "cube", arm: "cube", cube: "cube", floor: null });
 
