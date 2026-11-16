@@ -443,7 +443,7 @@ describe("SceneRuntime: scroll", () => {
     expect(runtime.poses().get("cube")).toBe(pose);
   });
 
-  it("lets the newest writer win: a click takes over, and the next scroll takes the object back", () => {
+  it("lets the newest writer win: a click takes over, and the next scroll glides the object back", () => {
     const grow = event("grow", { trigger: "mouseDown", actions: [transition({ id: "grow", from: "current", steps: [{ to: "big", duration: 1, easing: "linear" }] })] });
     const runtime = scrollScene([event("scroll", { trigger: "scroll", actions: [scrubbed] }), grow]);
     runtime.start();
@@ -453,11 +453,59 @@ describe("SceneRuntime: scroll", () => {
     runtime.tick(0.5);
     expect(runtime.poses().get("cube")).toMatchObject({ position: [0, 1, 0], scale: [1.5, 1.5, 1.5] });
 
+    // Scroll takes the object back, but from where the click left it: no snap, and not idle until it lands.
     runtime.setScrollProgress(0.25 + 1e-9);
-    expect(runtime.isIdle).toBe(true);
+    expect(runtime.poses().get("cube")!.position[1]).toBeCloseTo(1, 6);
+    expect(runtime.isIdle).toBe(false);
+    runtime.tick(0.25);
+    expect(positionOf(runtime)![1]).toBeGreaterThan(1);
+    expect(positionOf(runtime)![1]).toBeLessThan(2);
     runtime.tick(1);
     expect(positionOf(runtime)![1]).toBeCloseTo(2, 6);
     expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(1, 6);
+    expect(runtime.isIdle).toBe(true);
+  });
+
+  it("glides back to scroll after a click has finished, not only while it runs", () => {
+    const grow = event("grow", { trigger: "mouseDown", actions: [transition({ id: "grow", from: "current", steps: [{ to: "big", duration: 1, easing: "linear" }] })] });
+    const runtime = scrollScene([event("scroll", { trigger: "scroll", actions: [scrubbed] }), grow]);
+    runtime.start();
+    runtime.setScrollProgress(0.25);
+    runtime.click("cube");
+    runtime.tick(2); // the click's transition is done: "big" is scale 2
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(2, 6);
+
+    runtime.setScrollProgress(0.25 + 1e-9);
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(2, 6); // no snap to scroll's scale 1
+    runtime.tick(1);
+    expect(positionOf(runtime)![1]).toBeCloseTo(2, 6);
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(1, 6);
+  });
+
+  it("ends a glide back to scroll when a new click starts", () => {
+    const grow = event("grow", { trigger: "mouseDown", actions: [transition({ id: "grow", from: "current", steps: [{ to: "big", duration: 1, easing: "linear" }] })] });
+    const runtime = scrollScene([event("scroll", { trigger: "scroll", actions: [scrubbed] }), grow]);
+    runtime.start();
+    runtime.setScrollProgress(0.25);
+    runtime.click("cube");
+    runtime.tick(0.5);
+    runtime.setScrollProgress(0.25 + 1e-9); // glide starts
+    runtime.tick(0.1);
+    runtime.click("cube"); // a new click: the glide stops, and the click's transition runs from here
+    runtime.tick(1);
+    expect(runtime.isIdle).toBe(true);
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(2, 6);
+  });
+
+  it("does not glide when scroll moves an object nothing clicked", () => {
+    const runtime = scrollScene();
+    runtime.start();
+    runtime.setScrollProgress(0.25);
+    expect(runtime.isIdle).toBe(true);
+    runtime.setScrollProgress(0.5); // time 2s: a third of the way from "up" (y 2) back to Base (y 0), and scale 1 + 1/3
+    expect(runtime.isIdle).toBe(true);
+    expect(positionOf(runtime)![1]).toBeCloseTo(4 / 3, 6);
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(1 + 1 / 3, 6);
   });
 
   it("never fires a scroll event's transition by time", () => {
