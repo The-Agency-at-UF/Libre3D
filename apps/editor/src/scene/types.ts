@@ -373,8 +373,7 @@ export type DeepPartial<T> = T extends object ? {
 } : T;
 
 /**
- * The scene's effects, drawn over the finished picture (viewport/postProcessing.ts; depth of field,
- * pixelation and aberration are not drawn yet). `enabled` at the top is the master switch. Each effect has its own `enabled` (the
+ * The scene's effects, drawn over the finished picture (viewport/postProcessing.ts). `enabled` at the top is the master switch. Each effect has its own `enabled` (the
  * row's eye) and `amount` (0 to 100: how much of the effect's result is mixed over the picture
  * before it), then its own values, in the units the Effects panel shows.
  */
@@ -385,19 +384,19 @@ export interface PostProcessingConfig {
   dof: {
     enabled: boolean;
     amount: number;
-    focusDistance: number;
-    range: number; // how deep the sharp zone is (the panel's "DoF")
-    blur: number;
+    focusDistance: number; // from the camera, in the scene's units
+    range: number; // how far from there the blur is full (the panel's "DoF")
+    blur: number; // 1 is a radius of 0.2% of the picture's width
   };
   pixelation: {
     enabled: boolean;
     amount: number;
-    granularity: number; // pixels per block
+    granularity: number; // CSS pixels per block
   };
   aberration: {
     enabled: boolean;
     amount: number;
-    offsetX: number;
+    offsetX: number; // red one way and blue the other, in thousandths of the picture's size
     offsetY: number;
     locked: boolean; // the panel keeps X and Y equal
   };

@@ -13,17 +13,22 @@ describe("activeEffects", () => {
   });
 
   it("lists the effects that are on in the order they're applied, whatever order they were turned on in", () => {
-    const on = config({ noise: { enabled: true }, vignette: { enabled: true }, bloom: { enabled: true }, brightness: { enabled: true }, hue: { enabled: true } });
+    const on = config({
+      noise: { enabled: true },
+      vignette: { enabled: true },
+      bloom: { enabled: true },
+      brightness: { enabled: true },
+      hue: { enabled: true },
+      aberration: { enabled: true },
+      pixelation: { enabled: true },
+      dof: { enabled: true },
+    });
 
-    expect(activeEffects(on)).toEqual(["bloom", "hue", "brightness", "vignette", "noise"]);
+    expect(activeEffects(on)).toEqual(["dof", "pixelation", "aberration", "bloom", "hue", "brightness", "vignette", "noise"]);
   });
 
   it("holds nothing while the master switch is off", () => {
     expect(activeEffects(config({ enabled: false, bloom: { enabled: true } }))).toEqual([]);
-  });
-
-  it("leaves out the effects that aren't drawn yet", () => {
-    expect(activeEffects(config({ dof: { enabled: true }, pixelation: { enabled: true }, aberration: { enabled: true } }))).toEqual([]);
   });
 });
 
@@ -61,16 +66,35 @@ describe("effectValues", () => {
   });
 
   it("gives every other effect its amount as a share", () => {
-    const values = effectValues(config({ hue: { amount: 10 }, brightness: { amount: 20 }, vignette: { amount: 30 }, noise: { amount: 40 } }));
+    const values = effectValues(
+      config({ hue: { amount: 10 }, brightness: { amount: 20 }, vignette: { amount: 30 }, noise: { amount: 40 }, dof: { amount: 50 }, pixelation: { amount: 60 }, aberration: { amount: 70 } }),
+    );
 
-    expect(values).toMatchObject({ hueShare: 0.1, brightnessShare: 0.2, vignetteShare: 0.3, noiseShare: 0.4 });
+    expect(values).toMatchObject({ hueShare: 0.1, brightnessShare: 0.2, vignetteShare: 0.3, noiseShare: 0.4, dofShare: 0.5, pixelationShare: 0.6, aberrationShare: 0.7 });
+  });
+
+  it("blurs fully one range away from the focus distance: a Blur of 5 is a radius of 1% of the picture's width", () => {
+    const values = effectValues(config({ dof: { focusDistance: 12, range: 4, blur: 5 } }));
+
+    expect(values.dofFocus).toBe(12);
+    expect(values.dofMaxBlur * 0.4).toBeCloseTo(0.01);
+    expect(values.dofAperture * 4).toBeCloseTo(values.dofMaxBlur);
+  });
+
+  it("makes pixelation's blocks at least a pixel, and aberration's offsets thousandths of the picture, either way", () => {
+    const values = effectValues(config({ pixelation: { granularity: 0 }, aberration: { offsetX: 2, offsetY: -3 } }));
+
+    expect(values.pixelSize).toBe(1);
+    expect(values.aberrationX).toBeCloseTo(0.002);
+    expect(values.aberrationY).toBeCloseTo(-0.003);
   });
 
   it("keeps values inside what the maths can take", () => {
-    const values = effectValues(config({ brightness: { contrast: 1, brightness: 5 }, hue: { saturation: 3 }, bloom: { smoothing: 0, blurScale: 4, threshold: 2 }, vignette: { offset: 2, darkness: -1 } }));
+    const values = effectValues(config({ brightness: { contrast: 1, brightness: 5 }, hue: { saturation: 3 }, bloom: { smoothing: 0, blurScale: 4, threshold: 2 }, vignette: { offset: 2, darkness: -1 }, dof: { range: 0, blur: -2, focusDistance: -1 } }));
 
     expect(values.contrast).toBeLessThan(1);
     expect(values).toMatchObject({ brightness: 1, saturation: 1, bloomRadius: 1, bloomThreshold: 1, vignetteOffset: 1, vignetteDarkness: 0 });
     expect(values.bloomSmoothing).toBeGreaterThan(0);
+    expect(values).toMatchObject({ dofFocus: 0, dofMaxBlur: 0, dofAperture: 0 });
   });
 });

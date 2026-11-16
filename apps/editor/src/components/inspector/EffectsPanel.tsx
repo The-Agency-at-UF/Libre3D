@@ -8,7 +8,7 @@
  * The switch in the header turns every effect and the exposure off without changing their values.
  * Under Exposure, one row per effect the chain draws: its name, a button that opens its values in
  * the drawer beside the sidebar (SideDrawer.tsx), its amount in percent, and its eye. Noise has an
- * amount and nothing else.
+ * amount and nothing else. Aberration's drawer has a lock that keeps its two offsets equal.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -47,6 +47,17 @@ const effect = <N extends EffectName>(
 // One row per effect the chain draws, in the order they're applied. An effect added to the chain
 // needs a row here: the Record makes leaving one out a compile error.
 const EFFECT_ROWS: Record<EffectName, EffectRowSpec> = {
+  dof: effect<"dof">("DoF", "ti-focus-2", [
+    // How far from the camera is sharp, how far from there the blur is full, and how wide it gets.
+    { key: "focusDistance", label: "Focus Dist", min: 0, max: 100, step: 0.1 },
+    { key: "range", label: "DoF", min: 0.1, max: 50, step: 0.1 },
+    { key: "blur", label: "Blur", min: 0, max: 10, step: 0.1 },
+  ]),
+  pixelation: effect<"pixelation">("Pixelation", "ti-grid-dots", [{ key: "granularity", label: "Granularity", min: 1, max: 100, step: 1 }]),
+  aberration: effect<"aberration">("Aberration", "ti-prism", [
+    { key: "offsetX", label: "Offset X", min: -10, max: 10, step: 0.1 },
+    { key: "offsetY", label: "Offset Y", min: -10, max: 10, step: 0.1 },
+  ]),
   bloom: effect<"bloom">("Bloom", "ti-sparkles", [
     { key: "intensity", label: "Intensity", min: 0, max: 3, step: 0.05 },
     { key: "blurScale", label: "Blur Scale", min: 0, max: 1, step: 0.01 },
@@ -114,6 +125,11 @@ export function EffectsPanel() {
   }, [isPreviewMode]);
 
   const openRow = open ? rows.current[open] : null;
+
+  // Aberration's lock keeps its two offsets equal: either one sets both.
+  const { locked } = postProcessing.aberration;
+  const setValue = (name: EffectName, key: string, value: number) =>
+    updatePostProcessing(name === "aberration" && locked ? { aberration: { offsetX: value, offsetY: value } } : { [name]: { [key]: value } });
 
   return (
     <PanelSection
@@ -189,9 +205,24 @@ export function EffectsPanel() {
               key={spec.key}
               spec={spec}
               value={(postProcessing[open] as unknown as Record<string, number>)[spec.key]}
-              onChange={(value) => updatePostProcessing({ [open]: { [spec.key]: value } })}
+              onChange={(value) => setValue(open, spec.key, value)}
             />
           ))}
+          {open === "aberration" && (
+            <div className="prop">
+              <span className="prop-label">Lock X and Y</span>
+              <button
+                type="button"
+                className={`mat-icon-btn ${locked ? "on" : ""}`}
+                title={locked ? "Let X and Y differ" : "Keep X and Y equal"}
+                aria-label="Lock X and Y"
+                aria-pressed={locked}
+                onClick={() => updatePostProcessing({ aberration: locked ? { locked: false } : { locked: true, offsetY: postProcessing.aberration.offsetX } })}
+              >
+                <i className={`ti ${locked ? "ti-lock" : "ti-lock-open"}`}></i>
+              </button>
+            </div>
+          )}
         </SideDrawer>
       )}
     </PanelSection>

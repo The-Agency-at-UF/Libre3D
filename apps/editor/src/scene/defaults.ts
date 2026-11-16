@@ -14,7 +14,8 @@ export const initialPostProcessingDefaults: PostProcessingConfig = {
   enabled: true,
   toneMap: "Neutral",
   exposure: 0,
-  dof: { enabled: false, amount: 100, focusDistance: 100, range: 20, blur: 5 },
+  // Depth of field's distances suit a new scene (its camera is about 11 from its centre), not the mockup's 100 and 20.
+  dof: { enabled: false, amount: 100, focusDistance: 10, range: 5, blur: 5 },
   pixelation: { enabled: false, amount: 100, granularity: 15 },
   aberration: { enabled: false, amount: 100, offsetX: 2, offsetY: 2, locked: true },
   bloom: { enabled: false, amount: 100, intensity: 1, blurScale: 1, threshold: 0.25, smoothing: 0.03 },
