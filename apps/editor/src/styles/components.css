@@ -276,6 +276,18 @@
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
 }
 
+/* The card above and its copy below are hard-coded dark; light mode needs its own surface and text. */
+:root.light-theme .editor-modal {
+  border-color: var(--border-strong);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.18);
+}
+
+:root.light-theme .editor-modal-copy {
+  color: var(--text-secondary);
+}
+
 .editor-modal-title {
   margin: 0;
   font-size: 1.15rem;
@@ -2588,6 +2600,16 @@ input[type="range"]::-moz-range-thumb {
   border: 1px solid rgba(148, 163, 184, 0.24);
   background: rgba(15, 23, 42, 0.88);
   color: #e2e8f0;
+}
+
+:root.light-theme .help-hotkeys-row {
+  color: var(--text-secondary);
+}
+
+:root.light-theme .help-hotkeys-row kbd {
+  border-color: var(--border-strong);
+  background: var(--bg-surface-sunken);
+  color: var(--text-primary);
 }
 
 .hamburger-dropdown-account {
