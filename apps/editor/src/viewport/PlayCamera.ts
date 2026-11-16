@@ -33,7 +33,7 @@ import type { CameraProfile, PlayCameraMode, PlayCameraSettings } from "../scene
 import type { SceneCameraObject } from "./sceneCameraObject";
 import { followSceneCamera, type ViewCamera } from "./sceneCameraView";
 
-/** The modes in the order the Play Camera panel lists them. */
+/** The modes in the order the Export dialog's Play settings list them. */
 export const PLAY_CAMERA_MODES: { value: PlayCameraMode; label: string }[] = [
   { value: "fixed", label: "Fixed" },
   { value: "softOrbit", label: "Soft Orbit" },
@@ -62,6 +62,17 @@ export const resolvePlayCamera = (settings: Partial<PlayCameraSettings> | undefi
   smoothness: numberIn(settings?.smoothness, PLAY_CAMERA_LIMITS.smoothness, DEFAULT_PLAY_CAMERA.smoothness),
   speed: numberIn(settings?.speed, PLAY_CAMERA_LIMITS.speed, DEFAULT_PLAY_CAMERA.speed),
 });
+
+/**
+ * The Play setting a scene plays with (C7): the scene's own (`sceneSettings.play`), else, for a
+ * scene from before it, the active camera profile's `play`, else the defaults; filled and clamped.
+ * The one place this order is written: editor Play and the share-link viewer both call it. A scene
+ * camera that is looked through plays Fixed whatever this says (`follow`).
+ */
+export const resolveScenePlay = (
+  scenePlay: Partial<PlayCameraSettings> | undefined,
+  profilePlay: Partial<PlayCameraSettings> | undefined,
+): PlayCameraSettings => resolvePlayCamera(scenePlay ?? profilePlay);
 
 const DEGREES = Math.PI / 180;
 const PITCH_SHARE = 0.6; // soft orbit turns this much less up and down than sideways

@@ -4,6 +4,7 @@ import type { Entity, MaterialLayer } from "../scene/types";
 import { stubBrowserGlobals } from "../testing/browserStubs";
 import { createPublishedSceneSource } from "./publishedSceneSource";
 import { SceneManager } from "./SceneManager";
+import { DEFAULT_PLAY_CAMERA, resolveScenePlay } from "./PlayCamera";
 import { viewerCamera, viewerSceneSettings } from "./SceneViewer";
 
 const entity = (id: string): Entity => ({
@@ -64,6 +65,24 @@ describe("the viewer's defaults", () => {
     });
     const { position, target, fov, near, far } = DEFAULT_CAMERA_PROFILE;
     expect(viewerCamera({ entities: [] })).toEqual({ position, target, fov, near, far });
+  });
+});
+
+describe("the viewer's Play setting (C7)", () => {
+  // What SceneViewer hands PlayCamera: resolveScenePlay(viewerSceneSettings(...).play, viewerCamera(...).play).
+  const played = (content: Parameters<typeof viewerCamera>[0] & { sceneSettings?: Parameters<typeof viewerSceneSettings>[0] }) =>
+    resolveScenePlay(viewerSceneSettings(content.sceneSettings).play, viewerCamera(content).play);
+  const personal = { ...DEFAULT_CAMERA_PROFILE, play: { mode: "autoRotate" as const, speed: 30 } };
+
+  it("is the scene's when it holds one, over its camera's", () => {
+    const content = { entities: [], cameraProfiles: { personal }, sceneSettings: { play: { mode: "softOrbit" as const, range: 20 } } };
+    expect(played(content)).toEqual({ ...DEFAULT_PLAY_CAMERA, mode: "softOrbit", range: 20 });
+  });
+
+  it("is its active camera's in a scene from before it, and the default in a scene with neither", () => {
+    expect(played({ entities: [], cameraProfiles: { personal } })).toEqual({ ...DEFAULT_PLAY_CAMERA, mode: "autoRotate", speed: 30 });
+    expect(played({ entities: [] })).toEqual(DEFAULT_PLAY_CAMERA);
+    expect(viewerSceneSettings(undefined)).not.toHaveProperty("play");
   });
 });
 

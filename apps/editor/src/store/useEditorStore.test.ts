@@ -439,6 +439,57 @@ describe("scroll settings", () => {
   });
 });
 
+describe("the scene's Play setting (C7)", () => {
+  it("changes one value through updateSceneSettings, keeping the other Play values and every other setting, in one undo step", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().updateSceneSettings({ play: { mode: "softOrbit", range: 12, smoothness: 0.3, speed: 6 } });
+    const before = useEditorStore.getState().sceneSettings;
+
+    useEditorStore.getState().updateSceneSettings({ play: { mode: "orbit" } });
+
+    expect(useEditorStore.getState().sceneSettings).toEqual({ ...before, play: { mode: "orbit", range: 12, smoothness: 0.3, speed: 6 } });
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().sceneSettings).toEqual(before);
+  });
+
+  it("isn't set in a new scene, and can't be changed in a view-only tab", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    expect(useEditorStore.getState().sceneSettings.play).toBeUndefined();
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().updateSceneSettings({ play: { mode: "fixed" } });
+
+    expect(useEditorStore.getState().sceneSettings.play).toBeUndefined();
+  });
+
+  it("survives a save and a reload, and an old scene with only its camera's setting plays as before", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    const { resolveScenePlay, DEFAULT_PLAY_CAMERA } = await import("../viewport/PlayCamera");
+    const playing = () => {
+      const state = useEditorStore.getState();
+      return resolveScenePlay(state.sceneSettings.play, state.cameraProfiles[state.activeProfileId].play);
+    };
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().updateSceneSettings({ play: { mode: "autoRotate", speed: 40 } });
+    const saved = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+
+    const parsed = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+    expect(useEditorStore.getState().sceneSettings.play).toEqual({ mode: "autoRotate", speed: 40 });
+    expect(playing()).toEqual({ ...DEFAULT_PLAY_CAMERA, mode: "autoRotate", speed: 40 });
+
+    // A scene from before C7: its Play setting is on the active camera profile.
+    delete saved.scene.sceneSettings.play;
+    saved.scene.cameraProfiles.personal.play = { mode: "softOrbit", range: 20 };
+    const old = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(old.ok ? old.content : null);
+    expect(useEditorStore.getState().sceneSettings.play).toBeUndefined();
+    expect(playing()).toEqual({ ...DEFAULT_PLAY_CAMERA, mode: "softOrbit", range: 20 });
+  });
+});
+
 describe("object states", () => {
   // A cube at (2, 0, 0) with a child sphere, and the light.
   const storeWithCube = async () => {

@@ -7,7 +7,7 @@ import { previewTiming, scrubTiming, type TransitionAction } from "../../animati
 import { selectDrawnEntities, selectViewedObjectState, useEditorStore, type EditorState } from "../../store/useEditorStore";
 import { getEntityIndex } from "../../scene/entityIndex";
 import type { ObjectManager } from "../ObjectManager";
-import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
+import { PlayCamera, resolveScenePlay } from "../PlayCamera";
 import { SceneCameraObject } from "../sceneCameraObject";
 import { resolveActiveCamera } from "../../scene/activeCamera";
 import { pickEntityAt } from "../pickEntity";
@@ -143,14 +143,14 @@ export function useViewportPlay(
 
     const canvasAspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
 
-    // Play's camera starts where the scene's camera is, with its Play setting, read once here. A
+    // Play's camera starts where the scene's camera is, with the scene's Play setting, read once here. A
     // scene camera picked in the dropdown is followed instead (scene/activeCamera.ts), as Fixed.
     const startView = (store: EditorState): NonNullable<Session["view"]> => {
       const active = resolveActiveCamera(store);
       const profile = active.kind === "profile" ? active.profile : store.cameraProfiles.personal;
       const followed = active.kind === "entity" ? objectManager.getObject(active.id) : undefined;
       const follow = followed instanceof SceneCameraObject ? followed : null;
-      const camera = new PlayCamera(profile, resolvePlayCamera(profile.play), canvasAspect(), { reduceMotion: prefersReducedMotion(), follow });
+      const camera = new PlayCamera(profile, resolveScenePlay(store.sceneSettings.play, profile.play), canvasAspect(), { reduceMotion: prefersReducedMotion(), follow });
       const editorCamera = cameraRef.current;
       cameraRef.current = camera.camera;
       return { camera, editorCamera, detach: camera.attach(canvas) };

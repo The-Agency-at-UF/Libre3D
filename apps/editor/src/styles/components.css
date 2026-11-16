@@ -293,6 +293,34 @@
   justify-content: flex-end;
 }
 
+/* The Export dialog's Play settings (PlaySettingsPanel), under either tab. The dialog is dark in
+   either theme, so the inspector's controls inside it take the dark theme's tokens (tokens.css). */
+.play-settings {
+  --text-primary: #FFFFFF;
+  --text-secondary: rgba(255, 255, 255, 0.65);
+  --text-tertiary: rgba(255, 255, 255, 0.45);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --input-bg: rgba(2, 6, 23, 0.62);
+  --input-border: rgba(148, 163, 184, 0.22);
+  --input-border-focus: rgba(61, 255, 160, 0.55);
+  --input-focus-shadow: rgba(61, 255, 160, 0.12);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 1rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.play-settings-title {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.play-settings-copy {
+  font-size: 0.85rem;
+}
+
 
 /* Public Viewer styles */
 .viewer-container {

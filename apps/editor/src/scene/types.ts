@@ -380,7 +380,9 @@ export interface CameraProfile {
   near: number;
   far: number;
   zoom: number;
-  // Missing (cameras from before it) or partly missing fields are defaults: resolvePlayCamera.
+  // How Play moved the camera before it was a scene setting (C7): still read for scenes whose
+  // `sceneSettings.play` is unset (resolveScenePlay), never written now. Missing or partly missing
+  // fields are defaults: resolvePlayCamera.
   play?: Partial<PlayCameraSettings>;
 }
 
@@ -477,6 +479,11 @@ export interface SceneSettingsConfig {
     visible: boolean;
     position: "bottomRight";
   };
+  // What the visitor can do in Play and on the share page (decision tree §C3, §G6): one set per
+  // scene, edited in the Export dialog (PlaySettingsPanel). Unset in scenes from before it, which
+  // keep playing with their active camera profile's `play` (resolveScenePlay), so it isn't in the
+  // defaults and needed no document bump. Later Play settings (§G6) go in this object too.
+  play?: Partial<PlayCameraSettings>;
   // Not read yet (there is no physics), kept for the same reason as the lights' unread fields.
   physics: {
     enabled: boolean;

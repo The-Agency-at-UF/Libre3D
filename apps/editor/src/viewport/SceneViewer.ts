@@ -31,7 +31,7 @@ import { resolveEntities } from "../scene/materialAssets";
 import type { CameraProfile, SceneSettingsConfig } from "../scene/types";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
-import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
+import { PlayCamera, resolveScenePlay } from "./PlayCamera";
 import { SceneCameraObject } from "./sceneCameraObject";
 import { resolveActiveCamera } from "../scene/activeCamera";
 import { pickEntityAt } from "./pickEntity";
@@ -66,12 +66,14 @@ export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"])
       visible: stored?.audioButton?.visible ?? initialSceneDefaults.audioButton.visible,
       position: initialSceneDefaults.audioButton.position,
     },
+    // Read by the viewer's camera, through resolveScenePlay (unset in scenes from before C7).
+    ...(stored?.play ? { play: { ...stored.play } } : null),
   }) as SceneSettingsConfig;
 
 /**
  * The camera profile a published scene starts from, over the default camera's values: the active
- * one (scene/activeCamera.ts), or the personal one when a scene camera is active (whose Play
- * setting is the scene's, until settings move to the scene: C7).
+ * one (scene/activeCamera.ts), or the personal one when a scene camera is active. Its `play` is
+ * read only for a scene without `sceneSettings.play` (resolveScenePlay).
  */
 export const viewerCamera = (content: StoredSceneContent): Pick<CameraProfile, "position" | "target" | "fov" | "near" | "far" | "play"> => {
   const active = resolveActiveCamera({ ...content, entities: content.entities ?? [] });
@@ -141,7 +143,7 @@ export class SceneViewer {
     const start = viewerCamera(content);
     const followed = active.kind === "entity" ? objects.getObject(active.id) : undefined;
     const aspect = () => container.clientWidth / Math.max(1, container.clientHeight);
-    const camera = new PlayCamera(start, resolvePlayCamera(start.play), aspect(), {
+    const camera = new PlayCamera(start, resolveScenePlay(settings.play, start.play), aspect(), {
       reduceMotion,
       follow: followed instanceof SceneCameraObject ? followed : null,
     });
