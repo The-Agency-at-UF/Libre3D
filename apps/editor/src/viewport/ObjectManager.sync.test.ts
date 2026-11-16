@@ -10,6 +10,7 @@ import { PathMesh } from "../paths/PathMesh";
 import { stubBrowserGlobals } from "../testing/browserStubs";
 import { showBasePoses } from "./basePoses";
 import { ObjectManager } from "./ObjectManager";
+import { SceneCameraObject } from "./sceneCameraObject";
 import type { SceneSource } from "./sceneSource";
 
 // syncMeshes skips an object whose entity is the one it applied last time. These tests are about
@@ -581,6 +582,7 @@ describe("ObjectManager without the editor's helpers (the share-link viewer)", (
     make("shape", "shape"),
     make("directionalLight", "light"),
     make("group", "group"),
+    make("camera", "camera"),
     make("importedModel", "broken", { assetId: "missing" }), // can't be loaded: the editor shows its red box
   ];
 
@@ -603,10 +605,12 @@ describe("ObjectManager without the editor's helpers (the share-link viewer)", (
     return { found, manager };
   };
 
-  it("builds no outline, light helper, or error box", async () => {
+  it("builds no outline, light helper, camera frustum, or error box", async () => {
     const { found, manager } = await editorOnlyObjects(false);
 
     expect(found).toEqual([]);
+    expect((manager.getObject("camera") as SceneCameraObject).gizmo).toBeNull();
+    expect(manager.getObject("camera")!.children).toEqual([]);
     expect(manager.getObject("cube")!.userData.selectionOutline).toBeUndefined();
     expect(manager.getObject("light")!.userData.helper).toBeUndefined();
     expect(manager.getObject("broken")!.userData.loadError).toBe(true);
@@ -615,8 +619,80 @@ describe("ObjectManager without the editor's helpers (the share-link viewer)", (
   it("builds them in the editor, where the option is left out", async () => {
     const { found } = await editorOnlyObjects(undefined);
 
-    // An outline each for the cube, the path, the shape, and the broken model, and the light's helper.
-    expect(found.sort()).toEqual(["DirectionalLightHelper", "LineSegments", "LineSegments", "LineSegments", "LineSegments"]);
+    // An outline each for the cube, the path, the shape, and the broken model, the camera's frustum,
+    // and the light's helper.
+    expect(found.sort()).toEqual(["DirectionalLightHelper", "LineSegments", "LineSegments", "LineSegments", "LineSegments", "LineSegments"]);
+  });
+});
+
+describe("ObjectManager scene cameras", () => {
+  const settledCamera = (overrides: Partial<Entity> = {}) => {
+    const scene = createScene([make("camera", "cam", overrides), make("cube", "cube")]);
+    const built = createManager(scene.source);
+    built.manager.syncMeshes(scene.entities, null, false);
+    built.manager.syncMeshes(scene.entities, null, false);
+    const camera = built.object("cam") as SceneCameraObject;
+    return { scene, ...built, camera, gizmo: camera.gizmo! };
+  };
+
+  it("builds an empty object placed by the transform, with an editor-only frustum that carries no entity ID", () => {
+    const { camera, gizmo } = settledCamera({ position: [1, 2, 3], rotation: [0, 0.5, 0] });
+
+    expect(camera).toBeInstanceOf(SceneCameraObject);
+    expect(camera.userData.entityId).toBe("cam");
+    expect(camera.position.toArray()).toEqual([1, 2, 3]);
+    expect(camera.rotation.y).toBeCloseTo(0.5);
+    expect(camera.children).toEqual([gizmo]);
+    expect(gizmo).toBeInstanceOf(THREE.LineSegments);
+    expect(gizmo.userData.editorOnly).toBe(true);
+    expect(gizmo.userData.entityId).toBeUndefined();
+  });
+
+  it("doesn't apply an unchanged camera again", () => {
+    const { scene, manager } = settledCamera();
+    const synced = spyOnSyncedIds();
+
+    scene.update("cube", { position: [2, 0, 0] });
+    manager.syncMeshes(scene.entities, null, false);
+
+    expect(synced.ids()).toEqual(["cube"]);
+  });
+
+  it("redraws the frustum for a new field of view, near, far, or projection, on the same object", () => {
+    const { scene, manager, camera, gizmo } = settledCamera();
+    const points = () => Array.from(gizmo.geometry.getAttribute("position").array as Float32Array);
+    const lens = () => scene.get("cam").camera!;
+    let before = points();
+
+    for (const changes of [{ fov: 90 }, { near: 0.5 }, { far: 1 }, { projection: "orthographic" as const }]) {
+      const oldGeometry = gizmo.geometry;
+      const dispose = vi.spyOn(oldGeometry, "dispose");
+      scene.update("cam", { camera: { ...lens(), ...changes } });
+      manager.syncMeshes(scene.entities, null, false);
+
+      expect(manager.getObject("cam")).toBe(camera);
+      expect(points()).not.toEqual(before);
+      expect(dispose).toHaveBeenCalled();
+      before = points();
+    }
+  });
+
+  it("disposes the frustum's geometry and material when the camera goes", () => {
+    const { scene, manager, gizmo } = settledCamera();
+    const geometry = vi.spyOn(gizmo.geometry, "dispose");
+    const material = vi.spyOn(gizmo.material, "dispose");
+
+    scene.remove(["cam"]);
+    manager.syncMeshes(scene.entities, null, false);
+
+    expect(manager.getObject("cam")).toBeUndefined();
+    expect(geometry).toHaveBeenCalled();
+    expect(material).toHaveBeenCalled();
+  });
+
+  it("draws a camera missing its lens (a damaged file) with the default one", () => {
+    const { camera } = settledCamera({ camera: undefined });
+    expect(camera.gizmo!.geometry.getAttribute("position").count).toBeGreaterThan(0);
   });
 });
 

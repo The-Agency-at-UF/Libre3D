@@ -6,7 +6,7 @@
  * INPUT: The entities on each sync (`syncMeshes`), a SceneSource for everything else about the
  * scene (the entities when an imported model lands, the wireframe setting, imported assets), and
  * the renderer the scene is drawn with. `editorHelpers: false` leaves out what only the editor
- * shows (selection outlines, light helpers): the share-link viewer's setting.
+ * shows (selection outlines, light helpers, camera frustums): the share-link viewer's setting.
  * OUTPUT: One object per entity in the scene, under its parent's object, with its transform,
  * visibility, lock, and material; `getObject` and `getMeshes` for the code that picks, drags, and
  * poses them.
@@ -15,7 +15,8 @@
  *
  * Not here: what a mesh's material looks like (entityMaterials.ts), a primitive's geometry
  * (entityGeometry.ts), an imported model's contents (importedModels.ts), selection outlines
- * (selectionOutline.ts), paths and shapes (paths/PathMesh.ts, paths/ShapeMesh.ts). This file builds
+ * (selectionOutline.ts), paths and shapes (paths/PathMesh.ts, paths/ShapeMesh.ts), a camera's frustum
+ * (sceneCameraObject.ts). This file builds
  * the object for each entity type from those pieces and keeps it current.
  */
 
@@ -35,6 +36,8 @@ import { EntityMaterials } from "./entityMaterials";
 import { ImportedModels } from "./importedModels";
 import { attachSelectionOutline, disposeSelectionOutline, replaceSelectionOutline } from "./selectionOutline";
 import { OriginTarget } from "./lightTargets";
+import { SceneCameraObject } from "./sceneCameraObject";
+import { DEFAULT_SCENE_CAMERA } from "../scene/defaults";
 
 // Puts an object where an entity, or a pose, says: its position, rotation, and scale in its
 // parent's space.
@@ -54,6 +57,8 @@ const strokeOf = (entity: Entity) => entity.stroke ?? DEFAULT_STROKE;
 const NO_SHAPE: ShapeData = { regions: [] };
 const shapeOf = (entity: Entity) => entity.shape ?? NO_SHAPE;
 const solidOf = (entity: Entity): ShapeSolid => ({ extrusion: entity.extrusion ?? 0, bevel: entity.bevel ?? 0 });
+// A camera without its lens (a damaged file) gets the default one.
+const cameraOf = (entity: Entity) => ({ ...DEFAULT_SCENE_CAMERA, ...entity.camera });
 
 export interface ObjectManagerOptions {
   /**
@@ -141,6 +146,11 @@ export class ObjectManager {
       const group = new THREE.Group();
       applyTransform(group, entity);
       return group;
+    } else if (entity.type === "camera") {
+      // An empty object, with a frustum in the editor (sceneCameraObject.ts).
+      const camera = new SceneCameraObject(cameraOf(entity), this.editorHelpers);
+      applyTransform(camera, entity);
+      return camera;
     } else if (entity.type === "directionalLight") {
       const light = new THREE.DirectionalLight(new THREE.Color(entity.color ?? "#ffffff"), 2.2);
       applyTransform(light, entity);
@@ -222,6 +232,8 @@ export class ObjectManager {
         material.dispose();
       }
       disposeSelectionOutline(obj);
+    } else if (obj instanceof SceneCameraObject) {
+      obj.dispose();
     } else if (obj instanceof THREE.DirectionalLight) {
       if (obj.userData.helper) {
         this.scene.remove(obj.userData.helper);
@@ -299,6 +311,8 @@ export class ObjectManager {
     if (obj instanceof THREE.Mesh && entity.materialLayers) {
       // The gizmo's object stays in the look of the state it's shown in, as it stays where it is.
       textureMissing = this.materials.syncMaterial(obj, entity, isBeingDragged);
+    } else if (obj instanceof SceneCameraObject) {
+      obj.setSettings(cameraOf(entity));
     } else if (obj instanceof THREE.DirectionalLight) {
       obj.color.set(entity.color ?? "#ffffff");
       if (obj.userData.helper) {

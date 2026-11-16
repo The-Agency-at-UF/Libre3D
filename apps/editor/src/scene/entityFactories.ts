@@ -8,13 +8,14 @@
  *
  * Pure: nothing here reads or writes the store. The editor's store calls these from its actions;
  * the share-link viewer doesn't need them (it only reads a scene). Depends on the path math, and so
- * on Three.js, for the Add menu's sample path.
+ * on Three.js, for the Add menu's sample path; and on Three's matrices to aim a new camera.
  */
 
 import { clonePath, createSamplePath, DEFAULT_STROKE } from "../paths/pathGeometry";
 import { cloneShape } from "../paths/shapeGeometry";
 import { createId } from "../utils/createId";
-import { DEFAULT_CAMERA_PROFILE } from "./defaults";
+import * as THREE from "three";
+import { DEFAULT_CAMERA_PROFILE, DEFAULT_SCENE_CAMERA } from "./defaults";
 import { DEFAULT_METALNESS, DEFAULT_ROUGHNESS } from "./layers";
 import type {
   CameraProfile,
@@ -34,6 +35,7 @@ import type {
   NoiseLayer,
   NormalLayer,
   RainbowLayer,
+  SceneCameraSettings,
 } from "./types";
 import { cloneVector } from "./vec3";
 
@@ -78,6 +80,10 @@ export const ENTITY_DEFAULTS: Record<EntityType, { name: string; color: string }
   },
   group: {
     name: "Group",
+    color: "#ffffff",
+  },
+  camera: {
+    name: "Camera",
     color: "#ffffff",
   },
 };
@@ -380,6 +386,8 @@ export const createEntity = (type: EntityType): Entity => ({
     ? { color: ENTITY_DEFAULTS[type].color }
     : type === "group"
       ? null // groups are pure transform pivots — no material, no color
+      : type === "camera"
+        ? { camera: { ...DEFAULT_SCENE_CAMERA } } // no material either: it draws nothing outside the editor
       : FLAT_ENTITY_TYPES.includes(type)
         ? { materialLayers: createFlatMaterialLayers(ENTITY_DEFAULTS[type].color) }
         : { materialLayers: createMaterialLayers(ENTITY_DEFAULTS[type].color) }),
@@ -403,6 +411,34 @@ export const initialEntities: Entity[] = [
     locked: false,
   },
 ];
+
+/**
+ * The rotation (radians, XYZ, as an entity's) that turns a camera at `position` to look at `target`
+ * with +Y up. A camera looks down its own -Z, as Object3D.lookAt turns a Three camera.
+ */
+export const lookRotation = (position: [number, number, number], target: [number, number, number]): [number, number, number] => {
+  const matrix = new THREE.Matrix4().lookAt(new THREE.Vector3(...position), new THREE.Vector3(...target), new THREE.Vector3(0, 1, 0));
+  const euler = new THREE.Euler().setFromRotationMatrix(matrix, "XYZ");
+  return [euler.x, euler.y, euler.z];
+};
+
+/**
+ * A new scene camera where the personal camera (`view`) is now, looking the same way, with its lens:
+ * Add Camera captures the current view. `projection` is the viewport's; an orthographic view's size
+ * is the personal camera's at its zoom.
+ */
+export const createSceneCamera = (view: CameraProfile, projection: SceneCameraSettings["projection"] = "perspective"): Entity => ({
+  ...createEntity("camera"),
+  position: cloneVector(view.position),
+  rotation: lookRotation(view.position, view.target),
+  camera: {
+    projection,
+    fov: view.fov,
+    orthoSize: DEFAULT_SCENE_CAMERA.orthoSize / (view.zoom > 0 ? view.zoom : 1),
+    near: view.near,
+    far: view.far,
+  },
+});
 
 export const cloneCameraProfile = (profile: CameraProfile): CameraProfile => ({
   ...profile,
@@ -435,6 +471,7 @@ export const cloneEntity = (entity: Entity): Entity => ({
   ...(entity.path ? { path: clonePath(entity.path) } : null),
   ...(entity.stroke ? { stroke: { ...entity.stroke } } : null),
   ...(entity.shape ? { shape: cloneShape(entity.shape) } : null),
+  ...(entity.camera ? { camera: { ...entity.camera } } : null),
 });
 
 // What a new scene starts with: a fresh cube (new ID) and the default light.

@@ -11,7 +11,7 @@
 import type { PathData, PathStroke } from "../paths/pathGeometry";
 import type { ShapeData } from "../paths/shapeGeometry";
 
-export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group";
+export type EntityType = "cube" | "sphere" | "torus" | "plane" | "path" | "shape" | "image" | "directionalLight" | "importedModel" | "group" | "camera";
 
 export type MaterialLayerType = "color" | "lighting" | "image" | "depth" | "gradient" | "noise" | "fresnel" | "normal" | "matcap" | "rainbow" | "glass" | "displace";
 export type LightingModel = "none" | "lambert" | "phong" | "physical" | "toon";
@@ -332,6 +332,22 @@ export interface Entity {
   // Images (type "image", see utils/imagePlane.ts): a flat plane as wide for its height as the picture
   // (width / height), which its Image layer shows.
   imageAspect?: number;
+  // Cameras (type "camera", see viewport/sceneCameraObject.ts): how the camera projects. Where it is
+  // and which way it looks are the ordinary transform: it looks down its own -Z, like a Three camera.
+  camera?: SceneCameraSettings;
+}
+
+/**
+ * A scene camera's lens (decision tree §C3). `fov` is the vertical field of view in degrees
+ * (perspective); `orthoSize` is half the view's height in world units (orthographic), as the
+ * personal camera's is at zoom 1 (viewport/CameraManager.ts). Defaults: DEFAULT_SCENE_CAMERA.
+ */
+export interface SceneCameraSettings {
+  projection: "perspective" | "orthographic";
+  fov: number;
+  orthoSize: number;
+  near: number;
+  far: number;
 }
 
 export interface ImportNodeSpec {

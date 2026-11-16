@@ -52,7 +52,7 @@ import { cloneShape, flattenShape, shapeContours, type ShapeData, type ShapeSoli
 import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
 import { deepMerge } from "../scene/deepMerge";
-import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialFrameDefaults, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
+import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, DEFAULT_SCENE_CAMERA, initialFrameDefaults, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
 import {
   cloneCameraProfile,
   cloneEntity,
@@ -64,6 +64,7 @@ import {
   createImageLayer,
   createLightingLayer,
   createPaintLayer,
+  createSceneCamera,
   createStartingEntities,
   ENTITY_DEFAULTS,
   initialEntities,
@@ -85,6 +86,7 @@ import type {
   MaterialLayer,
   MaterialLayerType,
   PostProcessingConfig,
+  SceneCameraSettings,
   SceneSettingsConfig,
 } from "../scene/types";
 import { cloneVector } from "../scene/vec3";
@@ -225,6 +227,12 @@ export interface EditorState {
   addImagePlane: (name: string, textureAssetId: string, aspect: number, transparent: boolean) => string;
   /** The extrusion (depth) or bevel of every shape among `ids`, in one undo step. */
   updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
+  /**
+   * Sets lens fields (projection, field of view, size, near, far) on every camera among `ids`, in one
+   * undo step, so a multi-selection is edited at once. A size or distance that isn't a positive
+   * number is ignored whole. Other entities among `ids` are left alone.
+   */
+  updateSceneCameras: (ids: string[], updates: Partial<SceneCameraSettings>) => void;
   /**
    * Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
    * a path along the middle of its strokes (paths/centerLine.ts), with a tube as thick as the
@@ -649,7 +657,11 @@ export const useEditorStore = create<EditorState>()(
           addEntity: (type) => {
             let newId = "";
             set((state) => {
-              const entity = createEntity(type);
+              // A camera captures the current view (entityFactories.createSceneCamera).
+              const entity =
+                type === "camera"
+                  ? createSceneCamera(state.cameraProfiles[state.activeProfileId] ?? DEFAULT_CAMERA_PROFILE, state.projectionMode)
+                  : createEntity(type);
               newId = entity.id;
 
               return {
@@ -1166,6 +1178,19 @@ export const useEditorStore = create<EditorState>()(
             });
             return newId;
           },
+          updateSceneCameras: (ids, updates) =>
+            set((state) => {
+              const targets = new Set(ids);
+              const isTarget = (entity: Entity) => entity.type === "camera" && targets.has(entity.id);
+              const numbers = [updates.fov, updates.orthoSize, updates.near, updates.far];
+              if (numbers.some((value) => value !== undefined && !(Number.isFinite(value) && value > 0))) return state;
+              if (!state.entities.some(isTarget)) return state;
+              return {
+                entities: state.entities.map((entity) =>
+                  isTarget(entity) ? { ...entity, camera: { ...DEFAULT_SCENE_CAMERA, ...entity.camera, ...updates } } : entity,
+                ),
+              };
+            }),
           updateShapeSolids: (ids, updates) =>
             set((state) => {
               const valid = Object.values(updates).every((value) => value === undefined || value >= 0);

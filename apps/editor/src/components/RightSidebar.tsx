@@ -7,6 +7,7 @@ import { EventsPanel } from "./inspector/EventsPanel";
 import { EditEventPanel } from "./inspector/events/EditEventPanel";
 import { TransformPanel } from "./inspector/TransformPanel";
 import { PathPanel } from "./inspector/PathPanel";
+import { SceneCameraPanel } from "./inspector/SceneCameraPanel";
 import { ShapePanel } from "./inspector/ShapePanel";
 import { MaterialsPanel } from "./inspector/MaterialsPanel";
 import { MaterialAssetsDrawer, type AssetsView } from "./inspector/MaterialAssetsDrawer";
@@ -143,6 +144,7 @@ function SelectionPanels({
         <TransformPanel selectedEntities={selectedEntities} />
         {selectedEntities.every((entity) => entity.type === "path") && <PathPanel entities={selectedEntities} />}
         {reachedShapes.length > 0 && <ShapePanel shapes={reachedShapes} selectedIds={selectedEntityIds} />}
+        {selectedEntities.length > 0 && selectedEntities.every((entity) => entity.type === "camera") && <SceneCameraPanel cameras={selectedEntities} />}
         <MaterialsPanel selectedEntities={selectedEntities} assetsOpen={assetsOpen} onAssetsView={onAssetsView} />
       </fieldset>
     </>

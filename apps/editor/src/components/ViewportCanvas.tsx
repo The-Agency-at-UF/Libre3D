@@ -27,6 +27,7 @@ import { whenRendererReady } from "../viewport/rendererSettings";
 import { createRoomEnvironment } from "../viewport/sceneEnvironment";
 import { CameraManager } from "../viewport/CameraManager";
 import { ObjectManager } from "../viewport/ObjectManager";
+import { SceneCameraObject } from "../viewport/sceneCameraObject";
 import { editorSceneSource } from "../viewport/editorSceneSource";
 import { getLiveRenderer, setLiveScene } from "../viewport/liveViewport";
 import { useViewportRenderer } from "../viewport/hooks/useViewportRenderer";
@@ -324,6 +325,7 @@ export function ViewportCanvas() {
         // Hidden while a Depth layer is edited (as Spline does), so the box doesn't hide the gradient.
         (obj.userData.selectionOutline as THREE.LineSegments).visible = isSelected && !isEditingDepth && (entity?.visible ?? true);
       }
+      if (obj instanceof SceneCameraObject) obj.setSelected(isSelected);
       if (obj.userData.helper) {
         const helper = obj.userData.helper as THREE.DirectionalLightHelper;
         if (entity?.visible) {

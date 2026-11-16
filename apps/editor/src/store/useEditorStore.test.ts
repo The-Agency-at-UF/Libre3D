@@ -1923,3 +1923,145 @@ describe("colour and opacity in states (task D6)", () => {
     expect(get().animation.states[stateId].values).toMatchObject({ color: "#0000ff", opacity: 0 });
   });
 });
+
+describe("scene cameras", () => {
+  const withView = async () => {
+    const loaded = await loadStore();
+    const { useEditorStore } = loaded;
+    useEditorStore.getState().loadScene({ entities: [entity("cube-1"), light] });
+    useEditorStore.getState().updateProfileData("personal", { position: [4, 3, 6], target: [1, 0, 0], fov: 60, near: 0.5, far: 300 });
+    return loaded;
+  };
+  const cameraOf = (useEditorStore: Awaited<ReturnType<typeof loadStore>>["useEditorStore"], id: string) =>
+    useEditorStore.getState().entities.find((each) => each.id === id)!;
+
+  it("are added where the personal camera is, looking at its target, with its lens and copies of its vectors", async () => {
+    const { useEditorStore } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    const camera = cameraOf(useEditorStore, id);
+    const profile = useEditorStore.getState().cameraProfiles.personal;
+
+    expect(camera).toMatchObject({ type: "camera", name: "Camera", position: [4, 3, 6], visible: true, locked: false });
+    expect(camera.materialLayers).toBeUndefined();
+    expect(camera.camera).toEqual({ projection: "perspective", fov: 60, orthoSize: 5, near: 0.5, far: 300 });
+    expect(camera.position).not.toBe(profile.position);
+    expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
+    // It looks down its -Z at the target.
+    const looks = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(...camera.rotation));
+    const toTarget = new THREE.Vector3(1, 0, 0).sub(new THREE.Vector3(4, 3, 6)).normalize();
+    expect(looks.distanceTo(toTarget)).toBeLessThan(1e-6);
+
+    profile.position[0] = 99;
+    expect(cameraOf(useEditorStore, id).position[0]).toBe(4);
+  });
+
+  it("take the defaults when made by the factory alone", async () => {
+    const { createEntity } = await import("../scene/entityFactories");
+    const { DEFAULT_CAMERA_PROFILE } = await import("../scene/defaults");
+    const a = createEntity("camera");
+    const b = createEntity("camera");
+
+    expect(a.camera).toEqual({ projection: "perspective", fov: DEFAULT_CAMERA_PROFILE.fov, orthoSize: 5, near: DEFAULT_CAMERA_PROFILE.near, far: DEFAULT_CAMERA_PROFILE.far });
+    expect(a.camera).not.toBe(b.camera);
+  });
+
+  it("change their lens together, one or several, in one undo step, leaving other objects alone", async () => {
+    const { useEditorStore } = await withView();
+    const a = useEditorStore.getState().addEntity("camera");
+    const b = useEditorStore.getState().addEntity("camera");
+    const cube = cameraOf(useEditorStore, "cube-1");
+    const undoBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().updateSceneCameras([a, b, "cube-1"], { fov: 30, projection: "orthographic" });
+
+    expect(cameraOf(useEditorStore, a).camera).toMatchObject({ fov: 30, projection: "orthographic", near: 0.5 });
+    expect(cameraOf(useEditorStore, b).camera).toMatchObject({ fov: 30, projection: "orthographic" });
+    expect(cameraOf(useEditorStore, "cube-1")).toBe(cube);
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(undoBefore + 1);
+
+    useEditorStore.getState().updateSceneCameras([a], { near: 2 });
+    expect(cameraOf(useEditorStore, a).camera!.near).toBe(2);
+    expect(cameraOf(useEditorStore, b).camera!.near).toBe(0.5);
+
+    useEditorStore.temporal.getState().undo();
+    expect(cameraOf(useEditorStore, a).camera!.near).toBe(0.5);
+  });
+
+  it("ignore a lens value that isn't a positive number", async () => {
+    const { useEditorStore } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    const before = cameraOf(useEditorStore, id);
+
+    for (const bad of [{ fov: 0 }, { near: -1 }, { far: Number.NaN }, { orthoSize: Infinity }]) {
+      useEditorStore.getState().updateSceneCameras([id], bad);
+    }
+    expect(cameraOf(useEditorStore, id)).toBe(before);
+  });
+
+  it("can't be added or changed while view only", async () => {
+    const { useEditorStore } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    const before = useEditorStore.getState().entities;
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().updateSceneCameras([id], { fov: 20 });
+    useEditorStore.getState().addEntity("camera");
+
+    expect(useEditorStore.getState().entities).toBe(before);
+    useEditorStore.getState().setReadOnly(null);
+  });
+
+  it("duplicate with a lens of their own", async () => {
+    const { useEditorStore } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    useEditorStore.getState().duplicateEntity([id]);
+    const copy = useEditorStore.getState().entities.at(-1)!;
+
+    expect(copy.type).toBe("camera");
+    expect(copy.camera).toEqual(cameraOf(useEditorStore, id).camera);
+    expect(copy.camera).not.toBe(cameraOf(useEditorStore, id).camera);
+    useEditorStore.getState().updateSceneCameras([copy.id], { fov: 20 });
+    expect(cameraOf(useEditorStore, id).camera!.fov).toBe(60);
+  });
+
+  it("survive save and reload", async () => {
+    const { useEditorStore, selectSceneContent } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    useEditorStore.getState().updateSceneCameras([id], { projection: "orthographic", orthoSize: 8 });
+    const saved = cameraOf(useEditorStore, id);
+
+    const document = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+    const reopened = await loadStore();
+    const parsed = parseSceneDocument(document);
+    reopened.useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+
+    expect(cameraOf(reopened.useEditorStore, id)).toEqual(saved);
+  });
+
+  it("go with their states, their events, and other objects' actions on them in one step, and one undo brings it all back", async () => {
+    const { useEditorStore } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    const stateId = useEditorStore.getState().addState(id);
+    useEditorStore.getState().setStateValues(stateId, { position: [0, 9, 0] });
+    useEditorStore.getState().setViewedState(id, null);
+    const ownEvent = useEditorStore.getState().addEvent(id, "start");
+    const cubeEvent = useEditorStore.getState().addEvent("cube-1", "mouseDown");
+    const cubeAction = useEditorStore.getState().animation.events[cubeEvent].actions[0] as TransitionAction;
+    useEditorStore.getState().updateEvent(cubeEvent, { actions: [cubeAction, { ...cubeAction, id: "on-camera", targetId: id, steps: [{ to: stateId, duration: 1, easing: "linear" }] }] });
+    const before = { entities: useEditorStore.getState().entities, animation: useEditorStore.getState().animation };
+    const undoBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().removeEntity([id]);
+
+    const after = useEditorStore.getState();
+    expect(after.entities.some((each) => each.id === id)).toBe(false);
+    expect(after.animation.states[stateId]).toBeUndefined();
+    expect(after.animation.events[ownEvent]).toBeUndefined();
+    expect(transitionsOf(after.animation.events[cubeEvent].actions).map((action) => action.targetId)).toEqual(["cube-1"]);
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(undoBefore + 1);
+
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().entities).toEqual(before.entities);
+    expect(useEditorStore.getState().animation).toEqual(before.animation);
+  });
+});
