@@ -597,6 +597,18 @@ const rainbowSource = (): LayerSource => {
 // a stale backdrop.
 const canvasCopy = {};
 const backdropCopies = new WeakMap<object, THREE.FramebufferTexture>();
+
+/**
+ * Kept on every material with a Glass layer (layerNodes.ts), for three to see when a copy's GPU
+ * texture was remade. Three remakes it when the canvas changes size, in the middle of a frame (on
+ * the first glass drawn), and only gives an object the new one when it sees that object or its
+ * material change (NodeMaterialObserver): the first glass drawn got it, and every other one kept
+ * drawing with the destroyed texture ("Destroyed texture used in a submit", or under WebGL
+ * "bindTexture: attempt to use a deleted object"). A texture on a material is one of the things
+ * three compares, by its version, so this one's goes up with each remake. It is never drawn.
+ */
+export const backdropWatch = new THREE.Texture();
+
 class BackdropNode extends ViewportTextureNode {
   updateBefore(frame: NodeFrame): void {
     const drawnInto = frame.renderer?.getRenderTarget() ?? canvasCopy;
@@ -607,7 +619,9 @@ class BackdropNode extends ViewportTextureNode {
       backdropCopies.set(drawnInto, copy);
     }
     this.value = copy;
+    const version = copy.version;
     super.updateBefore(frame);
+    if (copy.version !== version) backdropWatch.version++;
   }
 }
 const backdropNode = new BackdropNode();
