@@ -12,6 +12,7 @@ import { MaterialsPanel } from "./inspector/MaterialsPanel";
 import { MaterialAssetsDrawer, type AssetsView } from "./inspector/MaterialAssetsDrawer";
 import { inspectSelection } from "./inspector/inspectedSelection";
 import { ScenePanel } from "./inspector/ScenePanel";
+import { EffectsPanel } from "./inspector/EffectsPanel";
 import { CameraPanel } from "./inspector/CameraPanel";
 import { PlayCameraPanel } from "./inspector/PlayCameraPanel";
 import { FramePanel } from "./inspector/FramePanel";
@@ -84,6 +85,7 @@ export function RightSidebar({ setIsModalOpen, setActiveTab, canShare, assetsVie
         <ViewportSettingsPanel />
         <fieldset className="inspector-fieldset" disabled={isReadOnly}>
           <ScenePanel />
+          <EffectsPanel />
         </fieldset>
 
         {hasSelectedEntities ? (
