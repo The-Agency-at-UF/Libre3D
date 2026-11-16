@@ -341,7 +341,7 @@ updateSceneSettings({
 ### Post-Processing
 
 #### `updatePostProcessing(updates: DeepPartial<PostProcessingConfig>) → void`
-Update the scene's effects (deep-merged). Saved with the scene and drawn by `viewport/postProcessing.ts` in the editor, the gallery picture and the share link. Called by the Effects section (`EffectsPanel.tsx`). `dof`, `pixelation` and `aberration` are saved but not drawn yet, and have no rows there.
+Update the scene's effects (deep-merged). Saved with the scene and drawn by `viewport/postProcessing.ts` in the editor, the gallery picture and the share link. Called by the Effects section (`EffectsPanel.tsx`). Units: `dof.focusDistance` and `dof.range` are in the scene's units (sharp at the first, fully blurred the second nearer or farther), `dof.blur` 1 is a radius of 0.2% of the picture's width, `pixelation.granularity` is CSS pixels per block, and aberration's offsets are thousandths of the picture's size.
 
 - **enabled**: the master switch (on in a new scene, with every effect off)
 - **exposure**: stops over the scene's fixed exposure (0 is the look without it; none while the master switch is off); **toneMap**: `"Neutral"`, not read
