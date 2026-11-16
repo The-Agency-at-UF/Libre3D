@@ -25,11 +25,13 @@
  * - A Scroll event's transitions have no clock (decision tree B4): where each is is the scene's one
  *   scroll progress (0 to 1) times its length, through its steps and easings, without its Delay,
  *   Loop, or Cycle, so scrolling back retraces it. They are set up once, put at progress 0 by
- *   `start()` (no flash of Base before the first frame), and moved only by `setScrollProgress`,
- *   never by `tick`. Row 1 is never Current there (there is no moment it starts from): it reads as
- *   Base. The newest writer wins an object both drive: a clocked transition (a click) started on a
- *   scroll-driven object takes it from where it is, and the next change of scroll progress takes it
- *   back, stopping that transition.
+ *   `start()` (no flash of Base before the first frame), and moved by `setScrollProgress`. Row 1 is
+ *   never Current there (there is no moment it starts from): it reads as Base. The newest writer
+ *   wins an object both drive: a clocked transition (a click) started on a scroll-driven object
+ *   takes it from where it is, and the next change of scroll progress takes it back, stopping that
+ *   transition. It doesn't snap back: the object glides from where the click left it to its scroll
+ *   pose over SCROLL_TAKEOVER_SECONDS, moved by `tick` for that glide only, then follows scroll
+ *   again. A click during the glide ends it.
  * - An Open Link or Sound action isn't run here: it becomes an effect (actions.ts) handed to the
  *   host's `onEffect` at once, while the trigger is still being handled.
  * - A missing owner, target, or state (a deleted object or state, a damaged file) skips that action
@@ -97,6 +99,16 @@ interface RunningTransition {
 /** The triggers fired by a key rather than the pointer or Start. */
 export type KeyTrigger = Extract<EventTrigger, "keyDown" | "keyUp">;
 
+// How long an object a click moved takes to glide back to its scroll pose once scroll takes it
+// again. Short enough to read as a response to the scroll, long enough that no step is visible.
+const SCROLL_TAKEOVER_SECONDS = 0.5;
+
+/** A glide from where a click left a scroll-driven object back to its scroll pose. */
+interface ScrollTakeover {
+  from: Pose;
+  elapsed: number; // seconds
+}
+
 /** A Scroll event's transition, ready to be put anywhere along its sequence. */
 interface ScrubbedTransition {
   targetId: string;
@@ -151,6 +163,9 @@ export class SceneRuntime {
   private readonly current = new Map<string, Pose>(); // where each moved object is, by entity ID
   private readonly scrubbed: ScrubbedTransition[] = []; // Scroll events' transitions, in scene order
   private scrollProgress = Number.NaN; // none put on yet
+  private readonly scrollPoses = new Map<string, Pose>(); // where scroll puts each scrubbed object now
+  private readonly clockMoved = new Set<string>(); // objects a clocked transition moved since scroll last did
+  private readonly takeovers = new Map<string, ScrollTakeover>(); // objects gliding back to their scroll pose
 
   /**
    * The triggers the scene's events use, so a host can skip what the scene can't need (no pick on
@@ -245,11 +260,31 @@ export class SceneRuntime {
   setScrollProgress(progress: number): void {
     const next = clampProgress(progress);
     if (next === this.scrollProgress) return;
+    const firstWrite = Number.isNaN(this.scrollProgress); // start(): nothing to glide from yet
     this.scrollProgress = next;
     for (const scrub of this.scrubbed) {
-      this.running.delete(scrub.targetId); // newest writer wins: a clocked transition here stops
-      this.putAt(scrub.targetId, scrub.rows, sampleTransitionAt(scrub.timing, scrub.length, next));
+      const id = scrub.targetId;
+      this.running.delete(id); // newest writer wins: a clocked transition here stops
+      const sample = sampleTransitionAt(scrub.timing, scrub.length, next);
+      this.scrollPoses.set(id, lerpPose(scrub.rows[sample.from], scrub.rows[sample.to], sample.progress));
+      if (this.clockMoved.delete(id) && !firstWrite) {
+        this.takeovers.set(id, { from: lerpPose(this.current.get(id) ?? this.scrollPoses.get(id)!, this.scrollPoses.get(id)!, 0), elapsed: 0 });
+      }
+      this.writeScrollPose(id);
     }
+  }
+
+  /** Puts a scroll-driven object at its scroll pose, or part-way back to it while it glides. */
+  private writeScrollPose(id: string): void {
+    const target = this.scrollPoses.get(id)!;
+    const takeover = this.takeovers.get(id);
+    if (!takeover) {
+      this.current.set(id, lerpPose(target, target, 0));
+      return;
+    }
+    const t = Math.min(1, takeover.elapsed / SCROLL_TAKEOVER_SECONDS);
+    const eased = 1 - (1 - t) * (1 - t); // starts quickly, then settles
+    this.current.set(id, lerpPose(takeover.from, target, eased));
   }
 
   /**
@@ -317,6 +352,7 @@ export class SceneRuntime {
     const rows = this.resolveRows(entity, action, action.from === "current" || isMoving ? this.poseOf(entity) : null);
     if (!rows) return false;
 
+    this.takeovers.delete(entity.id); // a new click ends a glide back to scroll
     const transition: RunningTransition = { action, rows, elapsed: 0 };
     this.running.set(entity.id, transition);
     this.advance(entity.id, transition);
@@ -339,6 +375,11 @@ export class SceneRuntime {
       transition.elapsed += dt;
       this.advance(targetId, transition);
     }
+    for (const [id, takeover] of this.takeovers) {
+      takeover.elapsed += dt;
+      this.writeScrollPose(id);
+      if (takeover.elapsed >= SCROLL_TAKEOVER_SECONDS) this.takeovers.delete(id);
+    }
   }
 
   /** Where each object a transition has moved is now, by entity ID. Objects not listed are in Base. */
@@ -348,7 +389,7 @@ export class SceneRuntime {
 
   /** Whether nothing is moving (or waiting to move) any more. */
   get isIdle(): boolean {
-    return this.running.size === 0;
+    return this.running.size === 0 && this.takeovers.size === 0;
   }
 
   /** Fires an owner's own events of a trigger, in Events-list order. Returns whether it had any. */
@@ -404,6 +445,7 @@ export class SceneRuntime {
   private advance(targetId: string, transition: RunningTransition): void {
     const sample = sampleTransition(transition.action, transition.elapsed);
     this.putAt(targetId, transition.rows, sample);
+    this.clockMoved.add(targetId);
     if (sample.finished) this.running.delete(targetId);
   }
 
