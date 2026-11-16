@@ -16,7 +16,7 @@ import type { StateRef, TransitionAction } from "./transitions";
 
 export { createTransition };
 
-export type EventTrigger = "start" | "mouseDown" | "mouseUp" | "mouseHover" | "keyDown" | "keyUp" | "scroll";
+export type EventTrigger = "start" | "mouseDown" | "mouseUp" | "mouseHover" | "mouseLeave" | "keyDown" | "keyUp" | "scroll";
 
 /**
  * Every trigger a document may hold (schema v6 taught the document all of them at once, so adding
@@ -28,6 +28,7 @@ export const TRIGGER_INFO: Record<EventTrigger, { label: string; icon: string }>
   mouseDown: { label: "Mouse Down", icon: "pointer" },
   mouseUp: { label: "Mouse Up", icon: "pointer-up" },
   mouseHover: { label: "Mouse Hover", icon: "hand-finger" },
+  mouseLeave: { label: "Mouse Leave", icon: "hand-off" },
   keyDown: { label: "Key Down", icon: "keyboard" },
   keyUp: { label: "Key Up", icon: "keyboard" },
   scroll: { label: "Scroll", icon: "mouse" },
@@ -40,10 +41,10 @@ export const isEventTrigger = (value: unknown): value is EventTrigger =>
  * The triggers fired on the object under the pointer (or its nearest ancestor with one): the ones
  * Play's pointer input picks for, and the ones the pointer cursor shows over.
  */
-export const POINTER_TRIGGERS: readonly EventTrigger[] = ["mouseDown", "mouseUp", "mouseHover"];
+export const POINTER_TRIGGERS: readonly EventTrigger[] = ["mouseDown", "mouseUp", "mouseHover", "mouseLeave"];
 
 /** The triggers that fire today, which is what the trigger dropdown offers: every one the document knows. */
-const OFFERED_TRIGGERS: readonly EventTrigger[] = ["start", "mouseDown", "mouseUp", "mouseHover", "keyDown", "keyUp", "scroll"];
+const OFFERED_TRIGGERS: readonly EventTrigger[] = ["start", "mouseDown", "mouseUp", "mouseHover", "mouseLeave", "keyDown", "keyUp", "scroll"];
 
 /** Whether a trigger is set off by a key, so its event has a key to pick (`SceneEvent.key`). */
 export const isKeyTrigger = (trigger: EventTrigger): trigger is "keyDown" | "keyUp" => trigger === "keyDown" || trigger === "keyUp";
