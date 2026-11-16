@@ -341,7 +341,7 @@ updateSceneSettings({
 ### Post-Processing
 
 #### `updatePostProcessing(updates: DeepPartial<PostProcessingConfig>) → void`
-Update the scene's effects (deep-merged). Saved with the scene and drawn by `viewport/postProcessing.ts` in the editor, the gallery picture and the share link. No panel calls this yet. `dof`, `pixelation` and `aberration` are saved but not drawn yet.
+Update the scene's effects (deep-merged). Saved with the scene and drawn by `viewport/postProcessing.ts` in the editor, the gallery picture and the share link. Called by the Effects section (`EffectsPanel.tsx`). `dof`, `pixelation` and `aberration` are saved but not drawn yet, and have no rows there.
 
 - **enabled**: the master switch (on in a new scene, with every effect off)
 - **exposure**: stops over the scene's fixed exposure (0 is the look without it; none while the master switch is off); **toneMap**: `"Neutral"`, not read

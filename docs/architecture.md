@@ -23,7 +23,7 @@ graph LR
     end
     subgraph RIGHT["RIGHT SIDEBAR"]
         RS["<b>RightSidebar.tsx</b><br/>lays out the panels below"]
-        IP["<b>inspector/</b><br/>FramePanel · ScenePanel<br/>TransformPanel · CameraPanel<br/>ViewportSettingsPanel"]
+        IP["<b>inspector/</b><br/>FramePanel · ScenePanel · EffectsPanel<br/>TransformPanel · CameraPanel<br/>ViewportSettingsPanel"]
         RS --- IP
     end
 ```
