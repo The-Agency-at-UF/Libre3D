@@ -333,6 +333,7 @@ Update background color, grid, fog, lighting, physics, etc.
 - **audioButton** (nested): the mute/unmute button a scene with sound shows in Play and on the share page (the Scene panel shows it only for a scene with sound). Scenes start muted either way. Deep-merged like `scroll`, so older scenes get the defaults.
   - `visible`: Show the button (default on). Off, the scene stays muted unless the page it's embedded in unmutes it in code (`SceneViewer.setMuted(false)`)
   - `position`: Where it sits; only `"bottomRight"` for now (later looks will be added to this object)
+- **play** (nested, optional, C7): how the camera moves in Play and on the share page, one set per scene (`PlayCameraSettings`: `mode` `"fixed" | "softOrbit" | "orbit" | "autoRotate"`, `range`, `smoothness`, `speed`), edited in the Export dialog (`PlaySettingsPanel`). Not in the defaults: a scene without it plays with its active camera profile's `play`, as before (`resolveScenePlay` in `viewport/PlayCamera.ts`), so it needed no document bump. The panel writes the whole setting on its first change. A published page takes a change only after Update Published Scene. Later Play settings (decision tree §G6) go in this object.
 - **physics** (nested):
   - `enabled`: Enable physics simulation
   - `gravityY`: Gravity vector Y component
@@ -731,7 +732,7 @@ Delete a profile by ID.
 #### `updateProfileData(id: string, updates: Partial<CameraProfile>) → void`
 Update an existing profile's data.
 - **Clones vectors**: Position and target are cloned (never hand out references)
-- **Partial updates**: Only provided fields are changed; `play` is replaced as a whole, so pass it merged (`PlayCameraPanel` does)
+- **Partial updates**: Only provided fields are changed; `play` is replaced as a whole. A profile's `play` is no longer written by the editor (C7): it is read only for a scene without `sceneSettings.play`
 
 ---
 
