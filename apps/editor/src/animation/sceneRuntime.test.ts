@@ -781,3 +781,47 @@ describe("SceneRuntime: colour and opacity", () => {
     expect(runtime.poses().has("other")).toBe(false);
   });
 });
+
+describe("a camera's field of view (C6)", () => {
+  const lens = { fov: 45 };
+  const cameraScene = (trigger: SceneEvent["trigger"]) =>
+    new SceneRuntime({
+      entities: [entity("cam", { camera: lens }), entity("cube")],
+      animation: {
+        states: byId(state("wide", "cam", { fov: 85, position: [0, 4, 0] }), state("up", "cube", { position: [0, 2, 0] })),
+        events: byId(
+          event("zoom", { ownerId: "cam", trigger, actions: [transition({ id: "zoom", targetId: "cam", steps: [{ to: "wide", duration: 2, easing: "linear" }] })] }),
+          event("lift", { trigger, actions: [transition({ id: "lift" })] }),
+        ),
+      },
+    });
+
+  it("changes linearly in a transition, with the transform", () => {
+    const runtime = cameraScene("start");
+    runtime.start();
+    runtime.tick(1);
+
+    expect(runtime.poses().get("cam")).toMatchObject({ fov: 65, position: [0, 2, 0] });
+    runtime.tick(1);
+    expect(runtime.poses().get("cam")!.fov).toBe(85);
+  });
+
+  it("follows scroll progress both ways", () => {
+    const runtime = cameraScene("scroll");
+    runtime.start();
+    expect(runtime.poses().get("cam")!.fov).toBe(45);
+    runtime.setScrollProgress(0.25);
+    expect(runtime.poses().get("cam")!.fov).toBe(55);
+    runtime.setScrollProgress(1);
+    expect(runtime.poses().get("cam")!.fov).toBe(85);
+    runtime.setScrollProgress(0.25);
+    expect(runtime.poses().get("cam")!.fov).toBe(55);
+  });
+
+  it("is never given to an object that isn't a camera", () => {
+    const runtime = cameraScene("start");
+    runtime.start();
+    runtime.tick(0.5);
+    expect(runtime.poses().get("cube")).not.toHaveProperty("fov");
+  });
+});

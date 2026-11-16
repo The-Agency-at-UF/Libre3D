@@ -19,7 +19,7 @@
  *   finished, the new one starts from where the object is instead of its row 1, so interrupting
  *   never jumps (Spline does the same).
  * - Values change linearly after easing (a path's trim too, which is how it writes itself on;
- *   opacity too). Colour is mixed in linear light (utils/colorSpaces.ts), as THREE.Color.lerp would.
+ *   opacity and a camera's field of view too). Colour is mixed in linear light (utils/colorSpaces.ts), as THREE.Color.lerp would.
  *   Rotation changes per Euler component, so a state turned +360° about Y spins once, where the
  *   shortest way round (slerp) wouldn't move at all.
  * - A Scroll event's transitions have no clock (decision tree B4): where each is is the scene's one
@@ -71,6 +71,7 @@ export interface RuntimeEntity {
   materialLayers?: MaterialLayer[];
   materialAssetId?: string;
   opacity?: number;
+  camera?: { fov: number }; // a scene camera's lens: its field of view is a state value
 }
 
 export interface RuntimeOptions {
@@ -135,6 +136,8 @@ const lerpPose = (from: Pose, to: Pose, progress: number): Pose => {
   }
   const color = mixedColor(from.color, to.color, progress);
   if (color !== undefined) pose.color = color;
+  // A camera's field of view (both rows have one: they're the same camera's).
+  if (from.fov !== undefined || to.fov !== undefined) pose.fov = lerp(from.fov ?? to.fov!, to.fov ?? from.fov!, progress);
   return pose;
 };
 
@@ -174,6 +177,7 @@ export class SceneRuntime {
         materialLayers: entity.materialLayers,
         materialAssetId: entity.materialAssetId,
         opacity: entity.opacity,
+        ...(entity.camera ? { camera: { fov: entity.camera.fov } } : null),
       });
     }
     this.states = { ...scene.animation.states };

@@ -52,6 +52,7 @@ import { cloneShape, flattenShape, shapeContours, type ShapeData, type ShapeSoli
 import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
 import { deepMerge } from "../scene/deepMerge";
+import { sceneCameraEntity } from "../scene/activeCamera";
 import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, DEFAULT_SCENE_CAMERA, initialFrameDefaults, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
 import {
   cloneCameraProfile,
@@ -229,8 +230,9 @@ export interface EditorState {
   updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
   /**
    * Sets lens fields (projection, field of view, size, near, far) on every camera among `ids`, in one
-   * undo step, so a multi-selection is edited at once. A size or distance that isn't a positive
-   * number is ignored whole. Other entities among `ids` are left alone.
+   * undo step, so a multi-selection is edited at once. Field of view goes to the state a camera is
+   * shown in (Base: the camera's own), as transform edits do. A size or distance that isn't a
+   * positive number is ignored whole. Other entities among `ids` are left alone.
    */
   updateSceneCameras: (ids: string[], updates: Partial<SceneCameraSettings>) => void;
   /**
@@ -660,7 +662,7 @@ export const useEditorStore = create<EditorState>()(
               // A camera captures the current view (entityFactories.createSceneCamera).
               const entity =
                 type === "camera"
-                  ? createSceneCamera(state.cameraProfiles[state.activeProfileId] ?? DEFAULT_CAMERA_PROFILE, state.projectionMode)
+                  ? createSceneCamera(state.cameraProfiles[state.activeProfileId] ?? state.cameraProfiles[DEFAULT_CAMERA_PROFILE_ID] ?? DEFAULT_CAMERA_PROFILE, state.projectionMode)
                   : createEntity(type);
               newId = entity.id;
 
@@ -1185,10 +1187,25 @@ export const useEditorStore = create<EditorState>()(
               const numbers = [updates.fov, updates.orthoSize, updates.near, updates.far];
               if (numbers.some((value) => value !== undefined && !(Number.isFinite(value) && value > 0))) return state;
               if (!state.entities.some(isTarget)) return state;
+
+              // Field of view is a state value (C6): it goes to the state each camera is shown in, as
+              // the Transform panel's edits do; the rest of the lens is the camera's in every state.
+              const { fov, ...lens } = updates;
+              const states = { ...state.animation.states };
+              let isStateEdit = false;
+              const entities = state.entities.map((entity) => {
+                if (!isTarget(entity)) return entity;
+                const shown = fov === undefined ? null : selectViewedObjectState(state, entity.id);
+                if (shown) {
+                  states[shown.id] = { ...shown, values: { ...shown.values, fov } };
+                  isStateEdit = true;
+                }
+                const own = shown || fov === undefined ? lens : { ...lens, fov };
+                return Object.keys(own).length > 0 ? { ...entity, camera: { ...DEFAULT_SCENE_CAMERA, ...entity.camera, ...own } } : entity;
+              });
               return {
-                entities: state.entities.map((entity) =>
-                  isTarget(entity) ? { ...entity, camera: { ...DEFAULT_SCENE_CAMERA, ...entity.camera, ...updates } } : entity,
-                ),
+                ...(entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : null),
+                ...(isStateEdit ? { animation: { ...state.animation, states } } : null),
               };
             }),
           updateShapeSolids: (ids, updates) =>
@@ -1592,8 +1609,9 @@ export const useEditorStore = create<EditorState>()(
               [DEFAULT_CAMERA_PROFILE_ID]: cloneCameraProfile(DEFAULT_CAMERA_PROFILE),
               ...Object.fromEntries(savedProfiles.map((profile) => [profile.id, profile])),
             };
+            // A profile, or a scene camera (scene/activeCamera.ts); anything else is the personal camera.
             const activeProfileId =
-              content?.activeProfileId && cameraProfiles[content.activeProfileId]
+              content?.activeProfileId && (cameraProfiles[content.activeProfileId] || sceneCameraEntity(content.entities, content.activeProfileId))
                 ? content.activeProfileId
                 : DEFAULT_CAMERA_PROFILE_ID;
 

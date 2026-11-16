@@ -8,6 +8,8 @@ import { selectDrawnEntities, selectViewedObjectState, useEditorStore, type Edit
 import { getEntityIndex } from "../../scene/entityIndex";
 import type { ObjectManager } from "../ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
+import { SceneCameraObject } from "../sceneCameraObject";
+import { resolveActiveCamera } from "../../scene/activeCamera";
 import { pickEntityAt } from "../pickEntity";
 import { attachPlayInput } from "../playInput";
 import { createPlayEffects, type PlayEffects } from "../playEffects";
@@ -63,7 +65,8 @@ const findPreviewAction = (state: EditorState, actionId: string): TransitionActi
  * back to the state it's shown in while editing.
  *
  * Play looks through a camera of its own (PlayCamera): it starts where the scene's camera is and
- * moves as the camera's Play setting says (Fixed, Soft Orbit, Orbit, Auto-Rotate), while the
+ * moves as the camera's Play setting says (Fixed, Soft Orbit, Orbit, Auto-Rotate), or follows the
+ * scene camera picked in the camera dropdown (C6) wherever its states and transitions move it, while the
  * editor's camera, which is scene data, stays put and unsaved-to (useViewportControls switches its
  * orbiting off). `cameraRef` points at it from Play's first frame to Stop, so rendering and clicks
  * use it; on Stop the editor's camera is put back exactly as it was.
@@ -140,10 +143,14 @@ export function useViewportPlay(
 
     const canvasAspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
 
-    // Play's camera starts where the scene's camera is, with its Play setting, read once here.
+    // Play's camera starts where the scene's camera is, with its Play setting, read once here. A
+    // scene camera picked in the dropdown is followed instead (scene/activeCamera.ts), as Fixed.
     const startView = (store: EditorState): NonNullable<Session["view"]> => {
-      const profile = store.cameraProfiles[store.activeProfileId] ?? store.cameraProfiles.personal;
-      const camera = new PlayCamera(profile, resolvePlayCamera(profile.play), canvasAspect(), { reduceMotion: prefersReducedMotion() });
+      const active = resolveActiveCamera(store);
+      const profile = active.kind === "profile" ? active.profile : store.cameraProfiles.personal;
+      const followed = active.kind === "entity" ? objectManager.getObject(active.id) : undefined;
+      const follow = followed instanceof SceneCameraObject ? followed : null;
+      const camera = new PlayCamera(profile, resolvePlayCamera(profile.play), canvasAspect(), { reduceMotion: prefersReducedMotion(), follow });
       const editorCamera = cameraRef.current;
       cameraRef.current = camera.camera;
       return { camera, editorCamera, detach: camera.attach(canvas) };
@@ -174,6 +181,7 @@ export function useViewportPlay(
     frameRef.current = () => {
       const store = useEditorStore.getState();
       const now = performance.now();
+      let cameraDt = 0; // how far Play's camera moves on this frame: none on Play's first
       let runtime: SceneRuntime | null;
 
       if (store.isPreviewMode) {
@@ -188,7 +196,7 @@ export function useViewportPlay(
             runtime.setScrollProgress(scrollShown);
           }
           session.view?.camera.setAspect(canvasAspect());
-          session.view?.camera.update((now - lastFrameTime) / 1000);
+          cameraDt = (now - lastFrameTime) / 1000;
         } else {
           runtime = startSession(store, false);
           runtime.start();
@@ -226,6 +234,8 @@ export function useViewportPlay(
       input.frame();
 
       runtime.poses().forEach((pose, entityId) => objectManager.applyPose(entityId, pose));
+      // After the poses: a followed scene camera is shown where this frame put it.
+      session?.view?.camera.update(cameraDt);
     };
 
     // The Play bar's scrubber puts Play's Scroll events at a progress (playScroll.ts), straight on the

@@ -10,7 +10,8 @@
  * as it did in Play: the same renderer settings (rendererSettings.ts), scene (SceneManager, with its
  * environment light), objects (ObjectManager), events (SceneRuntime: Start events on load), pointer
  * input (playInput.ts: the pointer and key triggers, a pointer cursor over what can be clicked) and camera
- * (PlayCamera, with the scene camera's Play setting). Scroll events follow `setScrollProgress`,
+ * (PlayCamera, with the scene camera's Play setting, or following the scene camera picked in the
+ * editor, C6). Scroll events follow `setScrollProgress`,
  * which the page calls from its scroll (eased by the scene's smoothing setting, scrollProgress.ts). The editor's own objects (grid, light helpers, outlines) are never
  * built (`editorHelpers: false`), so there is nothing to hide. Nothing here loads the editor's
  * store: the published scene is the only state, and nothing is ever saved.
@@ -31,6 +32,8 @@ import type { CameraProfile, SceneSettingsConfig } from "../scene/types";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
 import { PlayCamera, resolvePlayCamera } from "./PlayCamera";
+import { SceneCameraObject } from "./sceneCameraObject";
+import { resolveActiveCamera } from "../scene/activeCamera";
 import { pickEntityAt } from "./pickEntity";
 import { createPlayEffects } from "./playEffects";
 import { attachPlayInput, type PlayInputKeyTarget } from "./playInput";
@@ -65,14 +68,16 @@ export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"])
     },
   }) as SceneSettingsConfig;
 
-/** The camera a published scene starts from: its active profile, over the default camera's values. */
+/**
+ * The camera profile a published scene starts from, over the default camera's values: the active
+ * one (scene/activeCamera.ts), or the personal one when a scene camera is active (whose Play
+ * setting is the scene's, until settings move to the scene: C7).
+ */
 export const viewerCamera = (content: StoredSceneContent): Pick<CameraProfile, "position" | "target" | "fov" | "near" | "far" | "play"> => {
-  const profiles = content.cameraProfiles ?? {};
-  const profile = profiles[content.activeProfileId ?? DEFAULT_CAMERA_PROFILE_ID] ?? profiles[DEFAULT_CAMERA_PROFILE_ID];
-  const { position, target, fov, near, far } = DEFAULT_CAMERA_PROFILE;
-  // A profile read from a document may be missing (or missing values): the defaults stay under it.
-  const defaults = { position, target, fov, near, far };
-  return { ...defaults, ...profile };
+  const active = resolveActiveCamera({ ...content, entities: content.entities ?? [] });
+  const profile = active.kind === "profile" ? active.profile : { ...DEFAULT_CAMERA_PROFILE, ...content.cameraProfiles?.[DEFAULT_CAMERA_PROFILE_ID] };
+  const { position, target, fov, near, far, play } = profile;
+  return { position, target, fov, near, far, ...(play ? { play } : null) };
 };
 
 export interface SceneViewerOptions {
@@ -131,9 +136,15 @@ export class SceneViewer {
       sceneManager.dispose();
     });
 
+    // The camera picked in the editor (scene/activeCamera.ts): a profile, or a scene camera followed as Fixed.
+    const active = resolveActiveCamera({ ...content, entities: drawn });
     const start = viewerCamera(content);
+    const followed = active.kind === "entity" ? objects.getObject(active.id) : undefined;
     const aspect = () => container.clientWidth / Math.max(1, container.clientHeight);
-    const camera = new PlayCamera(start, resolvePlayCamera(start.play), aspect(), { reduceMotion });
+    const camera = new PlayCamera(start, resolvePlayCamera(start.play), aspect(), {
+      reduceMotion,
+      follow: followed instanceof SceneCameraObject ? followed : null,
+    });
     this.disposers.push(camera.attach(canvas));
 
     // The drawn entities, so a state's colour goes over an asset's layers.
@@ -174,13 +185,14 @@ export class SceneViewer {
       const dt = (now - lastTime) / 1000;
       lastTime = now;
 
-      camera.update(dt);
       runtime.tick(dt);
       if (scrollShown !== this.scrollTarget) {
         scrollShown = easeScrollProgress(scrollShown, this.scrollTarget, dt, smoothScroll);
         runtime.setScrollProgress(scrollShown);
       }
       runtime.poses().forEach((pose, entityId) => objects.applyPose(entityId, pose));
+      // After the poses, so a followed scene camera is shown where this frame put it.
+      camera.update(dt);
       input.frame();
 
       renderer.render(scene, camera.camera);

@@ -2665,3 +2665,32 @@ input[type="range"]::-moz-range-thumb {
   color: var(--text-secondary);
   font-size: 12px;
 }
+
+/* Looking through a scene camera (C6): which one, and the way back to the personal camera. */
+.viewport-look-badge {
+  position: absolute;
+  top: 72px; /* under the floating toolbar */
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  border-radius: 999px;
+  background: var(--overlay-control-bg);
+  color: var(--overlay-control-fg);
+  border: 1px solid var(--overlay-control-border);
+  font-size: 11px;
+  white-space: nowrap;
+  z-index: 5;
+}
+
+.viewport-look-badge button {
+  border: none;
+  border-radius: 999px;
+  padding: 2px 8px;
+  background: var(--overlay-control-bg-hover);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}

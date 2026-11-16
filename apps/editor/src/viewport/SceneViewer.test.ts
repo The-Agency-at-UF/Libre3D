@@ -67,6 +67,21 @@ describe("the viewer's defaults", () => {
   });
 });
 
+describe("the viewer's camera with a scene camera picked (C6)", () => {
+  it("resolves the scene camera, and starts from the personal profile's values when one is active", async () => {
+    const { createEntity } = await import("../scene/entityFactories");
+    const { resolveActiveCamera } = await import("../scene/activeCamera");
+    const shot = { ...createEntity("camera"), id: "shot" };
+    const personal = { ...DEFAULT_CAMERA_PROFILE, position: [7, 7, 7] as [number, number, number], play: { mode: "autoRotate" as const } };
+    const content = { entities: [shot], cameraProfiles: { personal }, activeProfileId: "shot" };
+
+    expect(resolveActiveCamera(content)).toMatchObject({ kind: "entity", id: "shot" });
+    expect(viewerCamera(content)).toMatchObject({ position: [7, 7, 7], play: { mode: "autoRotate" } });
+    // The camera deleted since: the personal one, as before.
+    expect(resolveActiveCamera({ ...content, entities: [] })).toMatchObject({ kind: "profile", id: "personal" });
+  });
+});
+
 describe("the viewer's scene", () => {
   it("is built without the editor's grid, which the editor's scene has", () => {
     const settings = viewerSceneSettings(undefined);

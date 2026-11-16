@@ -2065,3 +2065,82 @@ describe("scene cameras", () => {
     expect(useEditorStore.getState().animation).toEqual(before.animation);
   });
 });
+
+describe("looking through a scene camera (C6)", () => {
+  const withCamera = async () => {
+    const loaded = await loadStore();
+    const { useEditorStore } = loaded;
+    useEditorStore.getState().loadScene({ entities: [entity("cube-1"), light] });
+    const cameraId = useEditorStore.getState().addEntity("camera");
+    return { ...loaded, cameraId };
+  };
+  const active = async (state: Parameters<typeof import("../scene/activeCamera").resolveActiveCamera>[0]) =>
+    (await import("../scene/activeCamera")).resolveActiveCamera(state);
+
+  it("is picked like a profile, and nothing else changes", async () => {
+    const { useEditorStore, cameraId } = await withCamera();
+    const undoBefore = useEditorStore.temporal.getState().pastStates.length;
+    const personal = useEditorStore.getState().cameraProfiles.personal;
+
+    useEditorStore.getState().setActiveProfile(cameraId);
+
+    expect((await active(useEditorStore.getState())).kind).toBe("entity");
+    expect(useEditorStore.getState().cameraProfiles.personal).toBe(personal);
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(undoBefore);
+  });
+
+  it("falls back to the personal camera when deleted, and one undo looks through it again", async () => {
+    const { useEditorStore, cameraId } = await withCamera();
+    useEditorStore.getState().setActiveProfile(cameraId);
+
+    useEditorStore.getState().removeEntity([cameraId]);
+    expect(await active(useEditorStore.getState())).toMatchObject({ kind: "profile", id: "personal" });
+
+    useEditorStore.temporal.getState().undo();
+    expect(await active(useEditorStore.getState())).toMatchObject({ kind: "entity", id: cameraId });
+  });
+
+  it("can't be deleted while view only", async () => {
+    const { useEditorStore, cameraId } = await withCamera();
+    useEditorStore.getState().setActiveProfile(cameraId);
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().removeEntity([cameraId]);
+
+    expect(await active(useEditorStore.getState())).toMatchObject({ kind: "entity", id: cameraId });
+    useEditorStore.getState().setReadOnly(null);
+  });
+
+  it("survives save and reload, and a saved ID that names nothing opens as the personal camera", async () => {
+    const { useEditorStore, selectSceneContent, cameraId } = await withCamera();
+    useEditorStore.getState().setActiveProfile(cameraId);
+    const document = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+
+    const reopened = await loadStore();
+    const parsed = parseSceneDocument(document);
+    reopened.useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+    expect(reopened.useEditorStore.getState().activeProfileId).toBe(cameraId);
+
+    const dangling = parseSceneDocument({ ...document, scene: { ...document.scene, activeProfileId: "deleted-camera" } });
+    reopened.useEditorStore.getState().loadScene(dangling.ok ? dangling.content : null);
+    expect(reopened.useEditorStore.getState().activeProfileId).toBe("personal");
+  });
+
+  it("takes Field of View edits into the state it's shown in, with the rest of the lens on the camera, in one undo step", async () => {
+    const { useEditorStore, cameraId } = await withCamera();
+    const stateId = useEditorStore.getState().addState(cameraId); // shown now
+    const undoBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().updateSceneCameras([cameraId], { fov: 80, near: 2 });
+
+    const camera = useEditorStore.getState().entities.find((each) => each.id === cameraId)!;
+    expect(useEditorStore.getState().animation.states[stateId].values.fov).toBe(80);
+    expect(camera.camera).toMatchObject({ fov: 45, near: 2 });
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(undoBefore + 1);
+
+    useEditorStore.getState().setViewedState(cameraId, null);
+    useEditorStore.getState().updateSceneCameras([cameraId], { fov: 30 });
+    expect(useEditorStore.getState().entities.find((each) => each.id === cameraId)!.camera!.fov).toBe(30);
+    expect(useEditorStore.getState().animation.states[stateId].values.fov).toBe(80);
+  });
+});

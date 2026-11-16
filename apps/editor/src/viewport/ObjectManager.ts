@@ -498,6 +498,8 @@ export class ObjectManager {
     if (obj instanceof PathMesh && (pose.trimStart !== undefined || pose.trimEnd !== undefined)) {
       obj.setTrim(pose.trimStart ?? 0, pose.trimEnd ?? 1);
     }
+    // The next sync's setSettings puts it back to the lens's; an export doesn't need it (no camera goes out).
+    if (obj instanceof SceneCameraObject && pose.fov !== undefined) obj.setPosedFov(pose.fov);
     if (obj instanceof THREE.Mesh && (pose.color !== undefined || pose.opacity !== undefined)) {
       const entity = getEntityIndex(this.source.getEntities()).byId.get(entityId);
       if (entity?.materialLayers) {

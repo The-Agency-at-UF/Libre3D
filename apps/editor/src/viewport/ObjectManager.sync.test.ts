@@ -690,6 +690,30 @@ describe("ObjectManager scene cameras", () => {
     expect(material).toHaveBeenCalled();
   });
 
+  it("takes a pose's field of view, redraws the frustum when next rendered, and goes back to its lens on the next sync", () => {
+    const { scene, manager, camera, gizmo } = settledCamera();
+    const points = () => Array.from(gizmo.geometry.getAttribute("position").array as Float32Array).join();
+    const before = points();
+
+    manager.applyPose("cam", { position: [0, 1, 0], rotation: [0, 0, 0], scale: [1, 1, 1], fov: 90 });
+    expect(camera.fov).toBe(90);
+    expect(points()).toBe(before); // not until it's drawn: a Play frame draws it hidden
+    gizmo.onBeforeRender(null!, null!, null!, null!, null!, null!);
+    expect(points()).not.toBe(before);
+
+    manager.syncMeshes(scene.entities, null, false);
+    expect(camera.fov).toBe(scene.get("cam").camera!.fov);
+    expect(points()).toBe(before);
+  });
+
+  it("hides its frustum from drawing and picking while looked through", () => {
+    const { camera, gizmo } = settledCamera();
+    camera.setLookedThrough(true);
+    expect(gizmo.layers.test(new THREE.Layers())).toBe(false);
+    camera.setLookedThrough(false);
+    expect(gizmo.layers.test(new THREE.Layers())).toBe(true);
+  });
+
   it("draws a camera missing its lens (a damaged file) with the default one", () => {
     const { camera } = settledCamera({ camera: undefined });
     expect(camera.gizmo!.geometry.getAttribute("position").count).toBeGreaterThan(0);

@@ -388,3 +388,29 @@ describe("colour and opacity", () => {
     expect(fadingObjects(undefined).size).toBe(0);
   });
 });
+
+describe("a camera's field of view (C6)", () => {
+  const lens = { projection: "perspective" as const, fov: 45, orthoSize: 5, near: 0.1, far: 1000 };
+  const cameraEntity = { ...makeEntity("cam"), camera: lens };
+
+  it("is the state's over the camera's own, and none for other objects", () => {
+    expect(resolveState(cameraEntity).fov).toBe(45);
+    expect(resolveState(cameraEntity, makeState("wide", "cam", { values: { fov: 90 } })).fov).toBe(90);
+    expect(resolveState(cameraEntity, makeState("up", "cam", { values: { position: [0, 1, 0] } })).fov).toBe(45);
+    expect(resolveState(makeEntity("cube"), makeState("odd", "cube", { values: { fov: 90 } })).fov).toBeUndefined();
+  });
+
+  it("is snapshotted by a new state, with the transform", () => {
+    expect(withoutLook(resolveState(cameraEntity, makeState("wide", "cam", { values: { fov: 90 } }))).fov).toBe(90);
+  });
+
+  it("survives a copy, a duplicate, and a reparent", () => {
+    const wide = makeState("wide", "cam", { values: { fov: 70, position: [0, 1, 0] } });
+    expect(cloneStateValues(wide.values).fov).toBe(70);
+    expect(cloneAnimation({ states: statesById(wide), events: {} }).states.wide.values.fov).toBe(70);
+    const { states, stateIdMap } = duplicateStates(statesById(wide), new Map([["cam", "cam-copy"]]), new Map());
+    expect(states[stateIdMap.get("wide")!].values.fov).toBe(70);
+    const parentWorld = composeLocalMatrix({ position: [4, 0, 0], rotation: [0, 90 * DEG, 0], scale: [1, 1, 1] });
+    expect(reparentStates(statesById(wide), [{ entity: cameraEntity, from: null, to: parentWorld }]).wide.values.fov).toBe(70);
+  });
+});
