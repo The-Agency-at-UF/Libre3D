@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { PathMesh } from "../paths/PathMesh";
 import { showBasePoses } from "../viewport/basePoses";
 import { hideEditorOnlyObjects } from "../viewport/editorOnly";
+import { SceneCameraObject } from "../viewport/sceneCameraObject";
 import { aimLightsAtOrigin } from "../viewport/lightTargets";
 
 type GLTFExporterResult = ArrayBuffer | Blob | string | Record<string, unknown>;
@@ -158,6 +159,21 @@ const standardMaterialsForExport = (scene: THREE.Scene): (() => void) => {
   };
 };
 
+// A scene camera is an empty node in the editor (viewport/sceneCameraObject.ts). It goes out of the
+// file: glTF cameras aren't exported (decision tree §C3). One holding objects of the user's stays, as
+// the plain node that places them; its frustum is editor-only and gone already. Runs after
+// hideEditorOnlyObjects, so only what will be exported counts as a child.
+const hideEmptyCameras = (scene: THREE.Scene): (() => void) => {
+  const hidden: THREE.Object3D[] = [];
+  scene.traverse((object) => {
+    if (object instanceof SceneCameraObject && object.visible && !object.children.some((child) => child.visible)) {
+      object.visible = false;
+      hidden.push(object);
+    }
+  });
+  return () => hidden.forEach((object) => (object.visible = true));
+};
+
 const hasExportableMeshes = (scene: THREE.Scene): boolean => {
   let meshCount = 0;
 
@@ -197,6 +213,7 @@ export const createSceneExportBlob = async (
   const { GLTFExporter } = await import("three/examples/jsm/exporters/GLTFExporter.js");
   const exporter = new GLTFExporter();
   const restoreEditorOnlyObjects = hideEditorOnlyObjects(scene);
+  const restoreCameras = hideEmptyCameras(scene);
   const restorePoses = showBasePoses(scene);
   const restoreTrimmedPaths = trimPathsForExport(scene);
   const restoreEditorUserData = hideEditorUserData(scene);
@@ -245,6 +262,7 @@ export const createSceneExportBlob = async (
   } finally {
     // Restore even if the parse throws — a failed export must never leave the
     // editor's grid, helpers and gizmo invisible.
+    restoreCameras();
     restoreEditorOnlyObjects();
     restoreTrimmedPaths();
     restorePoses();

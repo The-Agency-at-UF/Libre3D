@@ -145,6 +145,35 @@ export const sampleTransition = (timing: TransitionTiming, elapsed: number): Tra
   return sampleRun(run, time);
 };
 
+/** A transition's whole sequence, once through: its step durations added up (a bad one counts as 0). */
+export const transitionLength = (timing: Pick<TransitionTiming, "steps">): number =>
+  timing.steps.reduce((sum, step) => sum + seconds(step.duration), 0);
+
+/**
+ * The timing a scroll-driven transition plays with (decision tree B4): its steps alone, once
+ * through, with no Delay, Loop, or Cycle. Those have no meaning without a clock; the action keeps
+ * them, so switching its event back to a clocked trigger restores them.
+ */
+export const scrubTiming = (action: Pick<TransitionTiming, "steps">): TransitionTiming => ({
+  steps: action.steps,
+  delay: 0,
+  delayRepeat: "none",
+  loop: 0,
+  cycle: "restart",
+});
+
+/**
+ * Where a transition is at `progress` (0 to 1, clamped; NaN is 0) of its sequence rather than at a
+ * time: the same step and easing math as `sampleTransition`, at `progress` of its length, so step
+ * durations still pace it and scrubbing back retraces it exactly. Give it `scrubTiming`'s timing and
+ * its length (`transitionLength`), worked out once. A sequence that takes no time is at its end.
+ */
+export const sampleTransitionAt = (timing: TransitionTiming, length: number, progress: number): TransitionSample =>
+  sampleTransition(timing, clampProgress(progress) * length);
+
+/** A progress value (scroll, a scrubber) between 0 and 1; anything that isn't a number is 0. */
+export const clampProgress = (progress: number): number => (progress > 0 ? Math.min(1, progress) : 0);
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 

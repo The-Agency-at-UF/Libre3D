@@ -71,6 +71,8 @@ export class MaterialPreview {
         getEntities: () => this.entities(),
         isWireframe: () => false,
         loadModel: async () => null,
+        // A material preview plays no sound.
+        loadAudio: async () => null,
         // A picture arrives after the frame that asked for it: draw again once it's here.
         loadTexture: async (assetId) => {
           const blob = await loadTextureForScene(assetId);

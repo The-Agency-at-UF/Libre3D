@@ -101,7 +101,7 @@ const storeAsset = (hash: string, { as = "alice", contentLength }: { as?: string
   s3.upload(`users/${as}/assets/${hash}`, "bytes", { checksumSha256: assetHashToBase64(hash), contentLength });
 
 /** A scene document whose entities use these models and textures. */
-const documentUsing = (marker: string, { models = [] as string[], textures = [] as string[] } = {}) => ({
+const documentUsing = (marker: string, { models = [] as string[], textures = [] as string[], sounds = [] as string[] } = {}) => ({
   ...sceneDocument(marker),
   scene: {
     entities: [
@@ -112,6 +112,9 @@ const documentUsing = (marker: string, { models = [] as string[], textures = [] 
         materialLayers: [{ type: "image", textureAssetId }],
       })),
     ],
+    ...(sounds.length > 0
+      ? { animation: { events: { e: { id: "e", ownerId: marker, trigger: "start", actions: sounds.map((assetId, index) => ({ id: `s${index}`, type: "sound", assetId })) } } } }
+      : {}),
   },
 });
 
@@ -647,7 +650,7 @@ describe("asset uploads", () => {
     ["a path in place of a hash", [{ hash: `../${MODEL.slice(3)}`, size: 5, kind: "model" }]],
     ["an empty file", [{ hash: MODEL, size: 0, kind: "model" }]],
     ["a fractional size", [{ hash: MODEL, size: 1.5, kind: "model" }]],
-    ["an unknown kind", [{ hash: MODEL, size: 5, kind: "audio" }]],
+    ["an unknown kind", [{ hash: MODEL, size: 5, kind: "font" }]],
     ["something that isn't an asset", [null]],
   ])("rejects %s with 400", async (_label, assets) => {
     const sceneId = await createLockedScene();
@@ -667,6 +670,69 @@ describe("asset uploads", () => {
       call("POST", { sceneId, subresource: "assets/uploads", body: { assets: [{ hash: MODEL, size: 5, kind: "model" }] } }),
     ).resolves.toMatchObject({ status: 400 });
     expect(presigner.signed).toEqual([]);
+  });
+});
+
+describe("sounds", () => {
+  const AUDIO = "d".repeat(64);
+  const MB = 1024 * 1024;
+
+  it("signs an audio upload for the lock holder only, as plain bytes", async () => {
+    const sceneId = await createLockedScene();
+
+    const response = await requestUploads(sceneId, [{ hash: AUDIO, size: 4 * MB, kind: "audio" }]);
+    const { uploads } = response.body as { uploads: Array<{ hash: string; url: string; headers: Record<string, string> }> };
+    expect(uploads[0].headers).toEqual({ "Content-Type": "application/octet-stream", "x-amz-checksum-sha256": assetHashToBase64(AUDIO) });
+    expect(presigner.find(uploads[0].url)).toMatchObject({ input: { Key: `users/alice/assets/${AUDIO}`, ContentLength: 4 * MB } });
+
+    await expect(requestUploads(sceneId, [{ hash: AUDIO, size: 5, kind: "audio" }], { session: TAB_B })).resolves.toMatchObject({ status: 423 });
+    await expect(requestUploads(sceneId, [{ hash: AUDIO, size: 5, kind: "audio" }], { as: "bob" })).resolves.toMatchObject({ status: 404 });
+    expect(presigner.signed).toHaveLength(1);
+  });
+
+  it("refuses a sound over 5 MB with 413, naming the limit, while a model that size is fine", async () => {
+    const sceneId = await createLockedScene();
+
+    await expect(requestUploads(sceneId, [{ hash: AUDIO, size: 5 * MB + 1, kind: "audio" }])).resolves.toMatchObject({
+      status: 413,
+      body: { error: "Sounds can be up to 5 MB.", hash: AUDIO },
+    });
+    await expect(requestUploads(sceneId, [{ hash: MODEL, size: 5 * MB + 1, kind: "model" }])).resolves.toMatchObject({ status: 200 });
+  });
+
+  it("refuses a save naming a sound the cloud doesn't have (422), and saves once it's there", async () => {
+    const sceneId = await createLockedScene();
+
+    await expect(saveDocument(sceneId, documentUsing("x", { sounds: [AUDIO] }), 0)).resolves.toMatchObject({
+      status: 422,
+      body: { missingAssets: [AUDIO] },
+    });
+    storeAsset(AUDIO, { contentLength: MB });
+    await expect(saveDocument(sceneId, documentUsing("x", { sounds: [AUDIO] }), 0)).resolves.toMatchObject({ status: 200 });
+    expect(assetHashesOf(sceneId)).toEqual([AUDIO]);
+  });
+
+  it("refuses (413) a save whose sounds add up to more than 20 MB", async () => {
+    const sceneId = await createLockedScene();
+    const sounds = ["1", "2", "3", "4", "5"].map((digit) => digit.repeat(64));
+    // 20 MB and 5 bytes in all; four of them are well under.
+    for (const hash of sounds) storeAsset(hash, { contentLength: 4 * MB + 1 });
+
+    await expect(saveDocument(sceneId, documentUsing("five", { sounds }), 0)).resolves.toMatchObject({
+      status: 413,
+      body: { error: "A scene's sounds can add up to 20 MB." },
+    });
+    await expect(saveDocument(sceneId, documentUsing("four", { sounds: sounds.slice(0, 4) }), 0)).resolves.toMatchObject({ status: 200 });
+  });
+
+  it("keeps another user from reaching someone's sound: a save names only their own copies", async () => {
+    storeAsset(AUDIO, { as: "alice", contentLength: MB });
+    const bobScene = await createLockedScene({}, "bob");
+
+    await expect(saveDocument(bobScene, documentUsing("bob", { sounds: [AUDIO] }), 0, { as: "bob" })).resolves.toMatchObject({
+      status: 422,
+      body: { missingAssets: [AUDIO] },
+    });
   });
 });
 

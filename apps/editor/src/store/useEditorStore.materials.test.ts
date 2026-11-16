@@ -342,8 +342,8 @@ describe("material assets", () => {
     store().updateMaterialLayer(assetId, store().materials[assetId].layers[0].id, { maps: { normal: { textureAssetId: hash, wrapS: 1000, wrapT: 1000, flipY: false } } });
 
     const saved = selectSceneContent(store());
-    expect(collectAssetRefs(saved.entities)).toEqual([]);
-    expect(collectAssetRefs(saved.entities, saved.materials)).toEqual([{ id: hash, kind: "texture" }]);
+    expect(collectAssetRefs({ entities: saved.entities })).toEqual([]);
+    expect(collectAssetRefs(saved)).toEqual([{ id: hash, kind: "texture" }]);
 
     const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(saved))));
     expect(parsed.ok).toBe(true);

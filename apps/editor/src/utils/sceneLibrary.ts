@@ -6,6 +6,7 @@
  * Calls go through `apiFetch`, which throws `ApiAuthError` when the session is gone.
  */
 import { apiFetch } from "./apiFetch";
+import type { AssetKind } from "./sceneAssets";
 import { getEditorSessionId } from "./editorSession";
 
 export interface SceneSummary {
@@ -193,7 +194,7 @@ export interface AssetUploadTicket {
  */
 export const requestAssetUploads = async (
   sceneId: string,
-  assets: Array<{ hash: string; size: number; kind: "model" | "texture" }>,
+  assets: Array<{ hash: string; size: number; kind: AssetKind }>,
 ): Promise<AssetUploadTicket[]> => {
   const { uploads } = await requestJson<{ uploads: AssetUploadTicket[] }>(`${scenePath(sceneId)}/assets/uploads`, {
     method: "POST",

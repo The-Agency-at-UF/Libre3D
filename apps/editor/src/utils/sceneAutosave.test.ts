@@ -11,8 +11,9 @@ vi.mock("./apiFetch", () => ({
   ApiAuthError: class ApiAuthError extends Error {},
 }));
 
-vi.mock("./modelAssetStore", () => ({ loadModelAsset: vi.fn() }));
-vi.mock("./textureAssetStore", () => ({ loadTextureAsset: vi.fn() }));
+vi.mock("./modelAssetStore", () => ({ loadModelAsset: vi.fn(), hasModelAsset: vi.fn(), saveModelAsset: vi.fn() }));
+vi.mock("./textureAssetStore", () => ({ loadTextureAsset: vi.fn(), hasTextureAsset: vi.fn(), saveTextureAsset: vi.fn() }));
+vi.mock("./audioAssetStore", () => ({ loadAudioAsset: vi.fn(), hasAudioAsset: vi.fn(), saveAudioAsset: vi.fn() }));
 
 vi.mock("./sceneLibrary", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./sceneLibrary")>()),

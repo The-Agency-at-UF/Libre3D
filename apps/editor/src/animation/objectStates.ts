@@ -43,6 +43,8 @@ export interface StateValues {
   trimEnd?: number;
   color?: string;
   opacity?: number;
+  /** A camera's vertical field of view, in degrees (item C: camera entities). */
+  fov?: number;
 }
 
 export type StateValueKey = keyof StateValues;
@@ -72,16 +74,16 @@ export type Look = Pick<StateValues, "color" | "opacity">;
  * Where an object is and how it looks: its Base values with a state's on top. Its transform always;
  * a trim only when the object or the state has one (paths); an opacity only for an object with a
  * material, and a colour only when that material has a Color layer (the state's only for an object
- * with a material of its own, not a material asset).
+ * with a material of its own, not a material asset); a field of view only for a camera.
  */
-export type Pose = EntityTRS & Trim & Look;
+export type Pose = EntityTRS & Trim & Look & Pick<StateValues, "fov">;
 
 /**
  * What a pose is worked out from: an object's own transform and trim, and for its look the layers
  * and opacity it is drawn with (its material asset's when it uses one: scene/materialAssets.ts,
  * `resolveEntities`). An entity as drawn is one.
  */
-export type PoseSource = EntityTRS & Trim & { materialLayers?: MaterialLayer[]; materialAssetId?: string; opacity?: number };
+export type PoseSource = EntityTRS & Trim & { materialLayers?: MaterialLayer[]; materialAssetId?: string; opacity?: number; camera?: { fov: number } };
 
 const FULL_TURN = Math.PI * 2;
 
@@ -97,6 +99,7 @@ export const cloneStateValues = (values: StateValues): StateValues => ({
   ...(typeof values.trimEnd === "number" ? { trimEnd: values.trimEnd } : null),
   ...(typeof values.color === "string" ? { color: values.color } : null),
   ...(typeof values.opacity === "number" ? { opacity: values.opacity } : null),
+  ...(typeof values.fov === "number" ? { fov: values.fov } : null),
 });
 
 const cloneObjectState = (state: ObjectState): ObjectState => ({
@@ -125,6 +128,8 @@ export const resolveState = (entity: PoseSource, state?: ObjectState | null): Po
     pose.trimStart = trimStart ?? 0;
     pose.trimEnd = trimEnd ?? 1;
   }
+  // A camera's field of view, as a path's trim: the state's over its own.
+  if (entity.camera) pose.fov = state?.values.fov ?? entity.camera.fov;
   if (entity.materialLayers) {
     // An object on a material asset is the asset's colour and opacity in every state.
     const look = entity.materialAssetId ? undefined : state?.values;

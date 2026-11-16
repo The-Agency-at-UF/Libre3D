@@ -60,6 +60,12 @@
   --font-size-lg: 20px;
   --font-size-xl: 32px;
   --page-max-width: 1120px;
+  /* Controls drawn over a scene (the mute button): the scene's colours are the author's, so these
+     stay the same in either theme. */
+  --overlay-control-bg: rgba(18, 18, 22, 0.72);
+  --overlay-control-bg-hover: rgba(40, 40, 46, 0.86);
+  --overlay-control-fg: #ffffff;
+  --overlay-control-border: rgba(255, 255, 255, 0.3);
 }
 
 :root.light-theme {

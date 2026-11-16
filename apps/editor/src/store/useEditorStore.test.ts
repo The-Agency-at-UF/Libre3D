@@ -5,11 +5,16 @@ import { initialFrameDefaults, initialPostProcessingDefaults, initialSceneDefaul
 import { createDepthLayer } from "../scene/entityFactories";
 import { stubBrowserGlobals, type BrowserStubs } from "../testing/browserStubs";
 import { collectAssetRefs } from "../utils/sceneAssets";
-import { parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
+import { CURRENT_SCENE_SCHEMA_VERSION, parseSceneDocument, toSceneDocument } from "../utils/sceneDocument";
+import type { SceneAction } from "../animation/actions";
+import type { TransitionAction } from "../animation/transitions";
 import type { PathData, PathPoint } from "../paths/pathGeometry";
 import type { ImportedPath, ImportedSvgItem } from "../paths/svgImport";
 import type { ShapeData } from "../paths/shapeGeometry";
 import type { Entity } from "./useEditorStore";
+
+/** An event's actions, as the transitions these tests give it. */
+const transitionsOf = (actions: SceneAction[]) => actions as TransitionAction[];
 
 const EDITOR_KEY = "libre3d-scene-state";
 const PREFERENCE_KEYS = ["activeTransformTool", "hudOverlay", "projectionMode", "transformSpace", "viewportZoom"];
@@ -388,6 +393,116 @@ describe("store → document → cloud → store", () => {
   });
 });
 
+describe("the sound button's settings", () => {
+  it("change through updateSceneSettings keeping its position and every other setting, and old scenes get the default", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    const before = useEditorStore.getState().sceneSettings;
+    expect(before.audioButton).toEqual({ visible: true, position: "bottomRight" });
+
+    useEditorStore.getState().updateSceneSettings({ audioButton: { visible: false } });
+    expect(useEditorStore.getState().sceneSettings).toEqual({ ...before, audioButton: { visible: false, position: "bottomRight" } });
+
+    const saved = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+    delete saved.scene.sceneSettings.audioButton;
+    const old = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(old.ok ? old.content : null);
+    expect(useEditorStore.getState().sceneSettings.audioButton).toEqual(initialSceneDefaults.audioButton);
+  });
+});
+
+describe("scroll settings", () => {
+  it("change one value through updateSceneSettings, keeping every other setting, in one undo step", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().updateSceneSettings({ bgColor: "#abcdef" });
+    const before = useEditorStore.getState().sceneSettings;
+
+    useEditorStore.getState().updateSceneSettings({ scroll: { length: 5 } });
+
+    expect(useEditorStore.getState().sceneSettings).toEqual({ ...before, scroll: { length: 5, smooth: true } });
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().sceneSettings.scroll).toEqual(initialSceneDefaults.scroll);
+  });
+
+  it("can't be changed in a view-only tab", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().updateSceneSettings({ scroll: { smooth: false } });
+
+    expect(useEditorStore.getState().sceneSettings.scroll.smooth).toBe(true);
+  });
+
+  it("survive a save and a reload, and an old scene without them opens with the defaults", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().updateSceneSettings({ scroll: { length: 6, smooth: false } });
+    const saved = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+
+    const parsed = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+    expect(useEditorStore.getState().sceneSettings.scroll).toEqual({ length: 6, smooth: false });
+
+    delete saved.scene.sceneSettings.scroll;
+    const old = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(old.ok ? old.content : null);
+    expect(useEditorStore.getState().sceneSettings.scroll).toEqual(initialSceneDefaults.scroll);
+  });
+});
+
+describe("the scene's Play setting (C7)", () => {
+  it("changes one value through updateSceneSettings, keeping the other Play values and every other setting, in one undo step", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().updateSceneSettings({ play: { mode: "softOrbit", range: 12, smoothness: 0.3, speed: 6 } });
+    const before = useEditorStore.getState().sceneSettings;
+
+    useEditorStore.getState().updateSceneSettings({ play: { mode: "orbit" } });
+
+    expect(useEditorStore.getState().sceneSettings).toEqual({ ...before, play: { mode: "orbit", range: 12, smoothness: 0.3, speed: 6 } });
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().sceneSettings).toEqual(before);
+  });
+
+  it("isn't set in a new scene, and can't be changed in a view-only tab", async () => {
+    const { useEditorStore } = await loadStore();
+    useEditorStore.getState().loadScene(null);
+    expect(useEditorStore.getState().sceneSettings.play).toBeUndefined();
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().updateSceneSettings({ play: { mode: "fixed" } });
+
+    expect(useEditorStore.getState().sceneSettings.play).toBeUndefined();
+  });
+
+  it("survives a save and a reload, and an old scene with only its camera's setting plays as before", async () => {
+    const { useEditorStore, selectSceneContent } = await loadStore();
+    const { resolveScenePlay, DEFAULT_PLAY_CAMERA } = await import("../viewport/PlayCamera");
+    const playing = () => {
+      const state = useEditorStore.getState();
+      return resolveScenePlay(state.sceneSettings.play, state.cameraProfiles[state.activeProfileId].play);
+    };
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().updateSceneSettings({ play: { mode: "autoRotate", speed: 40 } });
+    const saved = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+
+    const parsed = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+    expect(useEditorStore.getState().sceneSettings.play).toEqual({ mode: "autoRotate", speed: 40 });
+    expect(playing()).toEqual({ ...DEFAULT_PLAY_CAMERA, mode: "autoRotate", speed: 40 });
+
+    // A scene from before C7: its Play setting is on the active camera profile.
+    delete saved.scene.sceneSettings.play;
+    saved.scene.cameraProfiles.personal.play = { mode: "softOrbit", range: 20 };
+    const old = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(old.ok ? old.content : null);
+    expect(useEditorStore.getState().sceneSettings.play).toBeUndefined();
+    expect(playing()).toEqual({ ...DEFAULT_PLAY_CAMERA, mode: "softOrbit", range: 20 });
+  });
+});
+
 describe("object states", () => {
   // A cube at (2, 0, 0) with a child sphere, and the light.
   const storeWithCube = async () => {
@@ -621,6 +736,18 @@ describe("events", () => {
     expect(useEditorStore.getState().animation.events).toEqual({});
   });
 
+  it("puts a Sound action's audio among the saved document's assets, as autosave and opening a scene read them", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithCube();
+    const audio = "d".repeat(64);
+    const eventId = useEditorStore.getState().addEvent("cube-1", "mouseDown");
+    const sound = { id: "s1", type: "sound" as const, assetId: audio, name: "chime.ogg", volume: 0.8, loop: false, mode: "play" as const };
+    useEditorStore.getState().updateEvent(eventId, { actions: [sound] });
+
+    const document = toSceneDocument(selectSceneContent(useEditorStore.getState()));
+    expect(collectAssetRefs(document.scene)).toEqual([{ id: audio, kind: "audio" }]);
+    expect(collectAssetRefs(selectSceneContent(useEditorStore.getState()))).toEqual([{ id: audio, kind: "audio" }]);
+  });
+
   it("doesn't add an event to an object that isn't there", async () => {
     const { useEditorStore } = await storeWithCube();
 
@@ -631,7 +758,7 @@ describe("events", () => {
   it("changes the trigger and replaces the actions without sharing them, one undo step each", async () => {
     const { useEditorStore } = await storeWithCube();
     const eventId = useEditorStore.getState().addEvent("cube-1", "start");
-    const actions = useEditorStore.getState().animation.events[eventId].actions.map((action) => ({
+    const actions = transitionsOf(useEditorStore.getState().animation.events[eventId].actions).map((action) => ({
       ...action,
       loop: "infinite" as const,
       steps: action.steps.map((step) => ({ ...step, duration: 2 })),
@@ -647,6 +774,39 @@ describe("events", () => {
     });
     useEditorStore.temporal.getState().undo();
     expect(useEditorStore.getState().animation.events[eventId]).toMatchObject({ trigger: "mouseDown", actions: [{ loop: 0 }] });
+  });
+
+  it("takes item B's triggers, and keeps such an event through a save and a reload", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithCube();
+    const hover = useEditorStore.getState().addEvent("cube-1", "mouseHover");
+    const other = useEditorStore.getState().addEvent("cube-1", "scroll");
+    useEditorStore.getState().updateEvent(other, { trigger: "mouseUp" });
+    expect(Object.values(useEditorStore.getState().animation.events).map((event) => event.trigger)).toEqual(["mouseHover", "mouseUp"]);
+
+    const saved = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+    const parsed = parseSceneDocument(saved);
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+
+    expect(saved.schemaVersion).toBe(CURRENT_SCENE_SCHEMA_VERSION);
+    expect(Object.keys(useEditorStore.getState().animation.events)).toEqual([hover, other]);
+    expect(useEditorStore.getState().animation.events[other].trigger).toBe("mouseUp");
+  });
+
+  it("sets a key event's key, one undo step per key, and keeps it through a save and a reload", async () => {
+    const { useEditorStore, selectSceneContent } = await storeWithCube();
+    const eventId = useEditorStore.getState().addEvent("cube-1", "keyDown");
+    expect(useEditorStore.getState().animation.events[eventId].key).toBeUndefined();
+
+    useEditorStore.getState().updateEvent(eventId, { key: "Space" });
+    useEditorStore.getState().updateEvent(eventId, { key: "KeyW" });
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().animation.events[eventId].key).toBe("Space");
+
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState())))));
+    useEditorStore.getState().loadScene(null);
+    useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+    expect(useEditorStore.getState().animation.events[eventId]).toMatchObject({ trigger: "keyDown", key: "Space" });
   });
 
   it("removes an event", async () => {
@@ -674,19 +834,19 @@ describe("events", () => {
     const { useEditorStore } = await storeWithCube();
     const own = useEditorStore.getState().addEvent("sphere-1", "start");
     const click = useEditorStore.getState().addEvent("button-1", "mouseDown");
-    const clickActions = useEditorStore.getState().animation.events[click].actions;
+    const clickActions = transitionsOf(useEditorStore.getState().animation.events[click].actions);
     useEditorStore.getState().updateEvent(click, { actions: [{ ...clickActions[0], targetId: "sphere-1" }, clickActions[0]] });
 
     // Deleting the cube deletes its child sphere too.
     useEditorStore.getState().removeEntity(["cube-1"]);
     const { events } = useEditorStore.getState().animation;
     expect(Object.keys(events)).toEqual([click]);
-    expect(events[click].actions.map((action) => action.targetId)).toEqual(["button-1"]);
+    expect(transitionsOf(events[click].actions).map((action) => action.targetId)).toEqual(["button-1"]);
 
     useEditorStore.temporal.getState().undo();
     const restored = useEditorStore.getState().animation.events;
     expect(Object.keys(restored).sort()).toEqual([own, click].sort());
-    expect(restored[click].actions.map((action) => action.targetId)).toEqual(["sphere-1", "button-1"]);
+    expect(transitionsOf(restored[click].actions).map((action) => action.targetId)).toEqual(["sphere-1", "button-1"]);
   });
 
   it("gives a duplicate copies of the events, moving the copy through its own states", async () => {
@@ -1262,7 +1422,7 @@ describe("image planes", () => {
     ]);
     expect(added.materialLayers![0]).not.toHaveProperty("alphaMode");
     expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
-    expect(collectAssetRefs(useEditorStore.getState().entities)).toEqual([{ id: hash, kind: "texture" }]);
+    expect(collectAssetRefs({ entities: useEditorStore.getState().entities })).toEqual([{ id: hash, kind: "texture" }]);
   });
 
   it("blends a picture with see-through pixels", async () => {
@@ -1825,5 +1985,226 @@ describe("colour and opacity in states (task D6)", () => {
     get().loadScene(parsed.ok ? parsed.content : null);
 
     expect(get().animation.states[stateId].values).toMatchObject({ color: "#0000ff", opacity: 0 });
+  });
+});
+
+describe("scene cameras", () => {
+  const withView = async () => {
+    const loaded = await loadStore();
+    const { useEditorStore } = loaded;
+    useEditorStore.getState().loadScene({ entities: [entity("cube-1"), light] });
+    useEditorStore.getState().updateProfileData("personal", { position: [4, 3, 6], target: [1, 0, 0], fov: 60, near: 0.5, far: 300 });
+    return loaded;
+  };
+  const cameraOf = (useEditorStore: Awaited<ReturnType<typeof loadStore>>["useEditorStore"], id: string) =>
+    useEditorStore.getState().entities.find((each) => each.id === id)!;
+
+  it("are added where the personal camera is, looking at its target, with its lens and copies of its vectors", async () => {
+    const { useEditorStore } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    const camera = cameraOf(useEditorStore, id);
+    const profile = useEditorStore.getState().cameraProfiles.personal;
+
+    expect(camera).toMatchObject({ type: "camera", name: "Camera", position: [4, 3, 6], visible: true, locked: false });
+    expect(camera.materialLayers).toBeUndefined();
+    expect(camera.camera).toEqual({ projection: "perspective", fov: 60, orthoSize: 5, near: 0.5, far: 300 });
+    expect(camera.position).not.toBe(profile.position);
+    expect(useEditorStore.getState().selectedEntityIds).toEqual([id]);
+    // It looks down its -Z at the target.
+    const looks = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(...camera.rotation));
+    const toTarget = new THREE.Vector3(1, 0, 0).sub(new THREE.Vector3(4, 3, 6)).normalize();
+    expect(looks.distanceTo(toTarget)).toBeLessThan(1e-6);
+
+    profile.position[0] = 99;
+    expect(cameraOf(useEditorStore, id).position[0]).toBe(4);
+  });
+
+  it("take the defaults when made by the factory alone", async () => {
+    const { createEntity } = await import("../scene/entityFactories");
+    const { DEFAULT_CAMERA_PROFILE } = await import("../scene/defaults");
+    const a = createEntity("camera");
+    const b = createEntity("camera");
+
+    expect(a.camera).toEqual({ projection: "perspective", fov: DEFAULT_CAMERA_PROFILE.fov, orthoSize: 5, near: DEFAULT_CAMERA_PROFILE.near, far: DEFAULT_CAMERA_PROFILE.far });
+    expect(a.camera).not.toBe(b.camera);
+  });
+
+  it("change their lens together, one or several, in one undo step, leaving other objects alone", async () => {
+    const { useEditorStore } = await withView();
+    const a = useEditorStore.getState().addEntity("camera");
+    const b = useEditorStore.getState().addEntity("camera");
+    const cube = cameraOf(useEditorStore, "cube-1");
+    const undoBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().updateSceneCameras([a, b, "cube-1"], { fov: 30, projection: "orthographic" });
+
+    expect(cameraOf(useEditorStore, a).camera).toMatchObject({ fov: 30, projection: "orthographic", near: 0.5 });
+    expect(cameraOf(useEditorStore, b).camera).toMatchObject({ fov: 30, projection: "orthographic" });
+    expect(cameraOf(useEditorStore, "cube-1")).toBe(cube);
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(undoBefore + 1);
+
+    useEditorStore.getState().updateSceneCameras([a], { near: 2 });
+    expect(cameraOf(useEditorStore, a).camera!.near).toBe(2);
+    expect(cameraOf(useEditorStore, b).camera!.near).toBe(0.5);
+
+    useEditorStore.temporal.getState().undo();
+    expect(cameraOf(useEditorStore, a).camera!.near).toBe(0.5);
+  });
+
+  it("ignore a lens value that isn't a positive number", async () => {
+    const { useEditorStore } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    const before = cameraOf(useEditorStore, id);
+
+    for (const bad of [{ fov: 0 }, { near: -1 }, { far: Number.NaN }, { orthoSize: Infinity }]) {
+      useEditorStore.getState().updateSceneCameras([id], bad);
+    }
+    expect(cameraOf(useEditorStore, id)).toBe(before);
+  });
+
+  it("can't be added or changed while view only", async () => {
+    const { useEditorStore } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    const before = useEditorStore.getState().entities;
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().updateSceneCameras([id], { fov: 20 });
+    useEditorStore.getState().addEntity("camera");
+
+    expect(useEditorStore.getState().entities).toBe(before);
+    useEditorStore.getState().setReadOnly(null);
+  });
+
+  it("duplicate with a lens of their own", async () => {
+    const { useEditorStore } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    useEditorStore.getState().duplicateEntity([id]);
+    const copy = useEditorStore.getState().entities.at(-1)!;
+
+    expect(copy.type).toBe("camera");
+    expect(copy.camera).toEqual(cameraOf(useEditorStore, id).camera);
+    expect(copy.camera).not.toBe(cameraOf(useEditorStore, id).camera);
+    useEditorStore.getState().updateSceneCameras([copy.id], { fov: 20 });
+    expect(cameraOf(useEditorStore, id).camera!.fov).toBe(60);
+  });
+
+  it("survive save and reload", async () => {
+    const { useEditorStore, selectSceneContent } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    useEditorStore.getState().updateSceneCameras([id], { projection: "orthographic", orthoSize: 8 });
+    const saved = cameraOf(useEditorStore, id);
+
+    const document = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+    const reopened = await loadStore();
+    const parsed = parseSceneDocument(document);
+    reopened.useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+
+    expect(cameraOf(reopened.useEditorStore, id)).toEqual(saved);
+  });
+
+  it("go with their states, their events, and other objects' actions on them in one step, and one undo brings it all back", async () => {
+    const { useEditorStore } = await withView();
+    const id = useEditorStore.getState().addEntity("camera");
+    const stateId = useEditorStore.getState().addState(id);
+    useEditorStore.getState().setStateValues(stateId, { position: [0, 9, 0] });
+    useEditorStore.getState().setViewedState(id, null);
+    const ownEvent = useEditorStore.getState().addEvent(id, "start");
+    const cubeEvent = useEditorStore.getState().addEvent("cube-1", "mouseDown");
+    const cubeAction = useEditorStore.getState().animation.events[cubeEvent].actions[0] as TransitionAction;
+    useEditorStore.getState().updateEvent(cubeEvent, { actions: [cubeAction, { ...cubeAction, id: "on-camera", targetId: id, steps: [{ to: stateId, duration: 1, easing: "linear" }] }] });
+    const before = { entities: useEditorStore.getState().entities, animation: useEditorStore.getState().animation };
+    const undoBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().removeEntity([id]);
+
+    const after = useEditorStore.getState();
+    expect(after.entities.some((each) => each.id === id)).toBe(false);
+    expect(after.animation.states[stateId]).toBeUndefined();
+    expect(after.animation.events[ownEvent]).toBeUndefined();
+    expect(transitionsOf(after.animation.events[cubeEvent].actions).map((action) => action.targetId)).toEqual(["cube-1"]);
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(undoBefore + 1);
+
+    useEditorStore.temporal.getState().undo();
+    expect(useEditorStore.getState().entities).toEqual(before.entities);
+    expect(useEditorStore.getState().animation).toEqual(before.animation);
+  });
+});
+
+describe("looking through a scene camera (C6)", () => {
+  const withCamera = async () => {
+    const loaded = await loadStore();
+    const { useEditorStore } = loaded;
+    useEditorStore.getState().loadScene({ entities: [entity("cube-1"), light] });
+    const cameraId = useEditorStore.getState().addEntity("camera");
+    return { ...loaded, cameraId };
+  };
+  const active = async (state: Parameters<typeof import("../scene/activeCamera").resolveActiveCamera>[0]) =>
+    (await import("../scene/activeCamera")).resolveActiveCamera(state);
+
+  it("is picked like a profile, and nothing else changes", async () => {
+    const { useEditorStore, cameraId } = await withCamera();
+    const undoBefore = useEditorStore.temporal.getState().pastStates.length;
+    const personal = useEditorStore.getState().cameraProfiles.personal;
+
+    useEditorStore.getState().setActiveProfile(cameraId);
+
+    expect((await active(useEditorStore.getState())).kind).toBe("entity");
+    expect(useEditorStore.getState().cameraProfiles.personal).toBe(personal);
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(undoBefore);
+  });
+
+  it("falls back to the personal camera when deleted, and one undo looks through it again", async () => {
+    const { useEditorStore, cameraId } = await withCamera();
+    useEditorStore.getState().setActiveProfile(cameraId);
+
+    useEditorStore.getState().removeEntity([cameraId]);
+    expect(await active(useEditorStore.getState())).toMatchObject({ kind: "profile", id: "personal" });
+
+    useEditorStore.temporal.getState().undo();
+    expect(await active(useEditorStore.getState())).toMatchObject({ kind: "entity", id: cameraId });
+  });
+
+  it("can't be deleted while view only", async () => {
+    const { useEditorStore, cameraId } = await withCamera();
+    useEditorStore.getState().setActiveProfile(cameraId);
+    useEditorStore.getState().setReadOnly("openElsewhere");
+
+    useEditorStore.getState().removeEntity([cameraId]);
+
+    expect(await active(useEditorStore.getState())).toMatchObject({ kind: "entity", id: cameraId });
+    useEditorStore.getState().setReadOnly(null);
+  });
+
+  it("survives save and reload, and a saved ID that names nothing opens as the personal camera", async () => {
+    const { useEditorStore, selectSceneContent, cameraId } = await withCamera();
+    useEditorStore.getState().setActiveProfile(cameraId);
+    const document = JSON.parse(JSON.stringify(toSceneDocument(selectSceneContent(useEditorStore.getState()))));
+
+    const reopened = await loadStore();
+    const parsed = parseSceneDocument(document);
+    reopened.useEditorStore.getState().loadScene(parsed.ok ? parsed.content : null);
+    expect(reopened.useEditorStore.getState().activeProfileId).toBe(cameraId);
+
+    const dangling = parseSceneDocument({ ...document, scene: { ...document.scene, activeProfileId: "deleted-camera" } });
+    reopened.useEditorStore.getState().loadScene(dangling.ok ? dangling.content : null);
+    expect(reopened.useEditorStore.getState().activeProfileId).toBe("personal");
+  });
+
+  it("takes Field of View edits into the state it's shown in, with the rest of the lens on the camera, in one undo step", async () => {
+    const { useEditorStore, cameraId } = await withCamera();
+    const stateId = useEditorStore.getState().addState(cameraId); // shown now
+    const undoBefore = useEditorStore.temporal.getState().pastStates.length;
+
+    useEditorStore.getState().updateSceneCameras([cameraId], { fov: 80, near: 2 });
+
+    const camera = useEditorStore.getState().entities.find((each) => each.id === cameraId)!;
+    expect(useEditorStore.getState().animation.states[stateId].values.fov).toBe(80);
+    expect(camera.camera).toMatchObject({ fov: 45, near: 2 });
+    expect(useEditorStore.temporal.getState().pastStates.length).toBe(undoBefore + 1);
+
+    useEditorStore.getState().setViewedState(cameraId, null);
+    useEditorStore.getState().updateSceneCameras([cameraId], { fov: 30 });
+    expect(useEditorStore.getState().entities.find((each) => each.id === cameraId)!.camera!.fov).toBe(30);
+    expect(useEditorStore.getState().animation.states[stateId].values.fov).toBe(80);
   });
 });

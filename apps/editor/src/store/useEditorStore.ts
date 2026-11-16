@@ -38,14 +38,13 @@ import {
 } from "../animation/objectStates";
 import { reparentStates, type ParentChange } from "../animation/reparentStates";
 import {
-  cloneTransition,
   createEvent,
   duplicateEvents,
   removeEventsOf,
   type EventTrigger,
   type SceneEvent,
 } from "../animation/events";
-import type { TransitionAction } from "../animation/transitions";
+import { cloneAction, type SceneAction } from "../animation/actions";
 import { clonePath, DEFAULT_STROKE, pathsCenter, type PathData, type PathStroke } from "../paths/pathGeometry";
 import { shiftPoints } from "../paths/pathEditing";
 import { MIN_IMPORT_RADIUS, type ImportedSvgItem } from "../paths/svgImport";
@@ -53,7 +52,8 @@ import { cloneShape, flattenShape, shapeContours, type ShapeData, type ShapeSoli
 import { shapeCenterLines, type CenterLines } from "../paths/centerLine";
 
 import { deepMerge } from "../scene/deepMerge";
-import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialFrameDefaults, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
+import { sceneCameraEntity } from "../scene/activeCamera";
+import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, DEFAULT_SCENE_CAMERA, initialFrameDefaults, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
 import {
   cloneCameraProfile,
   cloneEntity,
@@ -65,6 +65,7 @@ import {
   createImageLayer,
   createLightingLayer,
   createPaintLayer,
+  createSceneCamera,
   createStartingEntities,
   ENTITY_DEFAULTS,
   initialEntities,
@@ -86,6 +87,7 @@ import type {
   MaterialLayer,
   MaterialLayerType,
   PostProcessingConfig,
+  SceneCameraSettings,
   SceneSettingsConfig,
 } from "../scene/types";
 import { cloneVector } from "../scene/vec3";
@@ -227,6 +229,13 @@ export interface EditorState {
   /** The extrusion (depth) or bevel of every shape among `ids`, in one undo step. */
   updateShapeSolids: (ids: string[], updates: Partial<ShapeSolid>) => void;
   /**
+   * Sets lens fields (projection, field of view, size, near, far) on every camera among `ids`, in one
+   * undo step, so a multi-selection is edited at once. Field of view goes to the state a camera is
+   * shown in (Base: the camera's own), as transform edits do. A size or distance that isn't a
+   * positive number is ignored whole. Other entities among `ids` are left alone.
+   */
+  updateSceneCameras: (ids: string[], updates: Partial<SceneCameraSettings>) => void;
+  /**
    * Convert to Path: every shape among `ids` and inside them (an import selects its group) becomes
    * a path along the middle of its strokes (paths/centerLine.ts), with a tube as thick as the
    * strokes, in one undo step. A shape keeps its ID, name, place, material, states and events; when
@@ -325,7 +334,8 @@ export interface EditorState {
   /** Adds an event to an object, last in its list, with one transition of the object. Returns its ID. */
   addEvent: (ownerId: string, trigger: EventTrigger) => string;
   /** Changes an event's trigger or replaces its actions (a list edited as a whole). */
-  updateEvent: (eventId: string, updates: { trigger?: EventTrigger; actions?: TransitionAction[] }) => void;
+  /** Changes an event's trigger, its key (Key Down, Key Up: a `KeyboardEvent.code`), or its actions. One undo step. */
+  updateEvent: (eventId: string, updates: { trigger?: EventTrigger; key?: string; actions?: SceneAction[] }) => void;
   removeEvent: (eventId: string) => void;
 
   updatePostProcessing: (updates: DeepPartial<PostProcessingConfig>) => void;
@@ -649,7 +659,11 @@ export const useEditorStore = create<EditorState>()(
           addEntity: (type) => {
             let newId = "";
             set((state) => {
-              const entity = createEntity(type);
+              // A camera captures the current view (entityFactories.createSceneCamera).
+              const entity =
+                type === "camera"
+                  ? createSceneCamera(state.cameraProfiles[state.activeProfileId] ?? state.cameraProfiles[DEFAULT_CAMERA_PROFILE_ID] ?? DEFAULT_CAMERA_PROFILE, state.projectionMode)
+                  : createEntity(type);
               newId = entity.id;
 
               return {
@@ -1166,6 +1180,34 @@ export const useEditorStore = create<EditorState>()(
             });
             return newId;
           },
+          updateSceneCameras: (ids, updates) =>
+            set((state) => {
+              const targets = new Set(ids);
+              const isTarget = (entity: Entity) => entity.type === "camera" && targets.has(entity.id);
+              const numbers = [updates.fov, updates.orthoSize, updates.near, updates.far];
+              if (numbers.some((value) => value !== undefined && !(Number.isFinite(value) && value > 0))) return state;
+              if (!state.entities.some(isTarget)) return state;
+
+              // Field of view is a state value (C6): it goes to the state each camera is shown in, as
+              // the Transform panel's edits do; the rest of the lens is the camera's in every state.
+              const { fov, ...lens } = updates;
+              const states = { ...state.animation.states };
+              let isStateEdit = false;
+              const entities = state.entities.map((entity) => {
+                if (!isTarget(entity)) return entity;
+                const shown = fov === undefined ? null : selectViewedObjectState(state, entity.id);
+                if (shown) {
+                  states[shown.id] = { ...shown, values: { ...shown.values, fov } };
+                  isStateEdit = true;
+                }
+                const own = shown || fov === undefined ? lens : { ...lens, fov };
+                return Object.keys(own).length > 0 ? { ...entity, camera: { ...DEFAULT_SCENE_CAMERA, ...entity.camera, ...own } } : entity;
+              });
+              return {
+                ...(entities.some((entity, index) => entity !== state.entities[index]) ? { entities } : null),
+                ...(isStateEdit ? { animation: { ...state.animation, states } } : null),
+              };
+            }),
           updateShapeSolids: (ids, updates) =>
             set((state) => {
               const valid = Object.values(updates).every((value) => value === undefined || value >= 0);
@@ -1354,7 +1396,8 @@ export const useEditorStore = create<EditorState>()(
               updatingEvent(state, eventId, (event) => ({
                 ...event,
                 ...(updates.trigger ? { trigger: updates.trigger } : null),
-                ...(updates.actions ? { actions: updates.actions.map(cloneTransition) } : null),
+                ...(updates.key ? { key: updates.key } : null),
+                ...(updates.actions ? { actions: updates.actions.map(cloneAction) } : null),
               })),
             ),
           removeEvent: (eventId) =>
@@ -1566,8 +1609,9 @@ export const useEditorStore = create<EditorState>()(
               [DEFAULT_CAMERA_PROFILE_ID]: cloneCameraProfile(DEFAULT_CAMERA_PROFILE),
               ...Object.fromEntries(savedProfiles.map((profile) => [profile.id, profile])),
             };
+            // A profile, or a scene camera (scene/activeCamera.ts); anything else is the personal camera.
             const activeProfileId =
-              content?.activeProfileId && cameraProfiles[content.activeProfileId]
+              content?.activeProfileId && (cameraProfiles[content.activeProfileId] || sceneCameraEntity(content.entities, content.activeProfileId))
                 ? content.activeProfileId
                 : DEFAULT_CAMERA_PROFILE_ID;
 

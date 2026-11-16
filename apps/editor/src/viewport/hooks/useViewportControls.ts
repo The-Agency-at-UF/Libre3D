@@ -12,6 +12,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { selectViewedObjectState, useEditorStore } from "../../store/useEditorStore";
 import { getEntityIndex } from "../../scene/entityIndex";
+import { activeSceneCameraId } from "../../scene/activeCamera";
 import { resolveState, unwrapRotation } from "../../animation/objectStates";
 
 export function useViewportControls(
@@ -243,12 +244,15 @@ export function useViewportControls(
       // Play looks through a camera of its own (useViewportPlay, PlayCamera), so nothing here may
       // move, and save, the scene's camera meanwhile.
       const isPlaying = useEditorStore.getState().isPreviewMode;
+      // Looking through a scene camera (C6), the view is that camera's: it moves with the camera,
+      // not by orbiting (ViewportCanvas follows it each frame).
+      const isLookingThrough = activeSceneCameraId(useEditorStore.getState()) !== null;
       orbitControls.enableRotate = isAltPressed && !isSpacePressed;
       orbitControls.enablePan =
         isAltPressed || isSpacePressed || isMiddlePanning;
-      orbitControls.enabled = !isDragging && !isPlaying;
+      orbitControls.enabled = !isDragging && !isPlaying && !isLookingThrough;
 
-      if (isSpacePressed && !isPlaying) {
+      if (isSpacePressed && !isPlaying && !isLookingThrough) {
         orbitControls.mouseButtons.LEFT = THREE.MOUSE.PAN;
         if (rendererRef.current)
           rendererRef.current.domElement.style.cursor = "grab";
@@ -449,12 +453,14 @@ export function useViewportControls(
     );
 
     const unsubPlay = useEditorStore.subscribe((s) => s.isPreviewMode, updateOrbitControls);
+    const unsubLookThrough = useEditorStore.subscribe((s) => activeSceneCameraId(s), updateOrbitControls);
 
     const unsubViewportZoom = useEditorStore.subscribe(
       (s) => s.viewportZoom,
       (newZoom) => {
         const liveCamera = cameraRef.current;
-        if (!liveCamera || !orbitControls || useEditorStore.getState().isPreviewMode) return;
+        // Not in Play, and not while looking through a scene camera, whose lens is the view's.
+        if (!liveCamera || !orbitControls || useEditorStore.getState().isPreviewMode || activeSceneCameraId(useEditorStore.getState())) return;
 
         const isPerspective = liveCamera instanceof THREE.PerspectiveCamera;
         const isOrthographic = liveCamera instanceof THREE.OrthographicCamera;
@@ -511,6 +517,7 @@ export function useViewportControls(
       unsubTransformSpace();
       unsubShowAxisGuides();
       unsubPlay();
+      unsubLookThrough();
       unsubViewportZoom();
       scene.remove(transformControls.getHelper());
       transformControls.dispose();

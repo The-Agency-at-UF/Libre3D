@@ -1,0 +1,93 @@
+/*
+ * The Events panel's add buttons, and event triggers' own controls in the Edit Event panel: the key a Key Down or Key Up event listens
+ * for (KeyCaptureField). Imported after components.css (index.css), whose .event-* rules these sit beside.
+ */
+
+.key-capture {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.key-capture-button {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.key-capture-button i {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.key-capture-button.is-empty {
+  color: var(--text-tertiary);
+}
+
+.key-capture-button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.key-capture-button.is-capturing {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.key-capture-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* One add button per trigger: more than fit on one line, so they wrap two or three to a row. */
+.event-add-row {
+  flex-wrap: wrap;
+}
+
+.event-add-row .mat-add-btn {
+  flex: 1 0 auto;
+  padding: 0 8px;
+}
+
+/* The Key row, sized like the rows of an action below it. */
+.event-key-row .prop-label {
+  flex: 0 0 84px;
+  font-size: 11px;
+}
+
+.event-key-row .key-capture-button {
+  width: 100%;
+}
+
+/* Open Link: the URL field beside its label, and the "Use https://…" fix inside the warning. */
+.event-link-row .prop-label {
+  flex: 0 0 84px;
+  font-size: 11px;
+}
+
+.event-link-row input {
+  padding-right: 8px;
+}
+
+.event-link-fix {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  text-align: left;
+}

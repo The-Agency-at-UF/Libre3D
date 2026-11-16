@@ -47,6 +47,8 @@ const iconClassForEntity = (entity: Entity): string => {
       return "ti ti-sun";
     case "group":
       return "ti ti-folder";
+    case "camera":
+      return "ti ti-video";
     case "importedModel":
       // The import root carries the asset; inner nodes are plain glTF nodes.
       return entity.assetId ? "ti ti-package" : "ti ti-point";

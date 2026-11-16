@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SceneEvent } from "./events";
 import type { ObjectState } from "./objectStates";
 import { SceneRuntime, type RuntimeEntity } from "./sceneRuntime";
@@ -210,6 +210,423 @@ describe("SceneRuntime: clicks", () => {
   });
 });
 
+describe("SceneRuntime: fire, the one way in", () => {
+  const growOnClick = () =>
+    cubeScene(
+      [event("grow", { trigger: "mouseDown", actions: [transition({ from: "current", steps: [{ to: "big", duration: 0.3, easing: "linear" }] })] })],
+      [entity("handle", { parentId: "cube" }), entity("floor")],
+    );
+
+  it("fires a pointer trigger on an object as click does", () => {
+    const runtime = growOnClick();
+
+    expect(runtime.fire("mouseDown", "floor")).toBe(false);
+    expect(runtime.fire("mouseDown", "handle")).toBe(true);
+    runtime.tick(0.3);
+    expect(runtime.poses().get("cube")!.scale).toEqual([2, 2, 2]);
+  });
+
+  it("finds the nearest ancestor with the trigger, and survives a parent cycle", () => {
+    const runtime = cubeScene(
+      [event("grow", { trigger: "mouseDown", actions: [transition({ steps: [{ to: "big", duration: 1, easing: "linear" }] })] })],
+      [entity("arm", { parentId: "cube" }), entity("hand", { parentId: "arm" }), entity("a", { parentId: "b" }), entity("b", { parentId: "a" })],
+    );
+
+    expect(runtime.ownerOf("mouseDown", "hand")).toBe("cube");
+    expect(runtime.ownerOf("start", "hand")).toBeNull();
+    expect(runtime.ownerOf("mouseDown", "a")).toBeNull();
+    expect(runtime.fire("mouseDown", "a")).toBe(false);
+  });
+
+  it("fires every Start event without an object", () => {
+    const runtime = cubeScene([event("rise")]);
+
+    expect(runtime.fire("start")).toBe(true);
+    runtime.tick(5);
+    expect(positionOf(runtime)).toEqual([0, 2, 0]);
+    expect(cubeScene([]).fire("start")).toBe(false);
+  });
+
+  it("fires nothing for an object that isn't in the scene", () => {
+    const runtime = growOnClick();
+
+    expect(runtime.fire("mouseDown", "ghost")).toBe(false);
+    expect(runtime.poses().size).toBe(0);
+  });
+
+  it("fires an event only for its own trigger, through the ancestor rule, for every pointer trigger", () => {
+    for (const trigger of ["mouseDown", "mouseUp", "mouseHover"] as const) {
+      const runtime = cubeScene(
+        [event("grow", { trigger, actions: [transition({ steps: [{ to: "big", duration: 1, easing: "linear" }] })] })],
+        [entity("handle", { parentId: "cube" }), entity("floor")],
+      );
+      const others = (["mouseDown", "mouseUp", "mouseHover", "start"] as const).filter((other) => other !== trigger);
+
+      expect(runtime.ownerOf(trigger, "handle")).toBe("cube");
+      expect(runtime.ownerOf(trigger, "floor")).toBeNull();
+      expect(others.map((other) => runtime.ownerOf(other, "handle"))).toEqual([null, null, null]);
+      expect(others.map((other) => runtime.fire(other, "handle"))).toEqual([false, false, false]);
+      expect(runtime.poses().size).toBe(0);
+      expect(runtime.fire(trigger, "handle")).toBe(true);
+      runtime.tick(1);
+      expect(runtime.poses().get("cube")!.scale).toEqual([2, 2, 2]);
+    }
+  });
+
+  it("skips a hover or release event whose owner is gone", () => {
+    const runtime = cubeScene([event("hover", { ownerId: "deleted", trigger: "mouseHover" }), event("up", { ownerId: "deleted", trigger: "mouseUp" })]);
+
+    expect(runtime.triggersInUse.size).toBe(0);
+    expect(runtime.fire("mouseHover", "cube")).toBe(false);
+    expect(runtime.fire("mouseUp", "deleted")).toBe(false);
+  });
+
+  it("knows which triggers the scene uses", () => {
+    expect(cubeScene([event("rise")]).triggersInUse).toEqual(new Set(["start"]));
+    expect(cubeScene([]).triggersInUse.size).toBe(0);
+    expect(growOnClick().triggersInUse).toEqual(new Set(["mouseDown"]));
+    expect(cubeScene([event("rise"), event("grow", { trigger: "mouseDown" })]).triggersInUse).toEqual(new Set(["start", "mouseDown"]));
+  });
+});
+
+describe("SceneRuntime: keys", () => {
+  const grow = transition({ steps: [{ to: "big", duration: 1, easing: "linear" }] });
+  const rise = (targetId: string) => transition({ id: `rise-${targetId}`, targetId, steps: [{ to: `up-${targetId}`, duration: 1, easing: "linear" }] });
+  const twoCubes = (events: SceneEvent[]) =>
+    new SceneRuntime({
+      entities: [entity("cube"), entity("other")],
+      animation: {
+        states: byId(state("up-cube", "cube", { position: [0, 2, 0] }), state("up-other", "other", { position: [0, 3, 0] })),
+        events: byId(...events),
+      },
+    });
+
+  it("fires only the events whose key matches, whatever the pointer is on", () => {
+    const runtime = cubeScene([event("space", { trigger: "keyDown", key: "Space", actions: [grow] })], [entity("floor")]);
+
+    expect(runtime.key("keyDown", "KeyW")).toBe(false);
+    expect(runtime.poses().size).toBe(0);
+    expect(runtime.key("keyDown", "Space")).toBe(true);
+    runtime.tick(1);
+    expect(runtime.poses().get("cube")!.scale).toEqual([2, 2, 2]);
+  });
+
+  it("never fires an event with no key picked, and lists only the keys picked", () => {
+    const runtime = cubeScene([event("unset", { trigger: "keyDown" }), event("w", { trigger: "keyUp", key: "KeyW" })]);
+
+    expect(runtime.keyCodes).toEqual(new Set(["KeyW"]));
+    expect(runtime.key("keyDown", "")).toBe(false);
+    expect(runtime.fire("keyDown")).toBe(false);
+    expect(runtime.poses().size).toBe(0);
+  });
+
+  it("keeps Key Down and Key Up apart", () => {
+    const runtime = cubeScene([event("up", { trigger: "keyUp", key: "Space", actions: [grow] })]);
+
+    expect(runtime.key("keyDown", "Space")).toBe(false);
+    expect(runtime.key("keyUp", "Space")).toBe(true);
+  });
+
+  it("fires every object listening for the same key, in scene order", () => {
+    const runtime = twoCubes([
+      event("b", { ownerId: "other", trigger: "keyDown", key: "KeyA", actions: [rise("other")] }),
+      event("a", { ownerId: "cube", trigger: "keyDown", key: "KeyA", actions: [rise("cube")] }),
+    ]);
+
+    expect(runtime.key("keyDown", "KeyA")).toBe(true);
+    runtime.tick(1);
+    expect(positionOf(runtime, "cube")).toEqual([0, 2, 0]);
+    expect(positionOf(runtime, "other")).toEqual([0, 3, 0]);
+  });
+
+  it("skips a key event whose owner is gone", () => {
+    const runtime = cubeScene([event("gone", { ownerId: "deleted", trigger: "keyDown", key: "Space" })]);
+
+    expect(runtime.keyCodes.size).toBe(0);
+    expect(runtime.key("keyDown", "Space")).toBe(false);
+  });
+});
+
+describe("SceneRuntime: scroll", () => {
+  // Base → up (y 2, 1 s) → big (scale 2, 3 s): a quarter of the way is "up".
+  const scrubbed = transition({
+    from: "base",
+    steps: [
+      { to: "up", duration: 1, easing: "linear" },
+      { to: "big", duration: 3, easing: "linear" },
+    ],
+    delay: 5,
+    loop: "infinite",
+    cycle: "pingPong",
+  });
+  const scrollScene = (events: SceneEvent[] = [event("scroll", { trigger: "scroll", actions: [scrubbed] })], extra: RuntimeEntity[] = []) =>
+    new SceneRuntime({
+      entities: [entity("cube"), ...extra],
+      animation: {
+        states: byId(
+          state("up", "cube", { position: [0, 2, 0] }),
+          state("big", "cube", { scale: [2, 2, 2] }),
+          state("tall", "pole", { scale: [1, 3, 1] }),
+        ),
+        events: byId(...events),
+      },
+    });
+
+  it("has no Scroll events in a scene without them", () => {
+    expect(cubeScene([event("rise"), event("grow", { trigger: "mouseDown" })]).hasScrollEvents).toBe(false);
+  });
+
+  it("puts a scroll transition at progress 0 before the first frame, its Delay ignored", () => {
+    const runtime = scrollScene();
+    expect(runtime.hasScrollEvents).toBe(true);
+    runtime.start();
+    expect(runtime.poses().get("cube")).toMatchObject({ position: [0, 0, 0], scale: [1, 1, 1] });
+  });
+
+  it("is paced by the step durations and retraces exactly going back", () => {
+    const runtime = scrollScene();
+    runtime.start();
+
+    runtime.setScrollProgress(0.125);
+    expect(positionOf(runtime)).toEqual([0, 1, 0]);
+    runtime.setScrollProgress(0.25);
+    expect(positionOf(runtime)).toEqual([0, 2, 0]);
+    runtime.setScrollProgress(0.625);
+    const midway = runtime.poses().get("cube")!;
+    expect(midway.scale).toEqual([1.5, 1.5, 1.5]);
+    runtime.setScrollProgress(1);
+    expect(runtime.poses().get("cube")!.scale).toEqual([2, 2, 2]);
+
+    runtime.setScrollProgress(0.625);
+    expect(runtime.poses().get("cube")).toEqual(midway);
+    runtime.setScrollProgress(0);
+    expect(runtime.poses().get("cube")).toMatchObject({ position: [0, 0, 0], scale: [1, 1, 1] });
+  });
+
+  it("isn't moved by time, and is idle meanwhile", () => {
+    const runtime = scrollScene();
+    runtime.start();
+    runtime.setScrollProgress(0.25);
+    runtime.tick(10);
+    expect(positionOf(runtime)).toEqual([0, 2, 0]);
+    expect(runtime.isIdle).toBe(true);
+  });
+
+  it("drives every scroll event from the one progress", () => {
+    const runtime = scrollScene(
+      [
+        event("scroll", { trigger: "scroll", actions: [scrubbed] }),
+        event("pole", { ownerId: "pole", trigger: "scroll", actions: [transition({ id: "grow-pole", targetId: "pole", steps: [{ to: "tall", duration: 2, easing: "linear" }] })] }),
+      ],
+      [entity("pole")],
+    );
+    runtime.start();
+    runtime.setScrollProgress(0.5);
+    expect(runtime.poses().get("pole")!.scale).toEqual([1, 2, 1]);
+    expect(runtime.poses().get("cube")!.scale).toEqual([1 + 1 / 3, 1 + 1 / 3, 1 + 1 / 3]);
+  });
+
+  it("clamps out-of-range progress and reads NaN as 0", () => {
+    const runtime = scrollScene();
+    runtime.start();
+    runtime.setScrollProgress(4);
+    expect(runtime.poses().get("cube")!.scale).toEqual([2, 2, 2]);
+    runtime.setScrollProgress(-1);
+    expect(positionOf(runtime)).toEqual([0, 0, 0]);
+    runtime.setScrollProgress(0.25);
+    runtime.setScrollProgress(Number.NaN);
+    expect(positionOf(runtime)).toEqual([0, 0, 0]);
+  });
+
+  it("writes nothing when the progress hasn't changed", () => {
+    const runtime = scrollScene();
+    runtime.start();
+    runtime.setScrollProgress(0.25);
+    const pose = runtime.poses().get("cube");
+    runtime.setScrollProgress(0.25);
+    expect(runtime.poses().get("cube")).toBe(pose);
+  });
+
+  it("lets the newest writer win: a click takes over, and the next scroll glides the object back", () => {
+    const grow = event("grow", { trigger: "mouseDown", actions: [transition({ id: "grow", from: "current", steps: [{ to: "big", duration: 1, easing: "linear" }] })] });
+    const runtime = scrollScene([event("scroll", { trigger: "scroll", actions: [scrubbed] }), grow]);
+    runtime.start();
+    runtime.setScrollProgress(0.25); // at "up": y 2, scale 1
+
+    runtime.click("cube");
+    runtime.tick(0.5);
+    expect(runtime.poses().get("cube")).toMatchObject({ position: [0, 1, 0], scale: [1.5, 1.5, 1.5] });
+
+    // Scroll takes the object back, but from where the click left it: no snap, and not idle until it lands.
+    runtime.setScrollProgress(0.25 + 1e-9);
+    expect(runtime.poses().get("cube")!.position[1]).toBeCloseTo(1, 6);
+    expect(runtime.isIdle).toBe(false);
+    runtime.tick(0.25);
+    expect(positionOf(runtime)![1]).toBeGreaterThan(1);
+    expect(positionOf(runtime)![1]).toBeLessThan(2);
+    runtime.tick(1);
+    expect(positionOf(runtime)![1]).toBeCloseTo(2, 6);
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(1, 6);
+    expect(runtime.isIdle).toBe(true);
+  });
+
+  it("glides back to scroll after a click has finished, not only while it runs", () => {
+    const grow = event("grow", { trigger: "mouseDown", actions: [transition({ id: "grow", from: "current", steps: [{ to: "big", duration: 1, easing: "linear" }] })] });
+    const runtime = scrollScene([event("scroll", { trigger: "scroll", actions: [scrubbed] }), grow]);
+    runtime.start();
+    runtime.setScrollProgress(0.25);
+    runtime.click("cube");
+    runtime.tick(2); // the click's transition is done: "big" is scale 2
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(2, 6);
+
+    runtime.setScrollProgress(0.25 + 1e-9);
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(2, 6); // no snap to scroll's scale 1
+    runtime.tick(1);
+    expect(positionOf(runtime)![1]).toBeCloseTo(2, 6);
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(1, 6);
+  });
+
+  it("ends a glide back to scroll when a new click starts", () => {
+    const grow = event("grow", { trigger: "mouseDown", actions: [transition({ id: "grow", from: "current", steps: [{ to: "big", duration: 1, easing: "linear" }] })] });
+    const runtime = scrollScene([event("scroll", { trigger: "scroll", actions: [scrubbed] }), grow]);
+    runtime.start();
+    runtime.setScrollProgress(0.25);
+    runtime.click("cube");
+    runtime.tick(0.5);
+    runtime.setScrollProgress(0.25 + 1e-9); // glide starts
+    runtime.tick(0.1);
+    runtime.click("cube"); // a new click: the glide stops, and the click's transition runs from here
+    runtime.tick(1);
+    expect(runtime.isIdle).toBe(true);
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(2, 6);
+  });
+
+  it("does not glide when scroll moves an object nothing clicked", () => {
+    const runtime = scrollScene();
+    runtime.start();
+    runtime.setScrollProgress(0.25);
+    expect(runtime.isIdle).toBe(true);
+    runtime.setScrollProgress(0.5); // time 2s: a third of the way from "up" (y 2) back to Base (y 0), and scale 1 + 1/3
+    expect(runtime.isIdle).toBe(true);
+    expect(positionOf(runtime)![1]).toBeCloseTo(4 / 3, 6);
+    expect(runtime.poses().get("cube")!.scale[0]).toBeCloseTo(1 + 1 / 3, 6);
+  });
+
+  it("never fires a scroll event's transition by time", () => {
+    const runtime = scrollScene();
+    expect(runtime.fire("scroll")).toBe(false);
+    expect(runtime.fire("scroll", "cube")).toBe(false);
+    expect(runtime.isIdle).toBe(true);
+  });
+
+  it("reads Current in row 1 as Base", () => {
+    const runtime = scrollScene([event("scroll", { trigger: "scroll", actions: [{ ...scrubbed, from: "current" }] })]);
+    runtime.start();
+    runtime.setScrollProgress(0.125);
+    expect(positionOf(runtime)).toEqual([0, 1, 0]);
+  });
+
+  it("scrubs a path's trim", () => {
+    const runtime = new SceneRuntime({
+      entities: [entity("path", { trimStart: 0, trimEnd: 1 })],
+      animation: {
+        states: byId(state("hidden", "path", { trimEnd: 0 })),
+        events: byId(event("write", { ownerId: "path", trigger: "scroll", actions: [transition({ targetId: "path", from: "hidden", steps: [{ to: "base", duration: 2, easing: "linear" }] })] })),
+      },
+    });
+    runtime.start();
+    expect(runtime.poses().get("path")!.trimEnd).toBe(0);
+    runtime.setScrollProgress(0.75);
+    expect(runtime.poses().get("path")!.trimEnd).toBeCloseTo(0.75, 6);
+  });
+
+  it("skips a scroll action whose target or state is missing, or whose owner is gone", () => {
+    const runtime = scrollScene([
+      event("gone", { ownerId: "deleted", trigger: "scroll", actions: [scrubbed] }),
+      event("target", { trigger: "scroll", actions: [{ ...scrubbed, targetId: "deleted" }] }),
+      event("state", { trigger: "scroll", actions: [{ ...scrubbed, steps: [{ to: "nope", duration: 1, easing: "linear" }] }] }),
+    ]);
+    expect(runtime.hasScrollEvents).toBe(false);
+    expect(() => {
+      runtime.start();
+      runtime.setScrollProgress(0.5);
+    }).not.toThrow();
+    expect(runtime.poses().size).toBe(0);
+  });
+});
+
+describe("SceneRuntime: effects", () => {
+  const link = { id: "link", type: "openLink" as const, url: "https://example.com", newTab: true };
+  const withLink = (trigger: SceneEvent["trigger"], onEffect?: (effect: unknown) => void) =>
+    new SceneRuntime(
+      {
+        entities: [entity("cube")],
+        animation: { states: byId(state("up", "cube", { position: [0, 2, 0] })), events: byId(event("e", { trigger, actions: [transition(), link] })) },
+      },
+      { onEffect },
+    );
+
+  it("runs the transition and hands the effect over once, inside the trigger", () => {
+    const effects: unknown[] = [];
+    const runtime = withLink("mouseDown", (effect) => effects.push(effect));
+
+    runtime.click("cube");
+    expect(effects).toEqual([{ type: "openLink", url: "https://example.com/", newTab: true }]);
+    runtime.tick(1);
+    expect(positionOf(runtime)).toEqual([0, 2, 0]);
+    expect(effects).toHaveLength(1);
+  });
+
+  it("hands over Start events' effects too", () => {
+    const effects: unknown[] = [];
+    withLink("start", (effect) => effects.push(effect)).start();
+    expect(effects).toHaveLength(1);
+  });
+
+  it("carries on without a host, or past a host that throws", () => {
+    const quiet = withLink("start");
+    expect(() => quiet.start()).not.toThrow();
+
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const failing = withLink("start", () => {
+      throw new Error("popup blocked");
+    });
+    failing.start();
+    failing.tick(1);
+    expect(positionOf(failing)).toEqual([0, 2, 0]);
+    expect(error).toHaveBeenCalledOnce();
+    error.mockRestore();
+  });
+
+  it("opens no unsafe link, and still runs the event's transition", () => {
+    const effects: unknown[] = [];
+    const runtime = new SceneRuntime(
+      {
+        entities: [entity("cube")],
+        animation: {
+          states: byId(state("up", "cube", { position: [0, 2, 0] })),
+          events: byId(event("e", { trigger: "mouseDown", actions: [{ ...link, url: " JaVaScRiPt:alert(1)" }, transition()] })),
+        },
+      },
+      { onEffect: (effect) => effects.push(effect) },
+    );
+    runtime.click("cube");
+    runtime.tick(1);
+    expect(effects).toEqual([]);
+    expect(positionOf(runtime)).toEqual([0, 2, 0]);
+  });
+
+  it("hands over nothing for an action with bad data", () => {
+    const effects: unknown[] = [];
+    const runtime = new SceneRuntime(
+      { entities: [entity("cube")], animation: { events: byId(event("e", { actions: [{ ...link, url: "" }] })) } },
+      { onEffect: (effect) => effects.push(effect) },
+    );
+    runtime.start();
+    expect(effects).toEqual([]);
+  });
+});
+
 describe("SceneRuntime: place", () => {
   it("starts a transition from Current where an object was placed, and from row 1 otherwise", () => {
     const runtime = cubeScene([]);
@@ -410,5 +827,49 @@ describe("SceneRuntime: colour and opacity", () => {
     runtime.start();
     runtime.tick(0.5);
     expect(runtime.poses().has("other")).toBe(false);
+  });
+});
+
+describe("a camera's field of view (C6)", () => {
+  const lens = { fov: 45 };
+  const cameraScene = (trigger: SceneEvent["trigger"]) =>
+    new SceneRuntime({
+      entities: [entity("cam", { camera: lens }), entity("cube")],
+      animation: {
+        states: byId(state("wide", "cam", { fov: 85, position: [0, 4, 0] }), state("up", "cube", { position: [0, 2, 0] })),
+        events: byId(
+          event("zoom", { ownerId: "cam", trigger, actions: [transition({ id: "zoom", targetId: "cam", steps: [{ to: "wide", duration: 2, easing: "linear" }] })] }),
+          event("lift", { trigger, actions: [transition({ id: "lift" })] }),
+        ),
+      },
+    });
+
+  it("changes linearly in a transition, with the transform", () => {
+    const runtime = cameraScene("start");
+    runtime.start();
+    runtime.tick(1);
+
+    expect(runtime.poses().get("cam")).toMatchObject({ fov: 65, position: [0, 2, 0] });
+    runtime.tick(1);
+    expect(runtime.poses().get("cam")!.fov).toBe(85);
+  });
+
+  it("follows scroll progress both ways", () => {
+    const runtime = cameraScene("scroll");
+    runtime.start();
+    expect(runtime.poses().get("cam")!.fov).toBe(45);
+    runtime.setScrollProgress(0.25);
+    expect(runtime.poses().get("cam")!.fov).toBe(55);
+    runtime.setScrollProgress(1);
+    expect(runtime.poses().get("cam")!.fov).toBe(85);
+    runtime.setScrollProgress(0.25);
+    expect(runtime.poses().get("cam")!.fov).toBe(55);
+  });
+
+  it("is never given to an object that isn't a camera", () => {
+    const runtime = cameraScene("start");
+    runtime.start();
+    runtime.tick(0.5);
+    expect(runtime.poses().get("cube")).not.toHaveProperty("fov");
   });
 });

@@ -32,18 +32,19 @@
  * middleware are thin adapters around `handleScenesRequest`, so routing, validation, and
  * responses live only here and the two environments cannot drift.
  *
- * Imported models and textures are content-addressed (sceneAssets.ts): `users/<sub>/assets/<hash>`,
+ * Imported models, textures and sounds are content-addressed (sceneAssets.ts): `users/<sub>/assets/<hash>`,
  * shared by every scene of that user that uses them, so deleting a scene leaves them. The browser
  * uploads and downloads them directly with presigned URLs; each PUT is signed with the hash, so S3
  * refuses bytes that don't match their address. A save may only name assets the cloud has (422
- * otherwise), so a saved scene always opens complete elsewhere. The row lists the assets its
+ * otherwise), so a saved scene always opens complete elsewhere. Sounds are capped at 5 MB each (at
+ * upload) and 20 MB per scene (at save, from their stored sizes). The row lists the assets its
  * document uses (`assetHashes`): later saves check only new ones, and downloads are limited to them.
  *
  * Ownership is by construction: every row is keyed by the verified token's `sub` (the user-scenes
  * partition key) and every object lives under `users/<sub>/`, so there is no way to name someone
  * else's scene. A published copy (awsPublishHandler.ts) is found through the row's `publishId`, so
  * deleting a scene takes its share link down too. The document itself is opaque here, apart from
- * finding its assets (`collectAssetHashes`); the editor owns its shape (sceneDocument.ts).
+ * finding its assets (`collectAssetRefs`); the editor owns its shape (sceneDocument.ts).
  */
 
 import { randomUUID } from "node:crypto";
@@ -74,7 +75,17 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 // `.js` is required: Vercel runs server modules under Node's ES module loader (see awsConfig.ts).
 import { getAwsClients, readRequiredEnv, type ServerEnv } from "./awsConfig.js";
-import { MAX_ASSET_BYTES, assetHashToBase64, collectAssetHashes, isAssetHash, type AssetKind } from "./sceneAssets.js";
+import {
+  MAX_ASSET_BYTES,
+  MAX_SCENE_AUDIO_BYTES,
+  assetHashToBase64,
+  collectAssetRefs,
+  isAssetHash,
+  isAssetKind,
+  maxAssetBytes,
+  type AssetKind,
+  type SceneAssetSources,
+} from "./sceneAssets.js";
 import { verifyAuth } from "./verifyAuth.js";
 
 /** What follows `/api/scenes/:sceneId/`, if anything. */
@@ -135,7 +146,10 @@ const ASSET_URL_TTL_SECONDS = 900;
 const MAX_ASSETS_PER_REQUEST = 100;
 // Per scene. Each new one costs a HEAD on the save that adds it, and they're all listed on the row.
 const MAX_SCENE_ASSETS = 500;
-const ASSET_CONTENT_TYPES: Record<AssetKind, string> = { model: "model/gltf-binary", texture: "image/png" };
+// One signed type per kind, an allow-list (a texture is "image/png" whatever its format). Audio
+// comes as mp3, ogg, m4a or wav, and nothing downstream reads its type (Web Audio decodes by
+// content), so it's stored as plain bytes rather than under a type that's wrong for most files.
+const ASSET_CONTENT_TYPES: Record<AssetKind, string> = { model: "model/gltf-binary", texture: "image/png", audio: "application/octet-stream" };
 // A 480×270 JPEG is tens of kB; this only stops something that isn't a thumbnail.
 const MAX_THUMBNAIL_BYTES = 256 * 1024;
 // How long a gallery picture's URL works. The gallery asks for new ones each time it loads.
@@ -302,13 +316,24 @@ const isAssetStored = async (config: SceneConfig, userId: string, hash: string):
       new HeadObjectCommand({ Bucket: config.bucketName, Key: assetKey(userId, hash), ChecksumMode: "ENABLED" }),
     );
 
-    return head.ChecksumSHA256 === assetHashToBase64(hash) && (head.ContentLength ?? Infinity) <= MAX_ASSET_BYTES;
+    return head.ChecksumSHA256 === assetHashToBase64(hash) && (head.ContentLength ?? Infinity) <= MAX_ASSET_BYTES; // the largest kind's cap; each upload was signed with its own size
   } catch (error) {
     // A 404 needs the role's ListBucket; without it S3 answers 403, which throws here instead.
     if (error instanceof NotFound) {
       return false;
     }
 
+    throw error;
+  }
+};
+
+// The size of an asset the cloud has (0 if it's gone since it was checked).
+const storedAssetSize = async (config: SceneConfig, userId: string, hash: string): Promise<number> => {
+  try {
+    const head = await config.s3.send(new HeadObjectCommand({ Bucket: config.bucketName, Key: assetKey(userId, hash) }));
+    return head.ContentLength ?? 0;
+  } catch (error) {
+    if (error instanceof NotFound) return 0;
     throw error;
   }
 };
@@ -329,8 +354,8 @@ const checkDocumentAssets = async (
   document: unknown,
   known: Set<string>,
 ): Promise<AssetCheck> => {
-  const scene = (document as { scene?: { entities?: unknown; materials?: unknown } }).scene;
-  const hashes = collectAssetHashes(scene?.entities, scene?.materials);
+  const refs = collectAssetRefs((document as { scene?: SceneAssetSources }).scene).filter((ref) => isAssetHash(ref.id));
+  const hashes = refs.map((ref) => ref.id);
 
 
   if (hashes.length > MAX_SCENE_ASSETS) {
@@ -348,6 +373,20 @@ const checkDocumentAssets = async (
       ok: false,
       response: errorResponse(422, "Some of this scene's imported files haven't been uploaded yet.", { missingAssets: missing }),
     };
+  }
+
+  // All of a scene's sounds together: each is under its own cap, but a scene can use many. They're
+  // all in the cloud by now, so their stored sizes are what counts (one HEAD per sound, and a scene
+  // has few).
+  const audio = refs.filter((ref) => ref.kind === "audio").map((ref) => ref.id);
+  if (audio.length > 0) {
+    const sizes = await Promise.all(audio.map((hash) => storedAssetSize(config, userId, hash)));
+    if (sizes.reduce((total, size) => total + size, 0) > MAX_SCENE_AUDIO_BYTES) {
+      return {
+        ok: false,
+        response: errorResponse(413, `A scene's sounds can add up to ${MAX_SCENE_AUDIO_BYTES / (1024 * 1024)} MB.`),
+      };
+    }
   }
 
   return { ok: true, hashes };
@@ -802,7 +841,7 @@ const readAssetUploads = (value: unknown): AssetUploadsCheck => {
 
     if (
       !isAssetHash(hash) ||
-      (kind !== "model" && kind !== "texture") ||
+      !isAssetKind(kind) ||
       typeof size !== "number" ||
       !Number.isInteger(size) ||
       size < 1
@@ -810,10 +849,11 @@ const readAssetUploads = (value: unknown): AssetUploadsCheck => {
       return { ok: false, response: errorResponse(400, "Each asset needs its SHA-256 hash, its size in bytes, and its kind.") };
     }
 
-    if (size > MAX_ASSET_BYTES) {
+    if (size > maxAssetBytes(kind)) {
+      const limit = `${maxAssetBytes(kind) / (1024 * 1024)} MB`;
       return {
         ok: false,
-        response: errorResponse(413, `Imported files can be up to ${MAX_ASSET_BYTES / (1024 * 1024)} MB.`, { hash }),
+        response: errorResponse(413, kind === "audio" ? `Sounds can be up to ${limit}.` : `Imported files can be up to ${limit}.`, { hash }),
       };
     }
 

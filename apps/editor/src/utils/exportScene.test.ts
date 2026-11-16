@@ -338,3 +338,52 @@ describe("directional lights in an export", () => {
     expect(light.quaternion.equals(turned)).toBe(true);
   });
 });
+
+describe("scene cameras in an export", () => {
+  const sceneWithCamera = async () => {
+    const { useEditorStore, createObjectManager, createSceneExportBlob } = await loadModules();
+    const scene = new THREE.Scene();
+    const meshMap = new Map<string, THREE.Object3D>();
+    const cameraId = useEditorStore.getState().addEntity("camera");
+    const manager = createObjectManager(scene, meshMap);
+    manager.syncMeshes(useEditorStore.getState().entities, null, false);
+    return { useEditorStore, manager, scene, meshMap, cameraId, createSceneExportBlob };
+  };
+
+  it("writes no camera, no node for it, and none of its frustum, and shows it again afterwards", async () => {
+    const { scene, meshMap, cameraId, createSceneExportBlob } = await sceneWithCamera();
+    const camera = meshMap.get(cameraId)!;
+    const gltf = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+
+    expect(gltf.cameras).toBeUndefined();
+    // The cube, the light, and the light's target (its child): no node where the camera is (it was
+    // added at the personal camera's place, 0 5 10).
+    expect(gltf.nodes).toHaveLength(3);
+    expect(gltf.nodes.some((node: { translation?: number[] }) => node.translation?.join() === "0,5,10")).toBe(false);
+    // The cube is the only mesh: no line geometry went out with it.
+    expect(gltf.meshes).toHaveLength(1);
+    expect(gltf.meshes[0].primitives.every((primitive: { mode?: number }) => (primitive.mode ?? 4) === 4)).toBe(true);
+    expect(camera.visible).toBe(true);
+    expect(camera.children.every((child) => child.visible)).toBe(true);
+  });
+
+  it("keeps a camera that holds an object as the plain node that places it", async () => {
+    const { useEditorStore, manager, scene, cameraId, createSceneExportBlob } = await sceneWithCamera();
+    const cubeId = useEditorStore.getState().entities.find((entity) => entity.type === "cube")!.id;
+    useEditorStore.setState((state) => ({
+      entities: state.entities.map((entity) => (entity.id === cubeId ? { ...entity, parentId: cameraId } : entity)),
+    }));
+    manager.syncMeshes(useEditorStore.getState().entities, null, false);
+
+    const gltf = await readGlbJson((await createSceneExportBlob(scene, "glb"))!);
+    // The node with children that isn't the light (whose child is its target).
+    const node = gltf.nodes.find((each: { children?: number[]; extensions?: object }) => each.children?.length && !each.extensions);
+
+    expect(gltf.cameras).toBeUndefined();
+    expect(node).toBeDefined();
+    expect(node.camera).toBeUndefined();
+    expect(node.mesh).toBeUndefined();
+    expect(node.children).toHaveLength(1);
+    expect(gltf.nodes[node.children[0]].mesh).toBeDefined();
+  });
+});

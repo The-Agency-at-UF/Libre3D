@@ -8,13 +8,14 @@ import {
   type DownloadProgress,
   type TransferProgress,
 } from "./assetTransfers";
-import { hashAsset, type AssetRef } from "./sceneAssets";
+import { hashAsset, type AssetKind, type AssetRef } from "./sceneAssets";
 import { SceneApiError, type AssetUploadTicket } from "./sceneLibrary";
 
 // Everything the uploader touches is injected; keep the real modules (and storage) out.
 vi.mock("./apiFetch", () => ({ apiFetch: vi.fn(), ApiAuthError: class ApiAuthError extends Error {} }));
 vi.mock("./modelAssetStore", () => ({ loadModelAsset: vi.fn(), hasModelAsset: vi.fn(), saveModelAsset: vi.fn() }));
 vi.mock("./textureAssetStore", () => ({ loadTextureAsset: vi.fn(), hasTextureAsset: vi.fn(), saveTextureAsset: vi.fn() }));
+vi.mock("./audioAssetStore", () => ({ loadAudioAsset: vi.fn(), hasAudioAsset: vi.fn(), saveAudioAsset: vi.fn() }));
 
 const MODEL = "a".repeat(64);
 const TEXTURE = "b".repeat(64);
@@ -39,7 +40,7 @@ const setUp = ({ local = {}, cloud = [], confirmed = [], put }: Setup = {}) => {
   const inCloud = new Set(cloud);
   const requests: Array<Array<{ hash: string; size: number; kind: string }>> = [];
   const puts: string[] = [];
-  const requestUploads = vi.fn(async (_sceneId: string, assets: Array<{ hash: string; size: number; kind: "model" | "texture" }>) => {
+  const requestUploads = vi.fn(async (_sceneId: string, assets: Array<{ hash: string; size: number; kind: AssetKind }>) => {
     requests.push(assets);
     return assets
       .filter((asset) => !inCloud.has(asset.hash))
@@ -82,6 +83,18 @@ describe("AssetUploader", () => {
     // Both are known to be in the cloud now: nothing more to ask.
     await uploader.upload([model(MODEL), texture(TEXTURE)]);
     expect(requests).toHaveLength(1);
+  });
+
+  it("uploads a sound as audio, once, however many actions use it", async () => {
+    const AUDIO = "d".repeat(64);
+    const { uploader, requests, puts } = setUp({ local: { [AUDIO]: bytes(2048) } });
+    const audio: AssetRef = { id: AUDIO, kind: "audio" };
+
+    await uploader.upload([audio, audio]);
+    await uploader.upload([audio]);
+
+    expect(requests).toEqual([[{ hash: AUDIO, size: 2048, kind: "audio" }]]);
+    expect(puts).toEqual([AUDIO]);
   });
 
   it("never asks about the assets the scene was loaded with", async () => {

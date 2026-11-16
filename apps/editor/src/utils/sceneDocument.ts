@@ -20,7 +20,9 @@
  *   default shouldn't apply to older scenes (the environment light, v4): the migration writes the
  *   old behaviour in. And so does a section whose shape changes (the effects, v8).
  * - Adding a section or a state value bumps `CURRENT_SCENE_SCHEMA_VERSION` and adds a migration.
- *   Old documents upgrade on read; nothing breaks.
+ *   Old documents upgrade on read; nothing breaks. So does a new value of an existing field that
+ *   an old build would drop on read (an event trigger, v6: normalizeEvents keeps only the triggers
+ *   it knows; an action type, v7: normalizeAction keeps only the types it knows).
  * - A document newer than this build is refused rather than loaded: otherwise a tab still running an
  *   old bundle would drop the parts it doesn't know about (states) on its next autosave.
  *
@@ -117,9 +119,18 @@ const migrations: Record<number, (document: any) => any> = {
       },
     };
   },
-  // v6 and v7 are kept for the triggers (item B) and the actions (item C), built alongside task F.
-  // Neither fills anything in.
+  // v6 is item B's event vocabulary: the triggers mouseUp, mouseHover, keyDown, keyUp and scroll,
+  // and an event's optional `key`. A v5 build keeps only the triggers it knows (normalizeEvents),
+  // so it would drop such an event on load and autosave without it: it has to refuse v6 instead.
+  // Nothing to fill in. The whole vocabulary came in at once so that the builds adding Key and
+  // Scroll later need no bump: one of them opening a document with a trigger it doesn't fire yet
+  // keeps the event and simply never fires it.
   5: (document) => document,
+  // v7 is item C's vocabulary: an event's actions became a union (animation/actions.ts) with Open
+  // Link and Sound beside Transition, and a state may set a camera's `fov`. A v6 build drops an
+  // action it doesn't know (normalizeTransition) and a state value it doesn't copy, then autosaves
+  // without them, so it has to refuse v7. Nothing to fill in. As with v6, the whole vocabulary came
+  // in at once: a build that opens an action it can't edit yet keeps it and shows it by name.
   6: (document) => document,
   // v8 is the effects as task F draws them (`postProcessing`: eight effects, each with an eye and an
   // amount). The section a scene held before was never drawn, and its defaults had bloom and a

@@ -34,6 +34,8 @@ const makeContent = (): SceneContent => ({
     fogEnabled: false,
     environment: { enabled: true, intensity: 0.8 },
     lights: { intensity: 1, color: "#ffffff", ambientEnabled: true, directionalEnabled: true, shadow: "Soft" },
+    scroll: { length: 4, smooth: false },
+    audioButton: { visible: false, position: "bottomRight" },
     physics: { enabled: false, gravityY: -9.8, collisionType: "Mesh" },
   },
   postProcessing: { enabled: false } as SceneContent["postProcessing"],
@@ -270,8 +272,8 @@ describe("schema v8: the effects", () => {
   // What every scene held before v8: defaults nothing drew, with bloom and a vignette on.
   const v5Effects = { enabled: true, toneMap: "ACES Filmic", bloom: { enabled: true, intensity: 40 }, vignette: { enabled: true, intensity: 15 }, ssao: { enabled: false } };
 
-  it("drops an older document's effects, so the scene opens with the defaults (every effect off)", () => {
-    const parsed = parseSceneDocument({ ...toSceneDocument({ ...makeContent(), postProcessing: v5Effects as never }), schemaVersion: 5 });
+  it.each([5, 6, 7])("drops a v%i document's effects, so the scene opens with the defaults (every effect off)", (schemaVersion) => {
+    const parsed = parseSceneDocument({ ...toSceneDocument({ ...makeContent(), postProcessing: v5Effects as never }), schemaVersion });
 
     expect(parsed.ok && "postProcessing" in parsed.content && parsed.content.postProcessing).toBeUndefined();
     expect(parsed.ok && parsed.content.entities).toEqual(makeContent().entities);
@@ -395,6 +397,48 @@ describe("schema v5: the material layer stack", () => {
     content.animation.states.up.values = { ...content.animation.states.up.values, color: "#ff0000", opacity: 0.5 };
     content.materials = { m: { id: "m", name: "Gloss", layers: [] } };
     content.entities[0] = { ...content.entities[0], materialAssetId: "m", opacity: 0.7 };
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    expect(parsed).toEqual({ ok: true, content });
+  });
+
+  it("opens a v5 document (from before item B's triggers) with nothing changed by v6", () => {
+    const content = makeContent();
+    const v5 = { ...toSceneDocument(content), schemaVersion: 5 };
+    const { postProcessing: _postProcessing, ...kept } = content; // dropped by v8, above
+
+    expect(parseSceneDocument(JSON.parse(JSON.stringify(v5)))).toEqual({ ok: true, content: kept });
+  });
+
+  it("opens a v6 document (from before item C's actions) with nothing changed by v7", () => {
+    const content = makeContent();
+    const v6 = { ...toSceneDocument(content), schemaVersion: 6 };
+    const { postProcessing: _postProcessing, ...kept } = content; // dropped by v8, above
+
+    expect(parseSceneDocument(JSON.parse(JSON.stringify(v6)))).toEqual({ ok: true, content: kept });
+  });
+
+  it("round-trips a v7 document with all three kinds of action and a fov state value", () => {
+    const content = makeContent();
+    const grow = content.animation.events.grow;
+    grow.actions = [
+      ...grow.actions,
+      { id: "link", type: "openLink", url: "https://example.com", newTab: false },
+      { id: "sound", type: "sound", assetId: "abc", volume: 0.25, loop: true, mode: "stop" },
+    ];
+    content.animation.states.up.values = { ...content.animation.states.up.values, fov: 35 };
+    const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
+
+    expect(parsed).toEqual({ ok: true, content });
+  });
+
+  it("round-trips a v6 document with every trigger, and a key event's key", () => {
+    const content = makeContent();
+    const grow = content.animation.events.grow;
+    const triggers = ["start", "mouseDown", "mouseUp", "mouseHover", "keyDown", "keyUp", "scroll"] as const;
+    content.animation.events = Object.fromEntries(
+      triggers.map((trigger, order) => [trigger, { ...grow, id: trigger, trigger, order, ...(trigger.startsWith("key") ? { key: "Space" } : {}) }]),
+    );
     const parsed = parseSceneDocument(JSON.parse(JSON.stringify(toSceneDocument(content))));
 
     expect(parsed).toEqual({ ok: true, content });

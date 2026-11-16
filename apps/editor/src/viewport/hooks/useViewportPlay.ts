@@ -3,17 +3,33 @@ import * as THREE from "three";
 import type { SceneRenderer } from "../rendererSettings";
 import { resolveState } from "../../animation/objectStates";
 import { SceneRuntime } from "../../animation/sceneRuntime";
-import { previewTiming, type TransitionAction } from "../../animation/transitions";
+import { previewTiming, scrubTiming, type TransitionAction } from "../../animation/transitions";
 import { selectDrawnEntities, selectViewedObjectState, useEditorStore, type EditorState } from "../../store/useEditorStore";
 import { getEntityIndex } from "../../scene/entityIndex";
 import type { ObjectManager } from "../ObjectManager";
-import { PlayCamera, resolvePlayCamera } from "../PlayCamera";
+import { PlayCamera, resolveScenePlay } from "../PlayCamera";
+import { SceneCameraObject } from "../sceneCameraObject";
+import { resolveActiveCamera } from "../../scene/activeCamera";
 import { pickEntityAt } from "../pickEntity";
+import { attachPlayInput } from "../playInput";
+import { createPlayEffects, type PlayEffects } from "../playEffects";
+import { registerPlayAudio } from "../playAudio";
+import { registerPlayScroll } from "../playScroll";
+import { editorSceneSource } from "../editorSceneSource";
+import { SceneAudio, sessionMuted } from "../sceneAudio";
+import { hasSoundActions } from "../../animation/events";
+import { isTransition } from "../../animation/actions";
+import { easeScrollProgress } from "../scrollProgress";
+import { clampProgress } from "../../animation/transitions";
 
 // A runtime running in the viewport: Play's, or the ▶ preview of one transition. A preview stops
 // when what it was started from changes: an edit (undo included) or another selection.
 interface Session {
   runtime: SceneRuntime;
+  // What Play's actions ask of the page (playEffects.ts); none for the ▶ preview, which plays one transition.
+  effects: PlayEffects | null;
+  // The scene's sound (disposed with `effects`), muted and unmuted by the Play bar's button through playAudio.ts.
+  audio: SceneAudio | null;
   preview: boolean;
   entities: EditorState["entities"];
   animation: EditorState["animation"];
@@ -22,10 +38,16 @@ interface Session {
   view: { camera: PlayCamera; editorCamera: THREE.Camera; detach: () => void } | null;
 }
 
-const findAction = (state: EditorState, actionId: string): TransitionAction | undefined => {
+// The action the ▶ preview plays, timed as it plays there: a Scroll event's once through by time,
+// without the Delay, Loop, or Cycle it has no use for (and Current in row 1 read as Base, as the
+// runtime reads it while scrolling); any other without its Delay and run once.
+const findPreviewAction = (state: EditorState, actionId: string): TransitionAction | undefined => {
   for (const event of Object.values(state.animation.events)) {
     const action = event.actions.find((candidate) => candidate.id === actionId);
-    if (action) return action;
+    if (!action) continue;
+    if (!isTransition(action)) return undefined; // only a transition has anything to preview
+    if (event.trigger !== "scroll") return previewTiming(action);
+    return { ...action, ...scrubTiming(action), from: action.from === "current" ? "base" : action.from };
   }
   return undefined;
 };
@@ -43,17 +65,25 @@ const findAction = (state: EditorState, actionId: string): TransitionAction | un
  * back to the state it's shown in while editing.
  *
  * Play looks through a camera of its own (PlayCamera): it starts where the scene's camera is and
- * moves as the camera's Play setting says (Fixed, Soft Orbit, Orbit, Auto-Rotate), while the
+ * moves as the camera's Play setting says (Fixed, Soft Orbit, Orbit, Auto-Rotate), or follows the
+ * scene camera picked in the camera dropdown (C6) wherever its states and transitions move it, while the
  * editor's camera, which is scene data, stays put and unsaved-to (useViewportControls switches its
  * orbiting off). `cameraRef` points at it from Play's first frame to Stop, so rendering and clicks
  * use it; on Stop the editor's camera is put back exactly as it was.
  *
- * Clicks in Play (left button, without Alt or Space) fire Mouse Down events, and the cursor is a
- * pointer over objects that have one. With an Orbit camera, a press on an object fires its Mouse
- * Down and dragging from it still turns the camera. Locked objects count: locking is for editing.
+ * Play's input is playInput.ts, shared with the share-link viewer: the pointer triggers fire on the
+ * object under the pointer, the cursor is a pointer over objects that have one, and Key Down / Key
+ * Up fire from the window. The editor's hotkeys are off in Play (useHotkeys) but for Ctrl/Cmd zoom,
+ * which the keys leave alone; Escape stops Play (PreviewControls), so no event can pick it. The editor adds its own rules
+ * (not with Alt or Space held, which orbit the camera instead; not during the ▶ preview). With an
+ * Orbit camera, a press on an object fires its Mouse Down and dragging from it still turns the
+ * camera. Locked objects count: locking is for editing.
+ *
+ * Scroll events have no page to scroll in the editor: the Play bar's scrubber (PreviewControls)
+ * hands its progress to the session through playScroll.ts.
  *
  * The ▶ preview (`previewingActionId`) works the same way outside Play, for one transition: without
- * its Delay and run once (there and back for a ping-pong loop), starting from the state its target
+ * its Delay and run once (there and back for a ping-pong loop; a Scroll event's once through), starting from the state its target
  * is shown in, then back to that state. It stops early on any edit, another selection, Play (which
  * clears it), or ■.
  * The gizmo is detached meanwhile (ViewportCanvas), so a drag can't save a pose it's showing.
@@ -75,20 +105,21 @@ export function useViewportPlay(
     const raycaster = new THREE.Raycaster();
     let session: Session | null = null;
     let lastFrameTime = 0;
-    let hoverPoint: { x: number; y: number } | null = null;
     let isSpacePressed = false;
-
-    // On the canvas's container, so the orbit controls' own cursor on the canvas (grab while Space
-    // is held) still wins.
-    const setCursor = (cursor: string) => {
-      const container = canvas.parentElement;
-      if (container && container.style.cursor !== cursor) container.style.cursor = cursor;
-    };
 
     const pick = (clientX: number, clientY: number) => {
       const targets = [...objectManager.getMeshes().values()].filter((object) => object.visible);
       return pickEntityAt(raycaster, cameraRef.current, canvas, targets, clientX, clientY, true);
     };
+
+    const input = attachPlayInput({
+      canvas,
+      cursorElement: canvas.parentElement,
+      pick,
+      // Play's runtime only: the ▶ preview takes no input.
+      getRuntime: () => (session && !session.preview ? session.runtime : null),
+      shouldIgnore: (event) => event.altKey || isSpacePressed,
+    });
 
     // Each object the runtime moved goes back to the state it's shown in while editing. The entity
     // sync does the same when it next runs, but only after React renders, which can be a frame late.
@@ -104,18 +135,22 @@ export function useViewportPlay(
         session.view.detach();
         if (cameraRef.current === session.view.camera.camera) cameraRef.current = session.view.editorCamera;
       }
+      session.effects?.dispose();
       session = null;
-      hoverPoint = null;
-      setCursor("");
     };
+
+    const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
     const canvasAspect = () => canvas.clientWidth / Math.max(1, canvas.clientHeight);
 
-    // Play's camera starts where the scene's camera is, with its Play setting, read once here.
+    // Play's camera starts where the scene's camera is, with the scene's Play setting, read once here. A
+    // scene camera picked in the dropdown is followed instead (scene/activeCamera.ts), as Fixed.
     const startView = (store: EditorState): NonNullable<Session["view"]> => {
-      const profile = store.cameraProfiles[store.activeProfileId] ?? store.cameraProfiles.personal;
-      const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-      const camera = new PlayCamera(profile, resolvePlayCamera(profile.play), canvasAspect(), { reduceMotion });
+      const active = resolveActiveCamera(store);
+      const profile = active.kind === "profile" ? active.profile : store.cameraProfiles.personal;
+      const followed = active.kind === "entity" ? objectManager.getObject(active.id) : undefined;
+      const follow = followed instanceof SceneCameraObject ? followed : null;
+      const camera = new PlayCamera(profile, resolveScenePlay(store.sceneSettings.play, profile.play), canvasAspect(), { reduceMotion: prefersReducedMotion(), follow });
       const editorCamera = cameraRef.current;
       cameraRef.current = camera.camera;
       return { camera, editorCamera, detach: camera.attach(canvas) };
@@ -123,26 +158,30 @@ export function useViewportPlay(
 
     const startSession = (store: EditorState, preview: boolean): SceneRuntime => {
       // The entities as they are drawn, so a state's colour goes over a material asset's layers.
-      const runtime = new SceneRuntime({ entities: selectDrawnEntities(store), animation: store.animation });
+      // Sound only for a scene that plays some (its context made on first use), muted as this session left it.
+      const audio = !preview && hasSoundActions(store.animation.events) ? new SceneAudio({ loadAudio: editorSceneSource.loadAudio, muted: sessionMuted.get() }) : null;
+      const effects = preview ? null : createPlayEffects({ alwaysNewTab: true, audio });
+      const runtime = new SceneRuntime({ entities: selectDrawnEntities(store), animation: store.animation }, { onEffect: effects?.onEffect });
       const view = preview ? null : startView(store);
-      session = { runtime, preview, entities: store.entities, animation: store.animation, selection: store.selectedEntityIds, view };
+      session = { runtime, effects, audio, preview, entities: store.entities, animation: store.animation, selection: store.selectedEntityIds, view };
       return runtime;
     };
 
     // The preview's runtime, started on its action, or null when there's nothing it can play.
     const startPreview = (store: EditorState, actionId: string): SceneRuntime | null => {
-      const action = findAction(store, actionId);
+      const action = findPreviewAction(store, actionId);
       const target = action && selectDrawnEntities(store).find((entity) => entity.id === action.targetId);
       if (!action || !target) return null;
 
       const runtime = startSession(store, true);
       runtime.place(target.id, resolveState(target, selectViewedObjectState(store, target.id)));
-      return runtime.run(previewTiming(action)) ? runtime : null;
+      return runtime.run(action) ? runtime : null;
     };
 
     frameRef.current = () => {
       const store = useEditorStore.getState();
       const now = performance.now();
+      let cameraDt = 0; // how far Play's camera moves on this frame: none on Play's first
       let runtime: SceneRuntime | null;
 
       if (store.isPreviewMode) {
@@ -150,11 +189,20 @@ export function useViewportPlay(
         if (session) {
           runtime = session.runtime;
           runtime.tick((now - lastFrameTime) / 1000);
+          // The scrubber's progress, eased as the share page eases page scroll (scrollProgress.ts).
+          if (scrollShown !== scrollTarget) {
+            const smooth = store.sceneSettings.scroll.smooth && !scrollReducedMotion;
+            scrollShown = easeScrollProgress(scrollShown, scrollTarget, (now - lastFrameTime) / 1000, smooth);
+            runtime.setScrollProgress(scrollShown);
+          }
           session.view?.camera.setAspect(canvasAspect());
-          session.view?.camera.update((now - lastFrameTime) / 1000);
+          cameraDt = (now - lastFrameTime) / 1000;
         } else {
           runtime = startSession(store, false);
           runtime.start();
+          scrollTarget = 0;
+          scrollShown = 0;
+          scrollReducedMotion = prefersReducedMotion();
         }
       } else if (store.previewingActionId) {
         if (session && !session.preview) endSession();
@@ -177,40 +225,33 @@ export function useViewportPlay(
         }
       } else {
         endSession();
+        input.frame(); // nothing playing: drops the cursor Play set
         return;
       }
       lastFrameTime = now;
 
       // At most one hover test a frame, against what the last frame showed. Play only.
-      if (hoverPoint && store.isPreviewMode) {
-        const entityId = runtime.hasClickEvents ? pick(hoverPoint.x, hoverPoint.y) : null;
-        setCursor(entityId && runtime.clickOwnerOf(entityId) ? "pointer" : "");
-        hoverPoint = null;
-      }
+      input.frame();
 
       runtime.poses().forEach((pose, entityId) => objectManager.applyPose(entityId, pose));
+      // After the poses: a followed scene camera is shown where this frame put it.
+      session?.view?.camera.update(cameraDt);
     };
+
+    // The Play bar's scrubber puts Play's Scroll events at a progress (playScroll.ts), straight on the
+    // runtime, never through the store. A new Play starts at 0 (`start`), as does the scrubber.
+    // The frame eases what's shown toward it, as the share page does with page scroll.
+    let scrollTarget = 0;
+    let scrollShown = 0;
+    let scrollReducedMotion = false; // read once per Play
+    const unregisterScroll = registerPlayScroll((progress) => {
+      if (session && !session.preview) scrollTarget = clampProgress(progress);
+    });
+    const unregisterAudio = registerPlayAudio((muted) => session?.audio?.setMuted(muted));
 
     // Play or the preview started or stopped: drop what was running. The next frame starts what's asked for.
     const unsubscribePlay = useEditorStore.subscribe((state) => state.isPreviewMode, endSession);
     const unsubscribePreview = useEditorStore.subscribe((state) => state.previewingActionId, endSession);
-
-    const onPointerDown = (event: PointerEvent) => {
-      if (!session || session.preview || !useEditorStore.getState().isPreviewMode) return;
-      if (event.button !== 0 || event.altKey || isSpacePressed) return;
-
-      const entityId = pick(event.clientX, event.clientY);
-      if (entityId) session.runtime.click(entityId);
-    };
-
-    const onPointerMove = (event: PointerEvent) => {
-      if (session && !session.preview) hoverPoint = { x: event.clientX, y: event.clientY };
-    };
-
-    const onPointerLeave = () => {
-      hoverPoint = null;
-      setCursor("");
-    };
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code === "Space") isSpacePressed = true;
@@ -222,9 +263,6 @@ export function useViewportPlay(
       isSpacePressed = false;
     };
 
-    canvas.addEventListener("pointerdown", onPointerDown);
-    canvas.addEventListener("pointermove", onPointerMove);
-    canvas.addEventListener("pointerleave", onPointerLeave);
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
     window.addEventListener("blur", onBlur);
@@ -235,16 +273,16 @@ export function useViewportPlay(
         session.view.detach();
         if (cameraRef.current === session.view.camera.camera) cameraRef.current = session.view.editorCamera;
       }
+      session?.effects?.dispose();
       frameRef.current = null;
       unsubscribePlay();
       unsubscribePreview();
-      canvas.removeEventListener("pointerdown", onPointerDown);
-      canvas.removeEventListener("pointermove", onPointerMove);
-      canvas.removeEventListener("pointerleave", onPointerLeave);
+      unregisterScroll();
+      unregisterAudio();
+      input.detach();
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", onBlur);
-      setCursor("");
     };
   }, [frameRef, cameraRef, rendererRef, objectManager]);
 }

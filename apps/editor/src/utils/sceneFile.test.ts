@@ -160,12 +160,33 @@ describe("opening a file as a new cloud scene", () => {
   });
 });
 
+describe("sounds in a scene file", () => {
+  it("round-trips a Sound action's audio bytes, and the action still names its sound", async () => {
+    const audio = await asset("audio", "ogg bytes!");
+    const action = { id: "s", type: "sound", assetId: audio.hash, name: "chime.ogg", volume: 0.5, loop: false, mode: "play" };
+    const document = {
+      ...sceneDocument([entity("cube")]),
+      scene: {
+        entities: [entity("cube")],
+        sceneSettings: { bgColor: "#123456" },
+        animation: { states: {}, events: { e: { id: "e", ownerId: "cube", trigger: "mouseDown", actions: [action] } } },
+      },
+    } as unknown as SceneDocument;
+
+    expect(sceneFileAssetRefs(document.scene)).toEqual([{ id: audio.hash, kind: "audio" }]);
+    const read = await readSceneFile(writeSceneFile({ name: "Sounds", document, assets: [audio] }).buffer);
+
+    expect(read.ok && read.assets).toEqual([audio]);
+    expect(read.ok && read.content.animation?.events?.e.actions).toEqual([action]);
+  });
+});
+
 describe("sceneFileAssetRefs", () => {
   it("is the content-addressed models and pictures, leaving out IDs from before cloud assets", async () => {
     const { document, assets } = await sceneWithAssets();
     const entities = [...document.scene.entities, entity("old-1", { type: "importedModel", assetId: "asset-123" })];
 
-    expect(sceneFileAssetRefs(entities)).toEqual([
+    expect(sceneFileAssetRefs({ entities })).toEqual([
       { id: assets[0].hash, kind: "model" },
       { id: assets[1].hash, kind: "texture" },
     ]);

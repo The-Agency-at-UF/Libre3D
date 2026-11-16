@@ -149,7 +149,7 @@ describe("ObjectManager image planes", () => {
   it("draws an image as an unlit, double-sided plane the picture's shape, and loads its texture", async () => {
     vi.resetModules();
     const loadTextureForScene = vi.fn(() => new Promise<Blob | null>(() => {}));
-    vi.doMock("../utils/assetTransfers", () => ({ loadTextureForScene, loadModelForScene: vi.fn() }));
+    vi.doMock("../utils/assetTransfers", () => ({ loadTextureForScene, loadModelForScene: vi.fn(), loadAudioForScene: vi.fn() }));
     const [{ useEditorStore }, { ObjectManager }, { editorSceneSource }] = await Promise.all([
       import("../store/useEditorStore"),
       import("./ObjectManager"),
@@ -196,7 +196,7 @@ describe("ObjectManager lighting (task D, PR 4)", () => {
   it("loads a Lighting map's picture for its slot", async () => {
     vi.resetModules();
     const loadTextureForScene = vi.fn(() => new Promise<Blob | null>(() => {}));
-    vi.doMock("../utils/assetTransfers", () => ({ loadTextureForScene, loadModelForScene: vi.fn() }));
+    vi.doMock("../utils/assetTransfers", () => ({ loadTextureForScene, loadModelForScene: vi.fn(), loadAudioForScene: vi.fn() }));
     const [{ useEditorStore }, { ObjectManager }, { editorSceneSource }] = await Promise.all([
       import("../store/useEditorStore"),
       import("./ObjectManager"),
