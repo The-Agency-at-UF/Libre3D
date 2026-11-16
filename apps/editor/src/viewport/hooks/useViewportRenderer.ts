@@ -5,7 +5,8 @@ import Stats from "three/examples/jsm/libs/stats.module.js";
 import { hasPendingThumbnail, renderPendingThumbnail } from "../thumbnailCapture";
 import { hasPendingPreviews, renderPendingPreviews } from "../materialPreview";
 import { hideEditorOnlyObjects } from "../editorOnly";
-import { createEffectChain } from "../postProcessing";
+import { drawEditorOnlyObjects } from "../editorOverlay";
+import { activeEffects, createEffectChain } from "../postProcessing";
 import { setLiveRenderer } from "../liveViewport";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "../rendererSettings";
 import { RIGHT_SIDEBAR_CLEARANCE } from "./useViewportGizmo";
@@ -40,14 +41,21 @@ export function useViewportRenderer(
     // KTX2 decoding in .glb imports (non-component code) needs the live renderer.
     const clearLiveRenderer = setLiveRenderer(renderer);
 
-    // The scene's effects, in Play and in the gallery picture. Edit mode is drawn without them (and
-    // without the scene's exposure) for now: the editor's own objects must stay out of the chain.
-    const effects = createEffectChain(renderer, scene);
-    const draw = (withEffects: boolean) => {
+    // The scene's effects (postProcessing.ts). No effect may touch the editor's own objects (grid,
+    // light helpers, selection outlines, gizmo), so while an effect is on, edit mode draws the scene
+    // through the chain without them and then draws them onto the canvas, behind the scene's objects
+    // where they are behind them (the chain keeps the scene's depth for that). With no effect on,
+    // everything is drawn together, as it always was. `sceneOnly`: the editor's objects are hidden
+    // already (Play, the gallery picture).
+    const effects = createEffectChain(renderer, scene, { keepDepth: true });
+    const draw = (sceneOnly: boolean) => {
+      const camera = cameraRef.current;
       const { postProcessing } = useEditorStore.getState();
-      // With the master switch off the chain draws nothing and sets no exposure.
-      const config = withEffects || !postProcessing.enabled ? postProcessing : { ...postProcessing, enabled: false };
-      if (!effects.render(cameraRef.current, config)) renderer.render(scene, cameraRef.current);
+      const restoreEditorOnlyObjects = !sceneOnly && activeEffects(postProcessing).length > 0 ? hideEditorOnlyObjects(scene) : null;
+      const drawn = effects.render(camera, postProcessing);
+      restoreEditorOnlyObjects?.();
+      if (!drawn) renderer.render(scene, camera);
+      else if (restoreEditorOnlyObjects) drawEditorOnlyObjects(renderer, scene, camera);
     };
 
     let animationFrameId = 0;

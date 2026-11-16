@@ -18,12 +18,16 @@
  * Exposure is not an effect in the chain: each material applies it as it tone-maps (canvasOutput.ts),
  * so it costs no pass. `render` keeps it on the scene whether or not anything else is on.
  *
+ * `keepDepth` (the editor's edit mode) also puts the scene's depth on the canvas with the picture,
+ * so what is drawn onto the canvas afterwards (the editor's own objects, which no effect may touch:
+ * editorOverlay.ts) is still hidden behind the scene's objects.
+ *
  * No store, React or DOM here: the share-link viewer draws with this too.
  */
 
-import type * as THREE from "three";
+import * as THREE from "three";
 import { float, hue, mix, pass, rand, screenUV, select, uniform, vec2, vec3, vec4 } from "three/tsl";
-import { PostProcessing } from "three/webgpu";
+import { NodeMaterial, QuadMesh } from "three/webgpu";
 import type { Renderer } from "three/webgpu";
 import { bloom } from "three/examples/jsm/tsl/display/BloomNode.js";
 
@@ -90,7 +94,7 @@ export interface EffectChain {
   dispose(): void;
 }
 
-export const createEffectChain = (renderer: Renderer, scene: THREE.Scene): EffectChain => {
+export const createEffectChain = (renderer: Renderer, scene: THREE.Scene, { keepDepth = false } = {}): EffectChain => {
   // One uniform for each of effectValues' numbers.
   const values = Object.fromEntries(Object.keys(effectValues(initialPostProcessingDefaults)).map((name) => [name, uniform(0)])) as Record<
     keyof EffectValues,
@@ -100,7 +104,7 @@ export const createEffectChain = (renderer: Renderer, scene: THREE.Scene): Effec
   const noiseSeed = uniform(0);
 
   // Made when an effect is first on: a scene without effects holds no extra textures.
-  let chain: { scenePass: ReturnType<typeof pass>; post: PostProcessing; bloomNode: ReturnType<typeof bloom> | null } | null = null;
+  let chain: { scenePass: ReturnType<typeof pass>; picture: NodeMaterial; quad: QuadMesh; bloomNode: ReturnType<typeof bloom> | null } | null = null;
   let builtFor = "";
 
   // The picture after each of `effects`, in order.
@@ -147,18 +151,27 @@ export const createEffectChain = (renderer: Renderer, scene: THREE.Scene): Effec
       if (!chain) {
         const scenePass = pass(scene, camera);
         takesFinishedPicture(scenePass.renderTarget);
-        const post = new PostProcessing(renderer);
-        // The picture is finished when it reaches the chain: nothing left for three to convert.
-        post.outputColorTransform = false;
-        chain = { scenePass, post, bloomNode: null };
+        // The full-screen pass that puts the picture on the canvas. The picture is finished when it
+        // reaches the chain, so there is nothing left to convert (canvasOutput.ts leaves a bare
+        // NodeMaterial alone).
+        const picture = new NodeMaterial();
+        picture.name = "EffectChain";
+        if (keepDepth) {
+          picture.depthNode = scenePass.getTextureNode("depth");
+          picture.depthFunc = THREE.AlwaysDepth;
+        } else {
+          picture.depthTest = false;
+          picture.depthWrite = false;
+        }
+        chain = { scenePass, picture, quad: new QuadMesh(picture), bloomNode: null };
       }
       const held = chain;
 
       const key = effects.join(",");
       if (key !== builtFor) {
         builtFor = key;
-        held.post.outputNode = build(effects, held.scenePass, () => (held.bloomNode ??= bloom(held.scenePass)));
-        held.post.needsUpdate = true;
+        held.picture.fragmentNode = build(effects, held.scenePass, () => (held.bloomNode ??= bloom(held.scenePass)));
+        held.picture.needsUpdate = true;
       }
 
       const next = effectValues(config);
@@ -173,7 +186,7 @@ export const createEffectChain = (renderer: Renderer, scene: THREE.Scene): Effec
 
       // Each frame's own camera: the editor swaps perspective and orthographic ones.
       held.scenePass.camera = camera;
-      held.post.render();
+      held.quad.render(renderer);
       return true;
     },
 
@@ -183,7 +196,7 @@ export const createEffectChain = (renderer: Renderer, scene: THREE.Scene): Effec
       disposeBackdropCopy(chain.scenePass.renderTarget);
       chain.bloomNode?.dispose();
       chain.scenePass.dispose();
-      chain.post.dispose();
+      chain.picture.dispose();
       chain = null;
       builtFor = "";
     },
