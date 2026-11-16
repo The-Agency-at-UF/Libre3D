@@ -30,7 +30,7 @@ import { isPlainPlan, type PlanStep, type StackPlan } from "../scene/layerStack"
 import type { BlendMode } from "../scene/types";
 import type { DisplaceLayer } from "../scene/types";
 import { createDisplaceSource, displacedPosition, displaceShape, type DisplaceSource } from "./displaceNodes";
-import { createLayerSource, layerSourceShape, type LayerSource, type PictureSource, type SourceColor, type SourceContext } from "./layerSources";
+import { backdropWatch, createLayerSource, layerSourceShape, type LayerSource, type PictureSource, type SourceColor, type SourceContext } from "./layerSources";
 import { collectSlots, objectUniform, setSlotLookup, shaderNode, type Slot } from "./objectValues";
 
 type Node = ReturnType<typeof float>;
@@ -98,6 +98,14 @@ const markValuesChanged = (material: Material): void => {
 // the key: two shapes never share a shader.
 const SHAPE_KEY = "libre3dLayerStack";
 
+// A material with a Glass layer holds layerSources.ts's backdropWatch, for three to give its
+// objects the backdrop's GPU texture again when that was remade. It goes on `matcap`: a property
+// three compares on every material and only draws from on its own matcap material, which these
+// never are (a Matcap layer's picture is a slot: objectValues.ts).
+const WATCH_KEY = "matcap";
+const usesBackdrop = (plan: StackPlan): boolean =>
+  [...plan.under, ...plan.over].some((step) => step.layer.type === "glass");
+
 const stepShape = (step: PlanStep): string =>
   `${layerSourceShape(step.layer)}/${step.layer.blendMode}${step.mask ? `/mask:${layerSourceShape(step.mask)}` : ""}`;
 
@@ -154,6 +162,7 @@ export const syncLayerNodes = (
     if (!existing) return false;
     records.delete(material);
     delete keyed[SHAPE_KEY];
+    delete keyed[WATCH_KEY];
     return true;
   }
 
@@ -172,6 +181,8 @@ export const syncLayerNodes = (
     }));
     records.set(material, record);
     keyed[SHAPE_KEY] = shape;
+    if (usesBackdrop(plan)) keyed[WATCH_KEY] = backdropWatch;
+    else delete keyed[WATCH_KEY];
   }
 
   let pictureChanged = false;

@@ -9,9 +9,9 @@
  * Built from the editor's own pieces, not copies of them, so a published scene looks and behaves
  * as it did in Play: the same renderer settings (rendererSettings.ts), scene (SceneManager, with its
  * environment light), objects (ObjectManager), events (SceneRuntime: Start events on load), pointer
- * input (playInput.ts: the pointer and key triggers, a pointer cursor over what can be clicked) and camera
+ * input (playInput.ts: the pointer and key triggers, a pointer cursor over what can be clicked), camera
  * (PlayCamera, with the scene camera's Play setting, or following the scene camera picked in the
- * editor, C6). Scroll events follow `setScrollProgress`,
+ * editor, C6) and effects (postProcessing.ts). Scroll events follow `setScrollProgress`,
  * which the page calls from its scroll (eased by the scene's smoothing setting, scrollProgress.ts). The editor's own objects (grid, light helpers, outlines) are never
  * built (`editorHelpers: false`), so there is nothing to hide. Nothing here loads the editor's
  * store: the published scene is the only state, and nothing is ever saved.
@@ -25,10 +25,11 @@ import { hasSoundActions } from "../animation/events";
 import { fadingObjects } from "../animation/objectStates";
 import { SceneRuntime } from "../animation/sceneRuntime";
 import { clampProgress } from "../animation/transitions";
-import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialSceneDefaults } from "../scene/defaults";
+import { deepMerge } from "../scene/deepMerge";
+import { DEFAULT_CAMERA_PROFILE, DEFAULT_CAMERA_PROFILE_ID, initialPostProcessingDefaults, initialSceneDefaults } from "../scene/defaults";
 import { resolveEntities } from "../scene/materialAssets";
 
-import type { CameraProfile, SceneSettingsConfig } from "../scene/types";
+import type { CameraProfile, PostProcessingConfig, SceneSettingsConfig } from "../scene/types";
 import type { StoredSceneContent } from "../utils/sceneDocument";
 import { ObjectManager } from "./ObjectManager";
 import { PlayCamera, resolveScenePlay } from "./PlayCamera";
@@ -38,6 +39,7 @@ import { pickEntityAt } from "./pickEntity";
 import { createPlayEffects } from "./playEffects";
 import { attachPlayInput, type PlayInputKeyTarget } from "./playInput";
 import { SceneAudio } from "./sceneAudio";
+import { createEffectChain } from "./postProcessing";
 import { createSceneRenderer, disposeSceneRenderer, whenRendererReady, type SceneRenderer } from "./rendererSettings";
 import { createRoomEnvironment } from "./sceneEnvironment";
 import { easeScrollProgress } from "./scrollProgress";
@@ -71,7 +73,11 @@ export const viewerSceneSettings = (stored: StoredSceneContent["sceneSettings"])
   }) as SceneSettingsConfig;
 
 /**
- * The camera profile a published scene starts from, over the default camera's values: the active
+ * The effects a published scene is drawn with, the stored ones over the defaults. */
+export const viewerPostProcessing = (stored: StoredSceneContent["postProcessing"]): PostProcessingConfig =>
+  deepMerge(initialPostProcessingDefaults, stored ?? {});
+
+/** The camera profile a published scene starts from, over the default camera's values: the active
  * one (scene/activeCamera.ts), or the personal one when a scene camera is active. Its `play` is
  * read only for a scene without `sceneSettings.play` (resolveScenePlay).
  */
@@ -123,6 +129,11 @@ export class SceneViewer {
     const scene = sceneManager.scene;
     // Made once the renderer has started, below.
     let environment: THREE.RenderTarget | null = null;
+
+    // The scene's effects (and its exposure), which nothing changes while it plays.
+    const postProcessing = viewerPostProcessing(content.postProcessing);
+    const effectChain = createEffectChain(renderer, scene);
+    this.disposers.push(() => effectChain.dispose());
 
     const objects = new ObjectManager(scene, new Map(), source, { getRenderer: () => renderer, editorHelpers: false });
     // Objects that use a material asset are drawn with its layers, from the document alone.
@@ -197,7 +208,7 @@ export class SceneViewer {
       camera.update(dt);
       input.frame();
 
-      renderer.render(scene, camera.camera);
+      if (!effectChain.render(camera.camera, postProcessing)) renderer.render(scene, camera.camera);
     };
 
     // Nothing can be drawn until the renderer has started. Start events fired above, but their

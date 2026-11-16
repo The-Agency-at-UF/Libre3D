@@ -18,7 +18,7 @@
  *   New values a state can set do (as a path's trim did in v3): a state's values are copied only
  *   as far as the build knows them (objectStates.ts, cloneStateValues). So does a new setting whose
  *   default shouldn't apply to older scenes (the environment light, v4): the migration writes the
- *   old behaviour in.
+ *   old behaviour in. And so does a section whose shape changes (the effects, v8).
  * - Adding a section or a state value bumps `CURRENT_SCENE_SCHEMA_VERSION` and adds a migration.
  *   Old documents upgrade on read; nothing breaks. So does a new value of an existing field that
  *   an old build would drop on read (an event trigger, v6: normalizeEvents keeps only the triggers
@@ -45,7 +45,7 @@ import type {
 } from "../scene/types";
 
 export const SCENE_DOCUMENT_FORMAT = "libre3d.scene";
-export const CURRENT_SCENE_SCHEMA_VERSION = 7;
+export const CURRENT_SCENE_SCHEMA_VERSION = 8;
 
 /** The parts of the editor state that make up a scene. */
 export interface SceneContent {
@@ -132,6 +132,16 @@ const migrations: Record<number, (document: any) => any> = {
   // without them, so it has to refuse v7. Nothing to fill in. As with v6, the whole vocabulary came
   // in at once: a build that opens an action it can't edit yet keeps it and shows it by name.
   6: (document) => document,
+  // v8 is the effects as task F draws them (`postProcessing`: eight effects, each with an eye and an
+  // amount). The section a scene held before was never drawn, and its defaults had bloom and a
+  // vignette on, so nothing in it was chosen: it goes, and loadScene and the viewer fill in the
+  // defaults, which have every effect off.
+  7: (document) => {
+    const scene = document?.scene;
+    if (!isPlainObject(scene)) return document;
+    const { postProcessing: _postProcessing, ...rest } = scene;
+    return { ...document, scene: rest };
+  },
 };
 
 const SURFACE_KEYS = ["alphaMode", "alphaCutoff", "doubleSided"] as const;

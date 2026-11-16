@@ -1,0 +1,31 @@
+/* The inspector's Effects section (EffectsPanel.tsx). Its rows and drawer are the material
+   editor's (materials.css: .mat-row, .mat-drawer); this is what only the effects need. */
+
+.effects {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* The master switch is off: nothing here is drawn, but every value can still be set. */
+.effects.off {
+  opacity: 0.5;
+}
+
+/* The number beside a value's slider, in an effect's drawer */
+.mat-drawer-body .effects-number {
+  flex: 0 0 48px;
+  width: 48px;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  text-align: right;
+}
+
+/* Hue: the track is the colour wheel, not a fill up to the thumb */
+input[type="range"].effects-rainbow {
+  height: 4px;
+  background: linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000);
+}

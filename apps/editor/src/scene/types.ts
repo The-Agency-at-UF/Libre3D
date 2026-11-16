@@ -391,53 +391,62 @@ export type DeepPartial<T> = T extends object ? {
 } : T;
 
 /**
- * Saved with every scene, not rendered yet: nothing reads it, and nothing calls updatePostProcessing.
- * It stays so saved documents keep their shape; post-processing will build on it.
+ * The scene's effects, drawn over the finished picture (viewport/postProcessing.ts). `enabled` at the top is the master switch. Each effect has its own `enabled` (the
+ * row's eye) and `amount` (0 to 100: how much of the effect's result is mixed over the picture
+ * before it), then its own values, in the units the Effects panel shows.
  */
 export interface PostProcessingConfig {
   enabled: boolean;
-  toneMap: string;
-  exposure: number;
-  bloom: {
-    enabled: boolean;
-    intensity: number;
-    threshold: number;
-    radius: number;
-  };
-  ssao: {
-    enabled: boolean;
-    intensity: number;
-  };
+  toneMap: string; // not read yet: scenes are drawn with Neutral
+  exposure: number; // stops over the scene's fixed exposure; 0 is the look without it
   dof: {
     enabled: boolean;
-    focusDistance: number;
-    bokeh: number;
+    amount: number;
+    focusDistance: number; // from the camera, in the scene's units
+    range: number; // how far from there the blur is full (the panel's "DoF")
+    blur: number; // 1 is a radius of 0.2% of the picture's width
   };
-  chromaticAberration: {
+  pixelation: {
     enabled: boolean;
-    intensity: number;
+    amount: number;
+    granularity: number; // CSS pixels per block
   };
-  motionBlur: {
+  aberration: {
     enabled: boolean;
-    intensity: number;
+    amount: number;
+    offsetX: number; // red one way and blue the other, in thousandths of the picture's size
+    offsetY: number;
+    locked: boolean; // the panel keeps X and Y equal
   };
-  filmGrain: {
+  bloom: {
     enabled: boolean;
+    amount: number;
     intensity: number;
+    blurScale: number;
+    threshold: number;
+    smoothing: number;
+  };
+  hue: {
+    enabled: boolean;
+    amount: number;
+    hue: number;
+    saturation: number;
+  };
+  brightness: {
+    enabled: boolean;
+    amount: number;
+    brightness: number;
+    contrast: number;
   };
   vignette: {
     enabled: boolean;
-    intensity: number;
+    amount: number;
+    darkness: number;
+    offset: number;
   };
-  outline: {
+  noise: {
     enabled: boolean;
-    color: string;
-  };
-  colorGrading: {
-    enabled: boolean;
-    brightness: number;
-    contrast: number;
-    saturation: number;
+    amount: number;
   };
 }
 

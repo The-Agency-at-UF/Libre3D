@@ -18,13 +18,13 @@
  * stacks, their Lighting and top Color layers are.
  */
 
-import { useState, useEffect, useRef, useLayoutEffect, type DragEvent, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useState, useEffect, useRef, type DragEvent, type ReactNode } from "react";
 import { useEditorStore, type DisplaceLayer, type MaterialLayer as MaterialLayerData, type MaterialLayerType } from "../../store/useEditorStore";
 import type { PaintLayerType } from "../../scene/entityFactories";
 import { BLEND_MODES, canSwitchLayerType, maskTarget, movableRange, removeBlockedReason, SWITCHABLE_LAYER_TYPES } from "../../scene/layerStack";
 import { NumberField } from "../ui/NumberField";
 import { LAYER_DRAWERS } from "./layers/layerDrawers";
+import { SideDrawer } from "./SideDrawer";
 import {
   asOneUndoStep,
   BLEND_MODE_ICONS,
@@ -293,66 +293,16 @@ function LayerRow({
 }
 
 /**
- * A layer's settings, in a drawer beside the panel its row is in (the right sidebar, or the Material
- * Assets drawer) at its row's height. It stays open while
- * the viewport is used (a Depth layer is edited there too) and closes from its icon, its ×, Escape,
- * or when its layer goes.
+ * A layer's settings, in the drawer beside the panel its row is in (SideDrawer.tsx). It closes from
+ * its icon, its ×, Escape, or when its layer goes.
  */
 function LayerDrawer({ row, anchor, onClose }: { row: LayerRowData; anchor: HTMLElement; onClose: () => void }) {
-  const isReadOnly = useEditorStore((state) => state.readOnlyReason !== null);
-  const drawer = useRef<HTMLDivElement>(null);
-  const [place, setPlace] = useState<{ top: number; right: number } | null>(null);
-
-  useLayoutEffect(() => {
-    const placeIt = () => {
-      const panel = anchor.closest(".mat-assets, .right-sidebar") ?? anchor;
-      const sidebarRect = panel.getBoundingClientRect();
-      const rowRect = anchor.getBoundingClientRect();
-      const height = drawer.current?.offsetHeight ?? 0;
-      const top = Math.max(8, Math.min(rowRect.top, window.innerHeight - height - 8));
-      setPlace({ top, right: window.innerWidth - sidebarRect.left + 8 });
-    };
-    placeIt();
-    window.addEventListener("resize", placeIt);
-    const scroller = anchor.closest(".mat-assets-body, .panel-body");
-    scroller?.addEventListener("scroll", placeIt);
-    return () => {
-      window.removeEventListener("resize", placeIt);
-      scroller?.removeEventListener("scroll", placeIt);
-    };
-  }, [anchor, row.key, row.type]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  const name = rowTitle(row);
   const Settings = LAYER_DRAWERS[row.type];
-
-  return createPortal(
-    <div
-      ref={drawer}
-      className="mat-drawer"
-      role="dialog"
-      aria-label={`${name} settings`}
-      style={place ? { top: place.top, right: place.right } : { visibility: "hidden" }}
-    >
-      <div className="mat-drawer-header">
-        <i className={`ti ${LAYER_TYPE_ICONS[row.type]}`}></i>
-        <span>{name}</span>
-        <button type="button" className="mat-icon-btn" title="Close" aria-label="Close the layer settings" onClick={onClose}>
-          <i className="ti ti-x"></i>
-        </button>
-      </div>
-      <fieldset className="mat-drawer-body inspector-fieldset" disabled={isReadOnly}>
-        <Settings row={row} />
-      </fieldset>
-    </div>,
-    document.body,
+  return (
+    // Keyed by type: another type's settings are another height, so the drawer is placed again.
+    <SideDrawer key={row.type} anchor={anchor} title={rowTitle(row)} icon={LAYER_TYPE_ICONS[row.type]} onClose={onClose}>
+      <Settings row={row} />
+    </SideDrawer>
   );
 }
 

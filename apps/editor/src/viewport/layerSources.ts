@@ -65,11 +65,13 @@ import {
   vec2,
   vec3,
   vec4,
-  viewportMipTexture,
+  nodeObject,
 } from "three/tsl";
+import { ViewportTextureNode } from "three/webgpu";
+import type { NodeFrame } from "three/webgpu";
 import { hexToRgb, sortedStops, type PaintLayer } from "../scene/layerStack";
 import { DEFAULT_MATCAP, matcapTexture } from "./matcaps";
-import { SCENE_EXPOSURE } from "./canvasOutput";
+import { sceneExposure } from "./canvasOutput";
 import { objectSlot, objectTexture, objectUniform, shaderNode } from "./objectValues";
 import type { DepthLayer, FresnelLayer, GradientLayer, ImageLayer, NoiseLayer, PaintColor, RampStop, TextureRef } from "../scene/types";
 
@@ -587,7 +589,50 @@ const rainbowSource = (): LayerSource => {
 
 // What's been drawn so far this frame, copied once (on the first glass drawn) with its mipmaps, which
 // the blur reads. One for every glass, as three's own transmission has: glass doesn't see glass.
-const backdrop = viewportMipTexture() as unknown as { sample(uv: Node): Node };
+//
+// One copy for each thing drawn into (the canvas, an effect chain's scene pass), picked before the
+// copy is made. Three makes a copy's GPU texture in the format of what was being drawn into when it
+// was first used, and under WebGPU refuses to copy into it from another format: with one copy, glass
+// drawn to the canvas (a shaderball) and into a chain (the scene) would each leave the other showing
+// a stale backdrop.
+const canvasCopy = {};
+const backdropCopies = new WeakMap<object, THREE.FramebufferTexture>();
+
+/**
+ * Kept on every material with a Glass layer (layerNodes.ts), for three to see when a copy's GPU
+ * texture was remade. Three remakes it when the canvas changes size, in the middle of a frame (on
+ * the first glass drawn), and only gives an object the new one when it sees that object or its
+ * material change (NodeMaterialObserver): the first glass drawn got it, and every other one kept
+ * drawing with the destroyed texture ("Destroyed texture used in a submit", or under WebGL
+ * "bindTexture: attempt to use a deleted object"). A texture on a material is one of the things
+ * three compares, by its version, so this one's goes up with each remake. It is never drawn.
+ */
+export const backdropWatch = new THREE.Texture();
+
+class BackdropNode extends ViewportTextureNode {
+  updateBefore(frame: NodeFrame): void {
+    const drawnInto = frame.renderer?.getRenderTarget() ?? canvasCopy;
+    let copy = backdropCopies.get(drawnInto);
+    if (!copy) {
+      copy = new THREE.FramebufferTexture(1, 1);
+      copy.minFilter = THREE.LinearMipmapLinearFilter;
+      backdropCopies.set(drawnInto, copy);
+    }
+    this.value = copy;
+    const version = copy.version;
+    super.updateBefore(frame);
+    if (copy.version !== version) backdropWatch.version++;
+  }
+}
+const backdropNode = new BackdropNode();
+backdropNode.generateMipmaps = true;
+const backdrop = nodeObject(backdropNode) as unknown as { sample(uv: Node): Node };
+
+/** Frees the glass's copy of what was drawn into `target`, when the target itself goes. */
+export const disposeBackdropCopy = (target: object): void => {
+  backdropCopies.get(target)?.dispose();
+  backdropCopies.delete(target);
+};
 
 // Neutral tone mapping (as the canvas ending does it: canvasOutput.ts) undone, so a colour read
 // off the canvas comes back out as itself: the inverse of three's neutralToneMapping, step by step
@@ -605,7 +650,7 @@ const untoneMap = (shown: Node): Node => {
   const least = n(min(compressed.x, min(compressed.y, compressed.z)));
   const darkest = n(sqrt(max(least, 0).div(6.25)));
   const offset = n(select(least.lessThan(0.04), darkest.sub(least), float(0.04)));
-  return n(compressed.add(offset).div(SCENE_EXPOSURE));
+  return n(compressed.add(offset).div(sceneExposure));
 };
 
 const glassSource = (): LayerSource => {
